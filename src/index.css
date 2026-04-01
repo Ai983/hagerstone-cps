@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 30 20% 98%;
+    --foreground: 20 15% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 20 15% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 20 15% 15%;
+    --primary: 20 50% 35%;
+    --primary-foreground: 45 85% 95%;
+    --secondary: 45 85% 65%;
+    --secondary-foreground: 20 50% 20%;
+    --muted: 30 15% 94%;
+    --muted-foreground: 20 10% 50%;
+    --accent: 45 60% 88%;
+    --accent-foreground: 20 50% 25%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 30 20% 88%;
+    --input: 30 20% 88%;
+    --ring: 20 50% 35%;
+    --radius: 0.5rem;
+    --sidebar-background: 20 40% 22%;
+    --sidebar-foreground: 45 40% 92%;
+    --sidebar-primary: 45 85% 65%;
+    --sidebar-primary-foreground: 20 50% 15%;
+    --sidebar-accent: 20 35% 30%;
+    --sidebar-accent-foreground: 45 60% 90%;
+    --sidebar-border: 20 30% 28%;
+    --sidebar-ring: 45 85% 65%;
+  }
+  .dark {
+    --background: 20 15% 10%;
+    --foreground: 45 30% 92%;
+    --card: 20 15% 13%;
+    --card-foreground: 45 30% 92%;
+    --popover: 20 15% 13%;
+    --popover-foreground: 45 30% 92%;
+    --primary: 45 85% 65%;
+    --primary-foreground: 20 50% 15%;
+    --secondary: 20 35% 30%;
+    --secondary-foreground: 45 60% 90%;
+    --muted: 20 15% 18%;
+    --muted-foreground: 30 15% 60%;
+    --accent: 20 35% 28%;
+    --accent-foreground: 45 60% 88%;
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 20 20% 22%;
+    --input: 20 20% 22%;
+    --ring: 45 85% 65%;
+    --sidebar-background: 20 20% 12%;
+    --sidebar-foreground: 45 40% 90%;
+    --sidebar-primary: 45 85% 65%;
+    --sidebar-primary-foreground: 20 50% 12%;
+    --sidebar-accent: 20 25% 20%;
+    --sidebar-accent-foreground: 45 60% 88%;
+    --sidebar-border: 20 20% 18%;
+    --sidebar-ring: 45 85% 65%;
+  }
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}

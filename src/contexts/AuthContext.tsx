@@ -1,0 +1,86 @@
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+
+export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "management" | "finance" | "site_receiver" | "auditor";
+
+export interface CpsUser {
+  id: string; email: string; name: string; role: CpsRole;
+  department?: string; phone?: string; auth_uid: string;
+}
+
+interface AuthContextType {
+  user: CpsUser | null; loading: boolean;
+  signIn: (email: string, password: string) => Promise<{ error: any }>;
+  signOut: () => Promise<void>;
+  canApprove: boolean; canCreateRFQ: boolean; canViewAudit: boolean;
+  canViewPrices: boolean; canManageSuppliers: boolean;
+  isProcurementHead: boolean; isManagement: boolean;
+  isEmployee: boolean;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const useAuth = () => {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within AuthProvider");
+  return ctx;
+};
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [user, setUser] = useState<CpsUser | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadProfile = async (authUid: string) => {
+    const { data, error } = await supabase.from("cps_users").select("*").eq("auth_uid", authUid).single();
+    if (!error && data) { setUser(data as CpsUser); localStorage.setItem("cps_user", JSON.stringify(data)); }
+  };
+
+  useEffect(() => {
+    const saved = localStorage.getItem("cps_user");
+    if (saved) { try { setUser(JSON.parse(saved)); } catch {} }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) loadProfile(session.user.id);
+      setLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) loadProfile(session.user.id);
+      else {
+        setUser(null);
+        localStorage.removeItem("cps_user");
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const signIn = async (email: string, password: string) => {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { error };
+    if (data.user) await loadProfile(data.user.id);
+    return { error: null };
+  };
+
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    localStorage.removeItem("cps_user");
+  };
+
+  const role = user?.role;
+  return (
+    <AuthContext.Provider value={{
+      user, loading, signIn, signOut,
+      canApprove: role === "procurement_head" || role === "management",
+      canCreateRFQ: role === "procurement_executive" || role === "procurement_head",
+      canViewAudit: role === "auditor" || role === "procurement_head" || role === "management",
+      canViewPrices: role !== "requestor" && role !== "site_receiver",
+      canManageSuppliers: role === "procurement_head" || role === "procurement_executive",
+      isProcurementHead: role === "procurement_head",
+      isManagement: role === "management",
+      isEmployee: role === "requestor" || role === "site_receiver",
+    }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
