@@ -154,7 +154,7 @@ const rpcResultToString = (data: unknown) => {
 };
 
 export default function PurchaseRequisitions() {
-  const { user, canViewPrices } = useAuth();
+  const { user, canViewPrices, isProcurementHead } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [itemsLoading, setItemsLoading] = useState(true);
@@ -217,10 +217,12 @@ export default function PurchaseRequisitions() {
 
   const refresh = async () => {
     setLoading(true);
-    const { data: prs, error } = await supabase
+    const prQuery = supabase
       .from("cps_purchase_requisitions")
       .select("id, pr_number, project_site, project_code, requested_by, status, required_by, notes, created_at")
       .order("created_at", { ascending: false });
+    if (!isProcurementHead) prQuery.eq("created_by", user?.id ?? "");
+    const { data: prs, error } = await prQuery;
 
     if (error) {
       console.error("PR list load error:", error);
