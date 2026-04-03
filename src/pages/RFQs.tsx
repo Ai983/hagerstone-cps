@@ -471,18 +471,12 @@ export default function RFQs() {
   // Review & Send flow
   // -------------------------------------------------------------------------
 
-  const loadRFQDetails = async (rfqId: string, prId: string): Promise<string[]> => {
-    const [{ data: sups }, { data: items }] = await Promise.all([
-      supabase
-        .from("cps_rfq_suppliers")
-        .select("id, rfq_id, supplier_id, supplier:cps_suppliers(id, name, whatsapp, phone, email, state, gstin, categories)")
-        .eq("rfq_id", rfqId),
-      supabase
-        .from("cps_pr_line_items")
-        .select("id, description, quantity, unit, item:cps_items(id, name, benchmark_rate, category)")
-        .eq("pr_id", prId),
-    ]);
-    setReviewSuppliers((sups ?? []) as unknown as ReviewRfqSupplier[]);
+  // Load PR line items only — does NOT touch cps_rfq_suppliers
+  const loadPrItems = async (prId: string): Promise<string[]> => {
+    const { data: items } = await supabase
+      .from("cps_pr_line_items")
+      .select("id, description, quantity, unit, item:cps_items(id, name, benchmark_rate, category)")
+      .eq("pr_id", prId);
     setReviewPrItems((items ?? []) as unknown as ReviewPrLineItem[]);
     const cats = [...new Set(
       (items ?? []).map((li: any) => li.item?.category).filter(Boolean)
@@ -494,10 +488,10 @@ export default function RFQs() {
   const loadMatchedSuppliers = async (categories: string[]): Promise<Supplier[]> => {
     const base = supabase
       .from("cps_suppliers")
-      .select("id, name, phone, whatsapp, email, city, state, gstin, categories, performance_score, profile_complete, last_awarded_at, status")
+      .select("id, name, phone, whatsapp, email, city, state, gstin, categories, performance_score, profile_complete, last_awarded_at, status, added_via")
       .eq("status", "active")
       .order("performance_score", { ascending: false })
-      .limit(15);
+      .limit(20);
 
     const { data } =
       categories.length > 0
@@ -521,10 +515,28 @@ export default function RFQs() {
     setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
     setReviewLoading(true);
     setReviewOpen(true);
-    const cats = await loadRFQDetails(rfq.id, rfq.pr_id);
-    const matched = await loadMatchedSuppliers(cats);
-    setMatchedSuppliers(matched);
-    setReviewSelectedIds(matched.slice(0, 5).map((s) => s.id));
+
+    if (rfq.status === "draft") {
+      // Draft: load suggestions from cps_suppliers directly — cps_rfq_suppliers is empty
+      const cats = await loadPrItems(rfq.pr_id);
+      const matched = await loadMatchedSuppliers(cats);
+      setMatchedSuppliers(matched);
+      setReviewSelectedIds(matched.slice(0, 5).map((s) => s.id));
+    } else {
+      // Sent / reminder: show who was already dispatched from cps_rfq_suppliers
+      const cats = await loadPrItems(rfq.pr_id);
+      const { data: sups } = await supabase
+        .from("cps_rfq_suppliers")
+        .select("supplier_id, cps_suppliers(id, name, whatsapp, phone, email, city, categories, performance_score, profile_complete, last_awarded_at, status, added_via)")
+        .eq("rfq_id", rfq.id);
+      const dispatched = (sups ?? [])
+        .map((row: any) => row.cps_suppliers)
+        .filter(Boolean) as Supplier[];
+      setMatchedSuppliers(dispatched);
+      setReviewSelectedIds(dispatched.map((s) => s.id));
+      void cats; // categories already set inside loadPrItems
+    }
+
     setReviewLoading(false);
   };
 
@@ -549,31 +561,18 @@ export default function RFQs() {
     setVendorSearchResults(((data ?? []) as Supplier[]).filter(s => !existingIds.has(s.id)));
   };
 
-  const addSupplierToRFQ = async (vendor: Supplier) => {
-    if (!reviewRfq) return;
-    const { data: inserted, error } = await supabase
-      .from("cps_rfq_suppliers")
-      .insert({ rfq_id: reviewRfq.id, supplier_id: vendor.id, response_status: "pending" } as any)
-      .select("id, rfq_id, supplier_id")
-      .single();
-    if (error || !inserted) { toast.error("Failed to add vendor"); return; }
-    const newEntry: ReviewRfqSupplier = {
-      id: (inserted as any).id,
-      rfq_id: (inserted as any).rfq_id,
-      supplier_id: (inserted as any).supplier_id,
-      supplier: {
-        id: vendor.id,
-        name: vendor.name,
-        whatsapp: vendor.whatsapp ?? null,
-        phone: vendor.phone ?? null,
-        email: vendor.email ?? null,
-        state: vendor.state ?? null,
-        gstin: vendor.gstin ?? null,
-        categories: vendor.categories,
-      },
-    };
-    setReviewSuppliers(prev => [...prev, newEntry]);
-    setVendorSearchResults(prev => prev.filter(s => s.id !== vendor.id));
+  const addSupplierToRFQ = (vendor: Supplier) => {
+    // For draft RFQs: add to local pool + auto-select. No DB write until "Send".
+    setMatchedSuppliers((prev) => {
+      if (prev.find((s) => s.id === vendor.id)) return prev;
+      return [...prev, vendor];
+    });
+    setReviewSelectedIds((prev) =>
+      prev.includes(vendor.id) ? prev : [...prev, vendor.id]
+    );
+    setVendorSearchResults((prev) => prev.filter((s) => s.id !== vendor.id));
+    setVendorSearch("");
+    setShowAddVendor(false);
   };
 
   const addNewVendorToRFQ = async () => {
@@ -655,7 +654,7 @@ export default function RFQs() {
 
       const { error: upsertErr } = await supabase
         .from("cps_rfq_suppliers")
-        .upsert(rfqSupplierRows as any, { onConflict: "rfq_id,supplier_id" });
+        .insert(rfqSupplierRows as any);
       if (upsertErr) throw new Error("Failed to save suppliers: " + upsertErr.message);
 
       // Step 2 — Update RFQ status to 'sent'
@@ -1114,7 +1113,13 @@ export default function RFQs() {
             <div className="p-6">
               <DialogHeader>
                 <DialogTitle>Review RFQ: {reviewRfq?.rfq_number}</DialogTitle>
-                <DialogDescription>Review selected vendors before sending to suppliers</DialogDescription>
+                <DialogDescription>
+                  {reviewRfq?.status === "draft"
+                    ? reviewRfqCategories.length > 0
+                      ? `Suggested for ${reviewRfqCategories.join(", ")} — select who to send to`
+                      : "Select suppliers to send this RFQ to"
+                    : `Dispatched to ${matchedSuppliers.length} suppliers`}
+                </DialogDescription>
               </DialogHeader>
 
               {reviewLoading ? (
@@ -1166,8 +1171,10 @@ export default function RFQs() {
                         Select Suppliers
                       </h3>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {reviewSelectedIds.length} suppliers selected
-                        {reviewRfqCategories.length > 0 && ` · best match for ${reviewRfqCategories.join(", ")}`}
+                        {reviewRfq?.status === "draft"
+                          ? `${reviewSelectedIds.length} of ${matchedSuppliers.length} selected`
+                          : `${matchedSuppliers.length} dispatched`}
+                        {reviewRfqCategories.length > 0 && ` · ${reviewRfqCategories.join(", ")}`}
                         {(() => {
                           const whatsappCount = matchedSuppliers
                             .filter((s) => reviewSelectedIds.includes(s.id) && formatWhatsApp(s.whatsapp || s.phone).length === 12)
@@ -1257,8 +1264,8 @@ export default function RFQs() {
                       </p>
                     )}
 
-                    {/* New Vendor Quick-Add */}
-                    <div className="mt-4 border-t border-border/60 pt-4">
+                    {/* New Vendor Quick-Add — only for draft RFQs */}
+                    {reviewRfq?.status === "draft" && <div className="mt-4 border-t border-border/60 pt-4">
                       <p className="text-xs text-muted-foreground mb-2">Vendor not in list?</p>
                       {!showNewVendorForm ? (
                         <Button
@@ -1330,7 +1337,8 @@ export default function RFQs() {
                           </div>
                         </div>
                       )}
-                    </div>
+                    </div>}
+
                   </div>
 
                   {/* Deadline */}
@@ -1348,18 +1356,20 @@ export default function RFQs() {
                   {/* Actions */}
                   <div className="flex justify-end gap-3 pt-2">
                     <Button variant="outline" onClick={() => setReviewOpen(false)} disabled={sending}>
-                      Cancel
+                      {reviewRfq?.status === "draft" ? "Cancel" : "Close"}
                     </Button>
-                    <Button
-                      onClick={handleSendToSuppliers}
-                      disabled={reviewSelectedIds.length < 2 || sending}
-                    >
-                      {sending ? (
-                        <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</>
-                      ) : (
-                        `Send to ${reviewSelectedIds.length} Supplier${reviewSelectedIds.length !== 1 ? "s" : ""}`
-                      )}
-                    </Button>
+                    {reviewRfq?.status === "draft" && (
+                      <Button
+                        onClick={handleSendToSuppliers}
+                        disabled={reviewSelectedIds.length < 2 || sending}
+                      >
+                        {sending ? (
+                          <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</>
+                        ) : (
+                          `Send to ${reviewSelectedIds.length} Supplier${reviewSelectedIds.length !== 1 ? "s" : ""} →`
+                        )}
+                      </Button>
+                    )}
                   </div>
 
                 </div>
