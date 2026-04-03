@@ -67,6 +67,7 @@ type PoRow = {
   source?: string | null;
   supplier_name_text?: string | null;
   founder_approval_status?: string | null;
+  founder_approval_reason?: string | null;
   legacy_po_number?: string | null;
 };
 
@@ -246,7 +247,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number",
         )
         .order("created_at", { ascending: false });
 
@@ -668,6 +669,26 @@ export default function PurchaseOrders() {
       await openView(viewPo.id);
     } catch (e: any) {
       toast.error(e?.message || "Failed to approve PO");
+    } finally {
+      setViewLoading(false);
+    }
+  };
+
+  const commitRejectWithReason = async (reason: string) => {
+    if (!user || !viewPo) return;
+    if (!reason.trim()) { toast.error("Rejection reason is required"); return; }
+    setViewLoading(true);
+    try {
+      const { error } = await supabase
+        .from("cps_purchase_orders")
+        .update({ status: "rejected", approved_by: user.id, approved_at: new Date().toISOString(), rejection_reason: reason.trim() })
+        .eq("id", viewPo.id);
+      if (error) throw error;
+      toast.success("PO rejected");
+      await fetchPoRows();
+      await openView(viewPo.id);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to reject");
     } finally {
       setViewLoading(false);
     }
@@ -1502,6 +1523,29 @@ export default function PurchaseOrders() {
 
                 {/* Approval section */}
                 <div className="border-t border-border/60 pt-4 space-y-4">
+                  {/* Founder feedback block — shown whenever there's a founder response */}
+                  {viewPo.founder_approval_status && viewPo.founder_approval_status !== "sent" && (
+                    <div className={`rounded-lg border p-4 space-y-2 ${
+                      viewPo.founder_approval_status === "approved"
+                        ? "border-green-200 bg-green-50"
+                        : "border-red-200 bg-red-50"
+                    }`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold">
+                          {viewPo.founder_approval_status === "approved" ? "✅ Founders Approved" : "❌ Founders Rejected"}
+                        </span>
+                      </div>
+                      {viewPo.founder_approval_reason && (
+                        <p className="text-sm text-gray-700 italic">"{viewPo.founder_approval_reason}"</p>
+                      )}
+                    </div>
+                  )}
+                  {viewPo.founder_approval_status === "sent" && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                      <p className="text-sm text-amber-800">⏳ Awaiting founder approval — form sent to founders</p>
+                    </div>
+                  )}
+
                   {viewPo.status === "draft" && isProcurementHead && (
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       <div className="space-y-1">
@@ -1512,25 +1556,38 @@ export default function PurchaseOrders() {
                             Anti-corruption: you created this PO, so you cannot approve it.
                           </div>
                         ) : (
-                          <div className="text-sm text-muted-foreground">Review and approve to send to supplier.</div>
+                          <div className="text-sm text-muted-foreground">Review founder feedback above, then send to supplier.</div>
                         )}
                       </div>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span>
-                            <Button
-                              onClick={approveSendPo}
-                              disabled={approveSending || (viewPo.created_by != null && viewPo.created_by === user?.id)}
-                              className="bg-green-600 hover:bg-green-700 text-white"
-                            >
-                              {approveSending ? "Approving..." : "Approve & Send"}
-                            </Button>
-                          </span>
-                        </TooltipTrigger>
-                        {viewPo.created_by && viewPo.created_by === user?.id ? (
-                          <TooltipContent>You cannot approve a PO you created</TooltipContent>
-                        ) : null}
-                      </Tooltip>
+                      <div className="flex gap-3">
+                        {viewPo.founder_approval_status === "rejected" && (
+                          <Button
+                            onClick={() => {
+                              const reason = window.prompt("Rejection reason:");
+                              if (reason !== null) commitRejectWithReason(reason);
+                            }}
+                            variant="destructive"
+                          >
+                            Reject PO
+                          </Button>
+                        )}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span>
+                              <Button
+                                onClick={approveSendPo}
+                                disabled={approveSending || (viewPo.created_by != null && viewPo.created_by === user?.id)}
+                                className="bg-green-600 hover:bg-green-700 text-white"
+                              >
+                                {approveSending ? "Sending..." : "Send to Supplier"}
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          {viewPo.created_by && viewPo.created_by === user?.id ? (
+                            <TooltipContent>You cannot approve a PO you created</TooltipContent>
+                          ) : null}
+                        </Tooltip>
+                      </div>
                     </div>
                   )}
 
@@ -1567,7 +1624,7 @@ export default function PurchaseOrders() {
                               </Tooltip>
                             ) : (
                               <Button onClick={commitApprove} variant="default" className="bg-green-600 hover:bg-green-700">
-                                Approve PO
+                                Send to Supplier
                               </Button>
                             )}
 
