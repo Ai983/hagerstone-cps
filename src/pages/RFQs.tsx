@@ -654,7 +654,7 @@ export default function RFQs() {
 
       const { error: upsertErr } = await supabase
         .from("cps_rfq_suppliers")
-        .insert(rfqSupplierRows as any);
+        .upsert(rfqSupplierRows as any, { onConflict: 'rfq_id,supplier_id', ignoreDuplicates: false });
       if (upsertErr) throw new Error("Failed to save suppliers: " + upsertErr.message);
 
       // Step 2 — Update RFQ status to 'sent'
