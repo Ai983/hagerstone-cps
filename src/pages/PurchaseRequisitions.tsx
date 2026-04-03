@@ -221,7 +221,7 @@ export default function PurchaseRequisitions() {
       .from("cps_purchase_requisitions")
       .select("id, pr_number, project_site, project_code, requested_by, status, required_by, notes, created_at")
       .order("created_at", { ascending: false });
-    if (!isProcurementHead) prQuery.eq("created_by", user?.id ?? "");
+    if (!isProcurementHead) prQuery.eq("requested_by", user?.id ?? "");
     const { data: prs, error } = await prQuery;
 
     if (error) {

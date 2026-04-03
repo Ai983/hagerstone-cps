@@ -62,7 +62,7 @@ export default function Dashboard() {
     setLoading(true);
     try {
       const prQuery = supabase.from("cps_purchase_requisitions").select("id", { count: "exact", head: true });
-      if (!isProcurementHead) prQuery.eq("created_by", user?.id ?? "");
+      if (!isProcurementHead) prQuery.eq("requested_by", user?.id ?? "");
 
       const [prRes, rfqRes, quotesRes, poActiveRes, grnRes, supplierRes] = await Promise.all([
         prQuery,
