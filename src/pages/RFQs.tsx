@@ -57,6 +57,8 @@ type Supplier = {
   performance_score: number | null;
   last_awarded_at: string | null;
   status: string | null;
+  profile_complete?: boolean | null;
+  _isNew?: boolean;
 };
 
 type ReviewRfqSupplier = {
@@ -175,6 +177,14 @@ export default function RFQs() {
   const [reviewLoading, setReviewLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [reviewRfqCategories, setReviewRfqCategories] = useState<string[]>([]);
+
+  // Top-5 matched supplier selection state
+  const [matchedSuppliers, setMatchedSuppliers] = useState<Supplier[]>([]);
+  const [reviewSelectedIds, setReviewSelectedIds] = useState<string[]>([]);
+  const [showAllMatched, setShowAllMatched] = useState(false);
+  const [showNewVendorForm, setShowNewVendorForm] = useState(false);
+  const [newVendorForm, setNewVendorForm] = useState({ name: "", phone: "", email: "", gstin: "" });
+  const [savingNewVendor, setSavingNewVendor] = useState(false);
 
   const selectedSuppliers = useMemo(() => {
     const set = new Set(selectedSupplierIds);
@@ -460,7 +470,7 @@ export default function RFQs() {
   // Review & Send flow
   // -------------------------------------------------------------------------
 
-  const loadRFQDetails = async (rfqId: string, prId: string) => {
+  const loadRFQDetails = async (rfqId: string, prId: string): Promise<string[]> => {
     const [{ data: sups }, { data: items }] = await Promise.all([
       supabase
         .from("cps_rfq_suppliers")
@@ -471,13 +481,29 @@ export default function RFQs() {
         .select("id, description, quantity, unit, item:cps_items(id, name, benchmark_rate, category)")
         .eq("pr_id", prId),
     ]);
-    setReviewSuppliers((sups ?? []) as ReviewRfqSupplier[]);
-    setReviewPrItems((items ?? []) as ReviewPrLineItem[]);
-    // Extract unique categories from this RFQ's items
+    setReviewSuppliers((sups ?? []) as unknown as ReviewRfqSupplier[]);
+    setReviewPrItems((items ?? []) as unknown as ReviewPrLineItem[]);
     const cats = [...new Set(
       (items ?? []).map((li: any) => li.item?.category).filter(Boolean)
     )] as string[];
     setReviewRfqCategories(cats);
+    return cats;
+  };
+
+  const loadMatchedSuppliers = async (categories: string[]): Promise<Supplier[]> => {
+    const base = supabase
+      .from("cps_suppliers")
+      .select("id, name, phone, whatsapp, email, city, state, gstin, categories, performance_score, profile_complete, last_awarded_at, status")
+      .eq("status", "active")
+      .order("performance_score", { ascending: false })
+      .limit(15);
+
+    const { data } =
+      categories.length > 0
+        ? await base.overlaps("categories", categories)
+        : await base;
+
+    return (data ?? []) as Supplier[];
   };
 
   const openReview = async (rfq: Rfq) => {
@@ -487,9 +513,17 @@ export default function RFQs() {
     setVendorSearch("");
     setVendorSearchResults([]);
     setReviewRfqCategories([]);
+    setMatchedSuppliers([]);
+    setReviewSelectedIds([]);
+    setShowAllMatched(false);
+    setShowNewVendorForm(false);
+    setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
     setReviewLoading(true);
     setReviewOpen(true);
-    await loadRFQDetails(rfq.id, rfq.pr_id);
+    const cats = await loadRFQDetails(rfq.id, rfq.pr_id);
+    const matched = await loadMatchedSuppliers(cats);
+    setMatchedSuppliers(matched);
+    setReviewSelectedIds(matched.slice(0, 5).map((s) => s.id));
     setReviewLoading(false);
   };
 
@@ -541,28 +575,101 @@ export default function RFQs() {
     setVendorSearchResults(prev => prev.filter(s => s.id !== vendor.id));
   };
 
+  const addNewVendorToRFQ = async () => {
+    if (!reviewRfq) return;
+    if (!newVendorForm.name.trim() || !newVendorForm.phone.trim()) {
+      toast.error("Vendor Name and Phone are required");
+      return;
+    }
+    setSavingNewVendor(true);
+    const { data: newSupplier, error } = await supabase
+      .from("cps_suppliers")
+      .insert({
+        name: newVendorForm.name.trim(),
+        phone: newVendorForm.phone.trim(),
+        whatsapp: newVendorForm.phone.trim(),
+        email: newVendorForm.email.trim() || null,
+        gstin: newVendorForm.gstin.trim() || null,
+        status: "active",
+        categories: reviewRfqCategories.length > 0 ? reviewRfqCategories : ["General"],
+        added_via: "rfq_manual",
+        added_via_rfq_id: reviewRfq.id,
+        profile_complete: false,
+        verified: false,
+        performance_score: 100,
+      })
+      .select()
+      .single();
+
+    if (error || !newSupplier) {
+      toast.error("Failed to add vendor: " + error?.message);
+      setSavingNewVendor(false);
+      return;
+    }
+
+    const newEntry: Supplier = {
+      id: (newSupplier as any).id,
+      name: (newSupplier as any).name,
+      phone: (newSupplier as any).phone,
+      whatsapp: (newSupplier as any).whatsapp,
+      email: (newSupplier as any).email,
+      city: null,
+      categories: (newSupplier as any).categories,
+      performance_score: 100,
+      last_awarded_at: null,
+      status: "active",
+      profile_complete: false,
+      _isNew: true,
+    };
+
+    setMatchedSuppliers((prev) => [...prev, newEntry]);
+    setReviewSelectedIds((prev) => [...prev, newEntry.id]);
+    setShowNewVendorForm(false);
+    setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
+    toast.success(`${newVendorForm.name} added to this RFQ`);
+    setSavingNewVendor(false);
+  };
+
   const handleSendToSuppliers = async () => {
     if (!reviewRfq || !user) return;
-    if (reviewSuppliers.length < 2) { toast.error("Minimum 2 vendors required"); return; }
+    if (reviewSelectedIds.length < 2) { toast.error("Minimum 2 vendors required"); return; }
     setSending(true);
     try {
       const now = new Date().toISOString();
+      const top5Ids = new Set(matchedSuppliers.slice(0, 5).map((s) => s.id));
+
+      // Upsert rfq_suppliers for all selected
+      const rfqSupplierRows = reviewSelectedIds.map((supplierId) => {
+        const supplier = matchedSuppliers.find((s) => s.id === supplierId);
+        const isManual = !top5Ids.has(supplierId) || supplier?._isNew;
+        return {
+          rfq_id: reviewRfq.id,
+          supplier_id: supplierId,
+          response_status: "pending",
+          added_manually: isManual ?? false,
+          added_by: isManual ? user.id : null,
+          added_at: now,
+        };
+      });
+
+      await supabase
+        .from("cps_rfq_suppliers")
+        .upsert(rfqSupplierRows as any, { onConflict: "rfq_id,supplier_id" });
 
       await supabase.from("cps_rfqs")
         .update({ status: "sent", sent_at: now } as any)
         .eq("id", reviewRfq.id);
 
-      await supabase.from("cps_rfq_suppliers")
-        .update({ response_status: "pending" } as any)
-        .eq("rfq_id", reviewRfq.id);
-
       const { data: config } = await supabase
         .from("cps_config")
         .select("value")
         .eq("key", "webhook_rfq_dispatch")
-        .single();
+        .maybeSingle();
 
       if (config?.value) {
+        const selectedSupplierData = matchedSuppliers.filter((s) =>
+          reviewSelectedIds.includes(s.id)
+        );
         fetch(String(config.value), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -572,19 +679,20 @@ export default function RFQs() {
             rfq_number: reviewRfq.rfq_number,
             title: reviewRfq.title,
             deadline: reviewDeadline,
-            suppliers: reviewSuppliers.map(s => ({
-              supplier_id: s.supplier.id,
-              supplier_name: s.supplier.name,
-              supplier_whatsapp: s.supplier.whatsapp || s.supplier.phone || "",
-              supplier_email: s.supplier.email || "",
+            suppliers: selectedSupplierData.map((s) => ({
+              supplier_id: s.id,
+              supplier_name: s.name,
+              supplier_whatsapp: s.whatsapp || s.phone || "",
+              supplier_email: s.email || "",
+              profile_complete: s.profile_complete ?? true,
             })),
-            items: reviewPrItems.map(i => ({
+            items: reviewPrItems.map((i) => ({
               name: i.item?.name || i.description,
               quantity: i.quantity,
               unit: i.unit,
             })),
           }),
-        }).catch(e => console.error("RFQ webhook error:", e));
+        }).catch((e) => console.error("RFQ webhook error:", e));
       }
 
       await supabase.from("cps_audit_log").insert({
@@ -593,11 +701,11 @@ export default function RFQs() {
         action_type: "RFQ_SENT",
         entity_type: "cps_rfqs",
         entity_id: reviewRfq.id,
-        description: `RFQ ${reviewRfq.rfq_number} sent to ${reviewSuppliers.length} suppliers`,
+        description: `RFQ ${reviewRfq.rfq_number} sent to ${reviewSelectedIds.length} suppliers`,
         logged_at: now,
       });
 
-      toast.success(`RFQ sent to ${reviewSuppliers.length} suppliers!`);
+      toast.success(`RFQ sent to ${reviewSelectedIds.length} suppliers!`);
       setReviewOpen(false);
       await fetchRFQs();
     } catch (e: any) {
@@ -1009,111 +1117,163 @@ export default function RFQs() {
                     </div>
                   </div>
 
-                  {/* Selected Vendors */}
+                  {/* Supplier Selection — Top 5 + expand */}
                   <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <div>
-                        <h3 className="text-sm font-semibold text-foreground">
-                          Selected Vendors ({reviewSuppliers.length})
-                        </h3>
-                        {reviewRfqCategories.length > 0 && (
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            RFQ categories: {reviewRfqCategories.map(c => (
-                              <span key={c} className="inline-flex items-center mr-1 bg-primary/10 text-primary text-[10px] px-1.5 py-0.5 rounded">{c}</span>
-                            ))}
-                          </p>
-                        )}
-                      </div>
-                      <Button variant="outline" size="sm" onClick={() => setShowAddVendor(v => !v)}>
-                        + Add Vendor
-                      </Button>
+                    <div className="mb-3">
+                      <h3 className="text-sm font-semibold text-foreground">
+                        Select Suppliers
+                      </h3>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {reviewSelectedIds.length} suppliers selected
+                        {reviewRfqCategories.length > 0 && ` (best match for ${reviewRfqCategories.join(", ")})`}
+                      </p>
                     </div>
 
+                    {/* Supplier rows */}
                     <div className="space-y-2">
-                      {reviewSuppliers.map(s => {
+                      {(showAllMatched ? matchedSuppliers : matchedSuppliers.slice(0, 5)).map((s) => {
+                        const checked = reviewSelectedIds.includes(s.id);
                         const inCategory = !reviewRfqCategories.length ||
-                          (s.supplier.categories ?? []).some(c => reviewRfqCategories.includes(c));
+                          (s.categories ?? []).some((c) => reviewRfqCategories.includes(c));
                         return (
-                          <div key={s.id} className="flex items-center justify-between p-3 border border-border/60 rounded-lg bg-muted/20">
-                            <div className="min-w-0 flex-1">
+                          <div key={s.id} className={`flex items-center gap-3 p-3 border rounded-lg transition-colors ${checked ? "border-primary/40 bg-primary/5" : "border-border/60 bg-muted/10"}`}>
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={(v) => {
+                                setReviewSelectedIds((prev) =>
+                                  v ? [...prev, s.id] : prev.filter((id) => id !== s.id)
+                                );
+                              }}
+                            />
+                            <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <p className="font-medium text-sm">{s.supplier.name}</p>
+                                <span className="font-medium text-sm">{s.name}</span>
+                                {s._isNew && (
+                                  <Badge className="bg-amber-100 text-amber-800 border-amber-200 border text-[10px] px-1.5 py-0">🆕 New</Badge>
+                                )}
+                                {s.profile_complete === false && !s._isNew && (
+                                  <Badge className="bg-blue-100 text-blue-800 border-blue-200 border text-[10px] px-1.5 py-0">Incomplete Profile</Badge>
+                                )}
                                 {!inCategory && reviewRfqCategories.length > 0 && (
-                                  <span className="text-[10px] bg-amber-100 text-amber-800 border border-amber-200 rounded px-1.5 py-0.5 leading-none">⚠ Outside category</span>
+                                  <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5 leading-none">⚠ Outside category</span>
                                 )}
                               </div>
-                              <div className="flex items-center gap-1 mt-1 flex-wrap">
-                                {(s.supplier.categories ?? []).slice(0, 3).map(c => (
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {s.whatsapp || s.phone || "No phone"} · {s.email || "No email"}
+                              </p>
+                              <div className="flex gap-1 mt-1 flex-wrap">
+                                {(s.categories ?? []).slice(0, 3).map((c) => (
                                   <span key={c} className={`text-[10px] px-1.5 py-0.5 rounded leading-none ${reviewRfqCategories.includes(c) ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>{c}</span>
                                 ))}
                               </div>
-                              <p className="text-xs text-muted-foreground mt-0.5">
-                                {s.supplier.whatsapp || s.supplier.phone || "No phone"} · {s.supplier.email || "No email"}
-                              </p>
                             </div>
+                            <span className="text-xs text-muted-foreground shrink-0">★ {s.performance_score ?? 100}</span>
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="text-destructive hover:text-destructive shrink-0"
-                              onClick={() => removeSupplierFromRFQ(s.id)}
+                              className="text-destructive hover:text-destructive shrink-0 h-7 w-7 p-0"
+                              onClick={() => setReviewSelectedIds((prev) => prev.filter((id) => id !== s.id))}
                             >
-                              <Trash2 className="h-4 w-4" />
+                              <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           </div>
                         );
                       })}
                     </div>
 
-                    {reviewSuppliers.length < 2 && (
-                      <p className="text-amber-600 text-sm mt-2">
-                        ⚠ Minimum 2 vendors required. Add more vendors to proceed.
+                    {/* Show more / less toggle */}
+                    {matchedSuppliers.length > 5 && (
+                      <button
+                        type="button"
+                        className="mt-2 text-xs text-primary hover:underline"
+                        onClick={() => setShowAllMatched((v) => !v)}
+                      >
+                        {showAllMatched
+                          ? `▲ Show fewer suppliers`
+                          : `▼ Change suppliers (${matchedSuppliers.length - 5} more matched)`}
+                      </button>
+                    )}
+
+                    {reviewSelectedIds.length < 2 && (
+                      <p className="text-amber-600 text-xs mt-2">
+                        ⚠ Minimum 2 vendors required to send.
                       </p>
                     )}
 
-                    {/* Add Vendor Search */}
-                    {showAddVendor && (
-                      <div className="mt-3 p-4 border border-border/60 rounded-lg bg-muted/30 space-y-3">
-                        <Input
-                          autoFocus
-                          placeholder="Search vendors by name or city…"
-                          value={vendorSearch}
-                          onChange={e => {
-                            setVendorSearch(e.target.value);
-                            searchVendors(e.target.value);
-                          }}
-                        />
-                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                          {vendorSearchResults.map(v => {
-                            const matched = !reviewRfqCategories.length ||
-                              (v.categories ?? []).some(c => reviewRfqCategories.includes(c));
-                            return (
-                              <div key={v.id} className="flex items-center justify-between p-2 border border-border/40 rounded bg-background">
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <p className="text-sm font-medium truncate">{v.name}</p>
-                                    {!matched && reviewRfqCategories.length > 0 && (
-                                      <span className="text-[10px] bg-amber-100 text-amber-800 border border-amber-200 rounded px-1.5 py-0.5 leading-none shrink-0">⚠ Outside category</span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                                    <span className="text-xs text-muted-foreground">{v.city ?? "—"}</span>
-                                    {(v.categories ?? []).slice(0, 3).map(c => (
-                                      <span key={c} className={`text-[10px] px-1 py-0.5 rounded leading-none ${reviewRfqCategories.includes(c) ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>{c}</span>
-                                    ))}
-                                  </div>
-                                </div>
-                                <Button size="sm" variant="outline" className="shrink-0 ml-2" onClick={() => addSupplierToRFQ(v)}>
-                                  Add
-                                </Button>
-                              </div>
-                            );
-                          })}
-                          {vendorSearch.trim() && vendorSearchResults.length === 0 && (
-                            <p className="text-xs text-muted-foreground text-center py-2">No results</p>
-                          )}
+                    {/* New Vendor Quick-Add */}
+                    <div className="mt-4 border-t border-border/60 pt-4">
+                      <p className="text-xs text-muted-foreground mb-2">Vendor not in list?</p>
+                      {!showNewVendorForm ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowNewVendorForm(true)}
+                        >
+                          + Add New Vendor to this RFQ
+                        </Button>
+                      ) : (
+                        <div className="rounded-lg border border-border/60 p-4 bg-muted/20 space-y-3">
+                          <p className="text-sm font-medium text-foreground">Add New Vendor</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <Label className="text-xs">Vendor Name *</Label>
+                              <Input
+                                placeholder="e.g. Ajay Traders"
+                                value={newVendorForm.name}
+                                onChange={(e) => setNewVendorForm((p) => ({ ...p, name: e.target.value }))}
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs">WhatsApp *</Label>
+                              <Input
+                                placeholder="+91 98765 43210"
+                                value={newVendorForm.phone}
+                                onChange={(e) => setNewVendorForm((p) => ({ ...p, phone: e.target.value }))}
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs">Email</Label>
+                              <Input
+                                placeholder="optional"
+                                value={newVendorForm.email}
+                                onChange={(e) => setNewVendorForm((p) => ({ ...p, email: e.target.value }))}
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs">GSTIN</Label>
+                              <Input
+                                placeholder="optional"
+                                value={newVendorForm.gstin}
+                                onChange={(e) => setNewVendorForm((p) => ({ ...p, gstin: e.target.value }))}
+                              />
+                            </div>
+                          </div>
+                          <div className="flex gap-2 justify-end">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setShowNewVendorForm(false);
+                                setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={addNewVendorToRFQ}
+                              disabled={savingNewVendor}
+                            >
+                              {savingNewVendor ? (
+                                <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Adding…</>
+                              ) : (
+                                "Add to this RFQ →"
+                              )}
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
 
                   {/* Deadline */}
@@ -1135,12 +1295,12 @@ export default function RFQs() {
                     </Button>
                     <Button
                       onClick={handleSendToSuppliers}
-                      disabled={reviewSuppliers.length < 2 || sending}
+                      disabled={reviewSelectedIds.length < 2 || sending}
                     >
                       {sending ? (
                         <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</>
                       ) : (
-                        `Send to ${reviewSuppliers.length} Supplier${reviewSuppliers.length !== 1 ? "s" : ""}`
+                        `Send to ${reviewSelectedIds.length} Supplier${reviewSelectedIds.length !== 1 ? "s" : ""}`
                       )}
                     </Button>
                   </div>
