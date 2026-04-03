@@ -14,11 +14,6 @@ import {
   Eye, Plus, ArrowRight,
 } from "lucide-react";
 
-interface PipelineStage {
-  label: string;
-  count: number;
-}
-
 interface AuditRow {
   id: string;
   logged_at: string;
@@ -36,7 +31,7 @@ interface PendingPO {
 }
 
 export default function Dashboard() {
-  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ } = useAuth();
+  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
@@ -49,7 +44,6 @@ export default function Dashboard() {
   const [totalPOValue, setTotalPOValue] = useState(0);
   const [avgSavings, setAvgSavings] = useState<number | null>(null);
 
-  const [pipeline, setPipeline] = useState<PipelineStage[]>([]);
   const [recentActivity, setRecentActivity] = useState<AuditRow[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingPO[]>([]);
   const [approvingId, setApprovingId] = useState<string | null>(null);
@@ -67,8 +61,11 @@ export default function Dashboard() {
   const fetchAll = async () => {
     setLoading(true);
     try {
+      const prQuery = supabase.from("cps_purchase_requisitions").select("id", { count: "exact", head: true });
+      if (!isProcurementHead) prQuery.eq("created_by", user?.id ?? "");
+
       const [prRes, rfqRes, quotesRes, poActiveRes, grnRes, supplierRes] = await Promise.all([
-        supabase.from("cps_purchase_requisitions").select("id", { count: "exact", head: true }),
+        prQuery,
         supabase.from("cps_rfqs").select("id", { count: "exact", head: true }).in("status", ["sent", "reminder_1", "reminder_2"]),
         supabase.from("cps_quotes").select("id", { count: "exact", head: true }).eq("parse_status", "needs_review"),
         supabase.from("cps_purchase_orders").select("id", { count: "exact", head: true }).in("status", ["approved", "sent", "acknowledged", "dispatched"]),
@@ -109,9 +106,6 @@ export default function Dashboard() {
       setLegacyQuoteCount(legacyQuoteRes.count ?? 0);
       setIncompleteVendorCount(incompleteVendorRes.count ?? 0);
 
-      const pipelineCounts = await fetchPipelineCounts();
-      setPipeline(pipelineCounts);
-
       if (canViewAudit) {
         const { data: auditData } = await supabase
           .from("cps_audit_log")
@@ -145,27 +139,6 @@ export default function Dashboard() {
       toast.error("Failed to load dashboard data");
     }
     setLoading(false);
-  };
-
-  const fetchPipelineCounts = async (): Promise<PipelineStage[]> => {
-    const [prCount, rfqCount, quotesCount, comparedCount, approvedCount, poSentCount, deliveredCount] = await Promise.all([
-      supabase.from("cps_purchase_requisitions").select("id", { count: "exact", head: true }).in("status", ["pending", "validated"]),
-      supabase.from("cps_rfqs").select("id", { count: "exact", head: true }).in("status", ["sent", "reminder_1", "reminder_2"]),
-      supabase.from("cps_quotes").select("id", { count: "exact", head: true }).in("parse_status", ["needs_review", "parsed"]),
-      supabase.from("cps_comparison_sheets").select("id", { count: "exact", head: true }).in("manual_review_status", ["reviewed", "pending"]),
-      supabase.from("cps_purchase_orders").select("id", { count: "exact", head: true }).eq("status", "approved"),
-      supabase.from("cps_purchase_orders").select("id", { count: "exact", head: true }).in("status", ["sent", "acknowledged", "dispatched"]),
-      supabase.from("cps_purchase_orders").select("id", { count: "exact", head: true }).in("status", ["delivered", "grn_done"]),
-    ]);
-    return [
-      { label: "PR Raised", count: prCount.count ?? 0 },
-      { label: "RFQ Sent", count: rfqCount.count ?? 0 },
-      { label: "Quotes In", count: quotesCount.count ?? 0 },
-      { label: "Compared", count: comparedCount.count ?? 0 },
-      { label: "Approved", count: approvedCount.count ?? 0 },
-      { label: "PO Sent", count: poSentCount.count ?? 0 },
-      { label: "Delivered + GRN", count: deliveredCount.count ?? 0 },
-    ];
   };
 
   const quickApprove = async (po: PendingPO) => {
@@ -309,28 +282,6 @@ export default function Dashboard() {
         ))}
       </div>
       )}
-
-      {/* Pipeline Visual */}
-      <Card>
-        <CardHeader><CardTitle className="text-base font-semibold">Procurement Pipeline</CardTitle></CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-1 flex-wrap">
-            {(loading ? Array.from({ length: 7 }, (_, i) => ({ label: `stage-${i}`, count: 0 })) : pipeline).map((stage, i, arr) => (
-              <React.Fragment key={`${stage.label}-${i}`}>
-                <div className="flex flex-col items-center min-w-[90px]">
-                  <span className="px-3 py-1.5 rounded-full bg-primary/10 text-primary font-medium text-xs whitespace-nowrap">
-                    {stage.label}
-                  </span>
-                  <span className="text-lg font-bold text-foreground mt-1">
-                    {loading ? <Skeleton className="h-5 w-8" /> : stage.count}
-                  </span>
-                </div>
-                {i < arr.length - 1 && <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />}
-              </React.Fragment>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Manual Entries This Month */}
       {!hideValues && (legacyPOCount > 0 || legacyQuoteCount > 0 || incompleteVendorCount > 0) && (

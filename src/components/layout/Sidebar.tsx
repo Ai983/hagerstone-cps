@@ -18,15 +18,6 @@ const NAV = [
   { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor","procurement_head","management"] },
 ];
 
-const ROLE_LABELS: Record<string, string> = {
-  requestor: "Requestor",
-  procurement_executive: "Proc. Executive",
-  procurement_head: "Proc. Head",
-  management: "Management",
-  finance: "Finance",
-  site_receiver: "Site Receiver",
-  auditor: "Auditor",
-};
 
 const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
@@ -91,7 +82,6 @@ export function AppSidebar() {
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-sidebar-foreground truncate">{user?.name}</p>
-                <p className="text-xs text-sidebar-foreground/60">{ROLE_LABELS[user?.role ?? ""] ?? user?.role}</p>
               </div>
             </div>
             <button onClick={async () => { await signOut(); navigate("/login"); }}
