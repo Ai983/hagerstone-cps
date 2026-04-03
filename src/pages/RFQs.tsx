@@ -174,7 +174,8 @@ export default function RFQs() {
   const [reviewDeadline, setReviewDeadline] = useState("");
   const [showAddVendor, setShowAddVendor] = useState(false);
   const [vendorSearch, setVendorSearch] = useState("");
-  const [vendorSearchResults, setVendorSearchResults] = useState<Supplier[]>([]);
+  const [searchResults, setSearchResults] = useState<Supplier[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [reviewRfqCategories, setReviewRfqCategories] = useState<string[]>([]);
@@ -506,13 +507,15 @@ export default function RFQs() {
     setReviewDeadline(rfq.deadline ? rfq.deadline.split("T")[0] : new Date().toISOString().split("T")[0]);
     setShowAddVendor(false);
     setVendorSearch("");
-    setVendorSearchResults([]);
+    setSearchResults([]);
     setReviewRfqCategories([]);
     setMatchedSuppliers([]);
     setReviewSelectedIds([]);
     setShowAllMatched(false);
     setShowNewVendorForm(false);
     setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
+    setVendorSearch("");
+    setSearchResults([]);
     setReviewLoading(true);
     setReviewOpen(true);
 
@@ -550,7 +553,7 @@ export default function RFQs() {
   };
 
   const searchVendors = async (q: string) => {
-    if (!q.trim()) { setVendorSearchResults([]); return; }
+    if (!q.trim()) { setSearchResults([]); return; }
     const existingIds = new Set(reviewSuppliers.map(s => s.supplier_id));
     const { data } = await supabase
       .from("cps_suppliers")
@@ -558,7 +561,7 @@ export default function RFQs() {
       .eq("status", "active")
       .or(`name.ilike.%${q}%,city.ilike.%${q}%`)
       .limit(8);
-    setVendorSearchResults(((data ?? []) as Supplier[]).filter(s => !existingIds.has(s.id)));
+    setSearchResults(((data ?? []) as Supplier[]).filter(s => !existingIds.has(s.id)));
   };
 
   const addSupplierToRFQ = (vendor: Supplier) => {
@@ -570,7 +573,7 @@ export default function RFQs() {
     setReviewSelectedIds((prev) =>
       prev.includes(vendor.id) ? prev : [...prev, vendor.id]
     );
-    setVendorSearchResults((prev) => prev.filter((s) => s.id !== vendor.id));
+    setSearchResults((prev) => prev.filter((s) => s.id !== vendor.id));
     setVendorSearch("");
     setShowAddVendor(false);
   };
@@ -629,6 +632,28 @@ export default function RFQs() {
     toast.success(`${newVendorForm.name} added to this RFQ`);
     setSavingNewVendor(false);
   };
+
+  // Debounced vendor search
+  useEffect(() => {
+    const query = vendorSearch.trim();
+    if (!query || query.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setIsSearching(true);
+      const { data } = await supabase
+        .from("cps_suppliers")
+        .select("id, name, phone, whatsapp, categories, performance_score, profile_complete")
+        .eq("status", "active")
+        .ilike("name", `%${query}%`)
+        .limit(8);
+      const alreadyShownIds = new Set(matchedSuppliers.map((s) => s.id));
+      setSearchResults((data || []).filter((s: any) => !alreadyShownIds.has(s.id)) as Supplier[]);
+      setIsSearching(false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [vendorSearch, matchedSuppliers]);
 
   const handleSendToSuppliers = async () => {
     if (!reviewRfq || !user) return;
@@ -1192,6 +1217,59 @@ export default function RFQs() {
                         })()}
                       </p>
                     </div>
+
+                    {/* Vendor search — only for drafts */}
+                    {reviewRfq?.status === "draft" && (
+                      <>
+                        <div className="relative mb-3">
+                          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            placeholder="Search existing vendors by name..."
+                            value={vendorSearch}
+                            onChange={(e) => setVendorSearch(e.target.value)}
+                            className="pl-9"
+                          />
+                          {isSearching && (
+                            <Loader2 className="absolute right-3 top-2.5 h-4 w-4 animate-spin text-muted-foreground" />
+                          )}
+                        </div>
+                        {searchResults.length > 0 && (
+                          <div className="mb-3 border rounded-lg overflow-hidden">
+                            <p className="text-xs text-muted-foreground px-3 py-1.5 bg-muted">
+                              Search results — click to add to selection
+                            </p>
+                            {searchResults.map((s) => (
+                              <div
+                                key={s.id}
+                                className="flex items-center gap-3 px-3 py-2.5 hover:bg-accent cursor-pointer border-t"
+                                onClick={() => {
+                                  setMatchedSuppliers((prev) => [...prev, s]);
+                                  setReviewSelectedIds((prev) => [...prev, s.id]);
+                                  setVendorSearch("");
+                                  setSearchResults([]);
+                                  toast.success(`${s.name} added to selection`);
+                                }}
+                              >
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-sm">{s.name}</span>
+                                    {!s.profile_complete && (
+                                      <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                                        Incomplete Profile
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">
+                                    {s.whatsapp || s.phone || "No phone"} · {(s.categories ?? []).join(", ")}
+                                  </p>
+                                </div>
+                                <span className="text-xs text-primary font-medium">+ Add</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
 
                     {/* Supplier rows */}
                     <div className="space-y-2">
