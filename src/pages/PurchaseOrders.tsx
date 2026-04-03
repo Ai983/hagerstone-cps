@@ -1523,26 +1523,26 @@ export default function PurchaseOrders() {
 
                 {/* Approval section */}
                 <div className="border-t border-border/60 pt-4 space-y-4">
-                  {/* Founder feedback block — shown whenever there's a founder response */}
-                  {viewPo.founder_approval_status && viewPo.founder_approval_status !== "sent" && (
-                    <div className={`rounded-lg border p-4 space-y-2 ${
-                      viewPo.founder_approval_status === "approved"
-                        ? "border-green-200 bg-green-50"
-                        : "border-red-200 bg-red-50"
-                    }`}>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold">
-                          {viewPo.founder_approval_status === "approved" ? "✅ Founders Approved" : "❌ Founders Rejected"}
-                        </span>
-                      </div>
+                  {/* Founder feedback block */}
+                  {viewPo.founder_approval_status === "approved" && (
+                    <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-1">
+                      <span className="text-sm font-semibold text-green-800">✅ Founders Approved</span>
                       {viewPo.founder_approval_reason && (
-                        <p className="text-sm text-gray-700 italic">"{viewPo.founder_approval_reason}"</p>
+                        <p className="text-sm text-green-700 italic">"{viewPo.founder_approval_reason}"</p>
                       )}
                     </div>
                   )}
-                  {viewPo.founder_approval_status === "sent" && (
+                  {viewPo.founder_approval_status === "rejected" && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-1">
+                      <span className="text-sm font-semibold text-red-800">❌ Founders Rejected</span>
+                      {viewPo.founder_approval_reason && (
+                        <p className="text-sm text-red-700 italic">"{viewPo.founder_approval_reason}"</p>
+                      )}
+                    </div>
+                  )}
+                  {(viewPo.founder_approval_status === "sent" || viewPo.founder_approval_status === "pending") && (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                      <p className="text-sm text-amber-800">⏳ Awaiting founder approval — form sent to founders</p>
+                      <p className="text-sm text-amber-800">⏳ Awaiting founder response — form sent to founders</p>
                     </div>
                   )}
 
@@ -1550,14 +1550,7 @@ export default function PurchaseOrders() {
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       <div className="space-y-1">
                         <div className="text-sm font-medium">PO is awaiting approval</div>
-                        {viewPo.created_by && viewPo.created_by === user?.id ? (
-                          <div className="text-sm text-destructive flex items-center gap-2">
-                            <Info className="h-4 w-4" />
-                            Anti-corruption: you created this PO, so you cannot approve it.
-                          </div>
-                        ) : (
-                          <div className="text-sm text-muted-foreground">Review founder feedback above, then send to supplier.</div>
-                        )}
+                        <div className="text-sm text-muted-foreground">Review founder feedback above, then send to supplier.</div>
                       </div>
                       <div className="flex gap-3">
                         {viewPo.founder_approval_status === "rejected" && (
@@ -1596,14 +1589,7 @@ export default function PurchaseOrders() {
                       <div className="flex items-start justify-between gap-4 flex-wrap">
                         <div className="space-y-2">
                           <div className="text-sm font-medium">Approval</div>
-                          {viewPo.created_by && viewPo.created_by === user?.id ? (
-                            <div className="text-sm text-destructive flex items-center gap-2">
-                              <Info className="h-4 w-4" />
-                              Anti-corruption: you created this PO, so you cannot approve it.
-                            </div>
-                          ) : (
-                            <div className="text-sm text-muted-foreground">Approve this Purchase Order.</div>
-                          )}
+                          <div className="text-sm text-muted-foreground">Review founder feedback above, then send to supplier.</div>
                         </div>
                         <div className="flex items-center gap-3 flex-wrap justify-end">
                           <div className="space-y-2">
