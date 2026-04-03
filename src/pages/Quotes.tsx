@@ -398,8 +398,8 @@ export default function Quotes() {
     const liRows = (items ?? []) as QuoteLineItem[];
     setReviewItems(liRows);
 
-    // Pre-fill edited items from existing approved data
-    if (qRow.parse_status === "approved" && liRows.length > 0) {
+    // Pre-fill edited items from existing data (parsed, reviewed, approved)
+    if ((qRow.parse_status === "approved" || qRow.parse_status === "parsed" || qRow.parse_status === "reviewed") && liRows.length > 0) {
       setEditedItems(liRows.map(li => ({
         description: li.original_description ?? "",
         brand: li.brand ?? "",
@@ -420,8 +420,30 @@ export default function Quotes() {
       setEditedFreightTerms(qRow.freight_terms ?? "");
       setEditedWarranty(qRow.warranty_months ? String(qRow.warranty_months) : "");
       setEditedValidity(qRow.validity_days ? String(qRow.validity_days) : "");
-      // Show cached AI result if available
-      if (qRow.ai_parsed_data) setAiResult(qRow.ai_parsed_data);
+      // Show cached AI result if available; otherwise synthesise from existing line items
+      if (qRow.ai_parsed_data) {
+        setAiResult(qRow.ai_parsed_data);
+      } else if (liRows.length > 0) {
+        setAiResult({
+          line_items: liRows.map((li) => ({
+            description: li.original_description ?? "",
+            brand: li.brand ?? "",
+            quantity: li.quantity ?? 0,
+            unit: li.unit ?? "",
+            rate: li.rate ?? 0,
+            gst_percent: li.gst_percent ?? 18,
+            total_landed_rate: li.total_landed_rate ?? 0,
+            lead_time_days: li.lead_time_days ?? null,
+            hsn_code: li.hsn_code ?? null,
+          })),
+          payment_terms: qRow.payment_terms ?? "",
+          delivery_terms: qRow.delivery_terms ?? "",
+          freight_terms: qRow.freight_terms ?? "",
+          warranty_months: qRow.warranty_months ?? null,
+          validity_days: qRow.validity_days ?? null,
+          notes: "",
+        });
+      }
     }
 
     const draft: Record<string, Partial<QuoteLineItem>> = {};
@@ -1248,7 +1270,7 @@ Rules:
                 <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30 shrink-0">
                   <span className="text-sm font-semibold">AI Quote Analysis</span>
                   <div className="flex gap-2">
-                    {(reviewQuote.parse_status === "pending" || reviewQuote.parse_status === "needs_review" || aiResult) && fileUrl && (
+                    {(reviewQuote.parse_status === "pending" || reviewQuote.parse_status === "needs_review" || reviewQuote.parse_status === "parsed" || aiResult) && fileUrl && (
                       <Button
                         size="sm"
                         variant="outline"
