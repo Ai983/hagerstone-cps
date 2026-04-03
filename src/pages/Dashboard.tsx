@@ -61,8 +61,8 @@ export default function Dashboard() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      const prQuery = supabase.from("cps_purchase_requisitions").select("id", { count: "exact", head: true });
-      if (!isProcurementHead) prQuery.eq("requested_by", user?.id ?? "");
+      let prQuery = supabase.from("cps_purchase_requisitions").select("id", { count: "exact", head: true });
+      if (!isProcurementHead) prQuery = prQuery.eq("requested_by", user?.id ?? "");
 
       const [prRes, rfqRes, quotesRes, poActiveRes, grnRes, supplierRes] = await Promise.all([
         prQuery,

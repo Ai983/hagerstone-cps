@@ -217,11 +217,11 @@ export default function PurchaseRequisitions() {
 
   const refresh = async () => {
     setLoading(true);
-    const prQuery = supabase
+    let prQuery = supabase
       .from("cps_purchase_requisitions")
       .select("id, pr_number, project_site, project_code, requested_by, status, required_by, notes, created_at")
       .order("created_at", { ascending: false });
-    if (!isProcurementHead) prQuery.eq("requested_by", user?.id ?? "");
+    if (!isProcurementHead) prQuery = prQuery.eq("requested_by", user?.id ?? "");
     const { data: prs, error } = await prQuery;
 
     if (error) {
