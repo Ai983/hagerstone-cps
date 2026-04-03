@@ -2,7 +2,7 @@ import React from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 
-const adminOnlyRoutes = ['/rfqs', '/quotes', '/comparison', '/purchase-orders', '/suppliers', '/items', '/audit'];
+const adminOnlyRoutes = ['/rfqs', '/quotes', '/comparison', '/purchase-orders', '/suppliers', '/audit', '/invoices'];
 
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();

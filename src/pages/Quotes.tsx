@@ -23,7 +23,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 
-import { Building2, CalendarDays, Flag, LogIn, Plus, Search, ExternalLink, Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Building2, CalendarDays, Flag, LogIn, Plus, Search, ExternalLink, Loader2, AlertTriangle, CheckCircle2, Paperclip } from "lucide-react";
+import { LegacyQuoteUploadModal } from "@/components/quotes/LegacyQuoteUploadModal";
 
 type QuoteParseStatus = "pending" | "parsed" | "needs_review" | "reviewed" | "approved" | "failed";
 type QuoteComplianceStatus = "compliant" | "non_compliant" | "pending";
@@ -54,6 +55,8 @@ type QuoteListRow = {
   missing_fields: string[] | null;
   ai_summary: string | null;
   ai_parsed_data: any | null;
+  is_legacy: boolean | null;
+  legacy_vendor_name: string | null;
 };
 
 type QuoteLineItem = {
@@ -216,6 +219,10 @@ export default function Quotes() {
   const [editDraftByItemId, setEditDraftByItemId] = useState<Record<string, Partial<QuoteLineItem>>>({});
   const [correctedByItemId, setCorrectedByItemId] = useState<Record<string, boolean>>({});
 
+  const [legacyModalOpen, setLegacyModalOpen] = useState(false);
+  // supplier profile_complete map for NEW VENDOR badge
+  const [supplierProfileMap, setSupplierProfileMap] = useState<Record<string, boolean>>({});
+
   // AI parsing state
   const [fileUrl, setFileUrl] = useState<string | null>(null);
   const [prLineItems, setPrLineItems] = useState<PrLineItem[]>([]);
@@ -261,7 +268,7 @@ export default function Quotes() {
 
       const { data, error } = await supabase
         .from("cps_quotes")
-        .select("id, blind_quote_ref, rfq_id, quote_number, received_at, channel, parse_status, parse_confidence, compliance_status, payment_terms, delivery_terms, warranty_months, validity_days, total_quoted_value, total_landed_value, commercial_score, submitted_by_human, reviewed_at, supplier_id, ai_parse_confidence, freight_terms, reviewed_by, raw_file_path, missing_fields, ai_summary, ai_parsed_data")
+        .select("id, blind_quote_ref, rfq_id, quote_number, received_at, channel, parse_status, parse_confidence, compliance_status, payment_terms, delivery_terms, warranty_months, validity_days, total_quoted_value, total_landed_value, commercial_score, submitted_by_human, reviewed_at, supplier_id, ai_parse_confidence, freight_terms, reviewed_by, raw_file_path, missing_fields, ai_summary, ai_parsed_data, is_legacy, legacy_vendor_name")
         .order("received_at", { ascending: false });
       if (error) throw error;
 
@@ -271,6 +278,21 @@ export default function Quotes() {
       const quoteIds = quoteRows.map((q) => q.id);
       const counts = await fetchItemsCounts(quoteIds);
       setItemsCountByQuoteId(counts);
+
+      // Fetch supplier profile_complete for NEW VENDOR badge
+      const supplierIds = [...new Set(quoteRows.map((q) => q.supplier_id).filter(Boolean))] as string[];
+      if (supplierIds.length > 0) {
+        const { data: supData } = await supabase
+          .from("cps_suppliers")
+          .select("id,profile_complete")
+          .in("id", supplierIds);
+        const profileMap: Record<string, boolean> = {};
+        (supData ?? []).forEach((s: any) => {
+          profileMap[s.id] = s.profile_complete ?? true;
+        });
+        setSupplierProfileMap(profileMap);
+      }
+
       setLoading(false);
     } catch (e: any) {
       console.error("Quotes load error:", e);
@@ -853,10 +875,16 @@ Rules:
           <h1 className="text-2xl font-bold text-foreground">Quotes</h1>
           <p className="text-muted-foreground text-sm mt-1">Review incoming supplier quotes — Steps 6–9</p>
         </div>
-        <Button onClick={openLogDialog} variant="outline">
-          <Plus className="h-4 w-4 mr-2" />
-          Log Quote Manually
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button onClick={() => setLegacyModalOpen(true)} variant="default">
+            <Paperclip className="h-4 w-4 mr-2" />
+            + Upload Legacy Quote
+          </Button>
+          <Button onClick={openLogDialog} variant="outline">
+            <Plus className="h-4 w-4 mr-2" />
+            Log Quote Manually
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -981,7 +1009,22 @@ Rules:
                   const compBadge = complianceBadge(q.compliance_status);
                   return (
                     <TableRow key={q.id} className="hover:bg-muted/30">
-                      <TableCell className="font-mono text-primary">{q.blind_quote_ref}</TableCell>
+                      <TableCell className="font-mono text-primary">
+                        <div className="flex flex-col gap-1">
+                          <span>{q.blind_quote_ref}</span>
+                          <div className="flex flex-wrap gap-1">
+                            {q.is_legacy && (
+                              <Badge className="text-xs border bg-amber-100 text-amber-800 border-amber-300">LEGACY</Badge>
+                            )}
+                            {q.supplier_id && supplierProfileMap[q.supplier_id] === false && (
+                              <Badge className="text-xs border bg-blue-100 text-blue-800 border-blue-300">NEW VENDOR</Badge>
+                            )}
+                            {q.parse_status === "needs_review" && (
+                              <Badge className="text-xs border bg-orange-100 text-orange-800 border-orange-300">⚠️ Review Required</Badge>
+                            )}
+                          </div>
+                        </div>
+                      </TableCell>
                       <TableCell className="text-muted-foreground">{rfq?.rfq_number ?? "—"}</TableCell>
                       <TableCell>
                         <Badge className={`text-xs border-0 ${channelBadge(q.channel)}`}>{q.channel}</Badge>
@@ -1406,6 +1449,12 @@ Rules:
           )}
         </DialogContent>
       </Dialog>
+
+      <LegacyQuoteUploadModal
+        open={legacyModalOpen}
+        onOpenChange={setLegacyModalOpen}
+        onSuccess={fetchQuotes}
+      />
     </div>
   );
 }

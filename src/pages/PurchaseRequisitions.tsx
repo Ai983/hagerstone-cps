@@ -82,7 +82,13 @@ type LineItem = {
   preferredBrand: string;
   requiredFor: string;
   materialCode: string;
+  _isNewItem?: boolean;
+  _autoApproved?: boolean;
+  _newItemData?: { category: string; description: string };
 };
+
+const CPS_CATEGORIES = ["Electrical", "Civil", "MEP", "Furniture", "Interiors", "IT & Infra", "Safety", "Tools", "Plumbing", "HVAC", "General"];
+const CPS_UNITS = ["nos", "sqft", "rmt", "kg", "ltr", "set", "pair", "box", "mtr", "bag"];
 
 type DetailLineItem = {
   id: string;
@@ -177,6 +183,9 @@ export default function PurchaseRequisitions() {
   const [wizSuccess, setWizSuccess] = useState<{ prNumber: string; itemsCount: number } | null>(null);
   const [wizItemSearch, setWizItemSearch] = useState<Record<string, string>>({});
   const [wizDropdownOpen, setWizDropdownOpen] = useState<Record<string, boolean>>({});
+  const [wizNewItemFormOpen, setWizNewItemFormOpen] = useState<Record<string, boolean>>({});
+  const [wizNewItemForms, setWizNewItemForms] = useState<Record<string, { name: string; category: string; unit: string; description: string; brand: string }>>({});
+  const [wizNewItemSubmitting, setWizNewItemSubmitting] = useState<Record<string, boolean>>({});
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailPr, setDetailPr] = useState<PurchaseRequisition | null>(null);
@@ -327,6 +336,9 @@ export default function PurchaseRequisitions() {
     setWizSuccess(null);
     setWizItemSearch({});
     setWizDropdownOpen({});
+    setWizNewItemFormOpen({});
+    setWizNewItemForms({});
+    setWizNewItemSubmitting({});
     setWizardOpen(true);
   };
 
@@ -368,6 +380,66 @@ export default function PurchaseRequisitions() {
     }
     setDocLines((data ?? []) as DetailLineItem[]);
     setDocLoading(false);
+  };
+
+  const handleAddNewItem = async (rowKey: string) => {
+    if (!user) return;
+    const form = wizNewItemForms[rowKey];
+    if (!form?.name.trim()) { toast.error("Item name is required"); return; }
+    if (!form.unit.trim()) { toast.error("Unit is required"); return; }
+
+    setWizNewItemSubmitting(prev => ({ ...prev, [rowKey]: true }));
+    try {
+      const isProcurement = ["procurement_executive", "procurement_head", "management"].includes(user.role ?? "");
+
+      if (isProcurement) {
+        // Directly insert into cps_items
+        const { data: newItemRecord, error: itemErr } = await supabase
+          .from("cps_items")
+          .insert({
+            name: form.name.trim(),
+            category: form.category || null,
+            unit: form.unit.trim(),
+            description: form.description.trim() || null,
+            preferred_brands: form.brand.trim() ? [form.brand.trim()] : [],
+            active: true,
+          } as any)
+          .select("id")
+          .single();
+        if (itemErr || !newItemRecord) throw new Error(itemErr?.message || "Failed to add item");
+
+        setWizLineItems(prev => prev.map(r => r.rowKey === rowKey ? {
+          ...r,
+          item_id: (newItemRecord as any).id,
+          description: form.name.trim(),
+          unit: form.unit.trim(),
+          _isNewItem: true,
+          _autoApproved: true,
+          _newItemData: { category: form.category, description: form.description },
+        } : r));
+        setWizItemSearch(prev => ({ ...prev, [rowKey]: form.name.trim() }));
+        toast.success(`"${form.name.trim()}" added to item master and this PR.`);
+      } else {
+        // Requestor/site_receiver — queue for procurement review
+        setWizLineItems(prev => prev.map(r => r.rowKey === rowKey ? {
+          ...r,
+          item_id: null,
+          description: form.name.trim(),
+          unit: form.unit.trim(),
+          _isNewItem: true,
+          _autoApproved: false,
+          _newItemData: { category: form.category, description: form.description },
+        } : r));
+        setWizItemSearch(prev => ({ ...prev, [rowKey]: form.name.trim() }));
+        toast.info("Item added to this PR. Procurement head will review and add it to the item master.");
+      }
+
+      setWizNewItemFormOpen(prev => ({ ...prev, [rowKey]: false }));
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to add new item");
+    } finally {
+      setWizNewItemSubmitting(prev => ({ ...prev, [rowKey]: false }));
+    }
   };
 
   const submitWizard = async () => {
@@ -413,6 +485,44 @@ export default function PurchaseRequisitions() {
       const { error: linesErr } = await supabase.from("cps_pr_line_items").insert(linePayload);
       if (linesErr) throw new Error("Failed to insert items: " + linesErr.message);
 
+      // Create pending item request records for new items
+      const newItemLines = validLines.filter(li => li._isNewItem);
+      for (const li of newItemLines) {
+        try {
+          if (li._autoApproved) {
+            await supabase.from("cps_pending_item_requests").insert({
+              item_name: li.description,
+              category: li._newItemData?.category || null,
+              unit: li.unit,
+              description: li._newItemData?.description || null,
+              preferred_brands: li.preferredBrand || null,
+              requested_by: user.id,
+              requested_by_name: user.name ?? user.email ?? "",
+              requested_by_role: user.role ?? null,
+              pr_id: prId,
+              status: "auto_approved",
+              reviewed_by: user.id,
+              reviewed_at: new Date().toISOString(),
+              approved_item_id: li.item_id,
+            } as any);
+          } else {
+            await supabase.from("cps_pending_item_requests").insert({
+              item_name: li.description,
+              category: li._newItemData?.category || null,
+              unit: li.unit,
+              description: li._newItemData?.description || null,
+              preferred_brands: li.preferredBrand || null,
+              requested_by: user.id,
+              requested_by_name: user.name ?? user.email ?? "",
+              requested_by_role: user.role ?? null,
+              pr_id: prId,
+              pr_line_item_description: li.description,
+              status: "pending",
+            } as any);
+          }
+        } catch { /* non-blocking */ }
+      }
+
       try {
         await supabase.from("cps_audit_log").insert([{
           user_id: user.id, user_name: user.name, user_role: user.role,
@@ -428,24 +538,9 @@ export default function PurchaseRequisitions() {
           p_pr_id: prId, p_created_by: user.id,
         });
         if (!rfqError && rfqResult?.success) {
-          toast.success(`${rfqResult.rfq_number} auto-created with ${rfqResult.supplier_count} suppliers`);
-          supabase.from("cps_config").select("value").eq("key", "webhook_rfq_dispatch").single().then(({ data: config }) => {
-            if (!config?.value) return;
-            supabase.rpc("cps_generate_upload_tokens", { p_rfq_id: rfqResult.rfq_id }).then(({ data: tokenData }) => {
-              fetch(config.value, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  event: "rfq_created", rfq_id: rfqResult.rfq_id, rfq_number: rfqResult.rfq_number,
-                  supplier_count: rfqResult.supplier_count, deadline: rfqResult.deadline,
-                  test_mode: rfqResult.test_mode ?? false,
-                  suppliers: (tokenData ?? []).map((t: any) => ({
-                    name: t.out_supplier_name, whatsapp: t.out_whatsapp,
-                    upload_url: t.out_upload_url, token: t.out_token,
-                  })),
-                }),
-              }).catch(() => {});
-            });
-          });
+          // Ensure RFQ stays in draft — procurement head reviews vendors before webhook fires
+          await supabase.from("cps_rfqs").update({ status: "draft" }).eq("id", rfqResult.rfq_id);
+          toast.success(`${rfqResult.rfq_number} created — review vendors in RFQs before dispatch`);
         }
       } catch { /* rfq failure non-blocking */ }
 
@@ -727,14 +822,19 @@ export default function PurchaseRequisitions() {
                     placeholder="Site address..."
                     className="text-lg min-h-[100px] resize-none border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0"
                   />
-                  <Button
-                    className="h-12 px-8 rounded-lg"
-                    disabled={!wizProjectSite.trim()}
-                    onClick={() => setWizardStep(3)}
-                  >
-                    {lang === 'hi' ? 'हो गया ✓' : 'Done ✓'}
-                    <ChevronRight className="ml-2 h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center gap-3">
+                    <Button variant="ghost" className="h-12 px-6 rounded-lg" onClick={() => setWizardStep(1)}>
+                      ← Back
+                    </Button>
+                    <Button
+                      className="h-12 px-8 rounded-lg"
+                      disabled={!wizProjectSite.trim()}
+                      onClick={() => setWizardStep(3)}
+                    >
+                      {lang === 'hi' ? 'हो गया ✓' : 'Done ✓'}
+                      <ChevronRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -756,14 +856,19 @@ export default function PurchaseRequisitions() {
                     onChange={(e) => setWizRequiredBy(e.target.value)}
                     className="h-14 text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0 w-48"
                   />
-                  <Button
-                    className="h-12 px-8 rounded-lg"
-                    disabled={!wizRequiredBy}
-                    onClick={() => setWizardStep(4)}
-                  >
-                    {lang === 'hi' ? 'हो गया ✓' : 'Done ✓'}
-                    <ChevronRight className="ml-2 h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center gap-3">
+                    <Button variant="ghost" className="h-12 px-6 rounded-lg" onClick={() => setWizardStep(2)}>
+                      ← Back
+                    </Button>
+                    <Button
+                      className="h-12 px-8 rounded-lg"
+                      disabled={!wizRequiredBy}
+                      onClick={() => setWizardStep(4)}
+                    >
+                      {lang === 'hi' ? 'हो गया ✓' : 'Done ✓'}
+                      <ChevronRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -849,13 +954,102 @@ export default function PurchaseRequisitions() {
                                   </button>
                                 ))}
                               {itemsMaster.filter((m) => m.name.toLowerCase().includes((wizItemSearch[li.rowKey] ?? "").toLowerCase())).length === 0 && (
-                                <div className="px-3 py-2.5 text-sm text-muted-foreground">No match — item will be added manually</div>
+                                <div>
+                                  <div className="px-3 py-2 text-xs text-muted-foreground">No match found in item master</div>
+                                  <button
+                                    className="w-full px-3 py-2.5 text-left hover:bg-primary/5 text-sm text-primary font-medium flex items-center gap-2 border-t border-border/40"
+                                    onMouseDown={(e) => {
+                                      e.preventDefault();
+                                      setWizDropdownOpen(prev => ({ ...prev, [li.rowKey]: false }));
+                                      setWizNewItemForms(prev => ({ ...prev, [li.rowKey]: { name: wizItemSearch[li.rowKey] ?? li.description, category: "", unit: li.unit ?? "nos", description: "", brand: li.preferredBrand ?? "" } }));
+                                      setWizNewItemFormOpen(prev => ({ ...prev, [li.rowKey]: true }));
+                                    }}
+                                  >
+                                    <Plus className="h-3.5 w-3.5" />
+                                    Request New Item
+                                  </button>
+                                </div>
                               )}
                             </div>
                           )}
                         </div>
 
-                        {!li.item_id && (li.description ?? "").trim().length > 2 && (
+                        {/* New item request inline form */}
+                        {wizNewItemFormOpen[li.rowKey] && (
+                          <div className="border border-primary/20 rounded-lg p-4 bg-primary/5 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium text-primary">📦 Request New Item</span>
+                              <button className="text-muted-foreground hover:text-foreground" onClick={() => setWizNewItemFormOpen(prev => ({ ...prev, [li.rowKey]: false }))}>
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="col-span-2 space-y-1">
+                                <Label className="text-xs text-muted-foreground">Item Name *</Label>
+                                <Input
+                                  value={wizNewItemForms[li.rowKey]?.name ?? ""}
+                                  onChange={e => setWizNewItemForms(prev => ({ ...prev, [li.rowKey]: { ...prev[li.rowKey], name: e.target.value } }))}
+                                  placeholder="Full item name"
+                                  className="h-9"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-xs text-muted-foreground">Category</Label>
+                                <select
+                                  value={wizNewItemForms[li.rowKey]?.category ?? ""}
+                                  onChange={e => setWizNewItemForms(prev => ({ ...prev, [li.rowKey]: { ...prev[li.rowKey], category: e.target.value } }))}
+                                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                                >
+                                  <option value="">Select…</option>
+                                  {CPS_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-xs text-muted-foreground">Unit *</Label>
+                                <select
+                                  value={wizNewItemForms[li.rowKey]?.unit ?? "nos"}
+                                  onChange={e => setWizNewItemForms(prev => ({ ...prev, [li.rowKey]: { ...prev[li.rowKey], unit: e.target.value } }))}
+                                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                                >
+                                  {CPS_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                                </select>
+                              </div>
+                              <div className="col-span-2 space-y-1">
+                                <Label className="text-xs text-muted-foreground">Description / Specs</Label>
+                                <Input
+                                  value={wizNewItemForms[li.rowKey]?.description ?? ""}
+                                  onChange={e => setWizNewItemForms(prev => ({ ...prev, [li.rowKey]: { ...prev[li.rowKey], description: e.target.value } }))}
+                                  placeholder="Optional"
+                                  className="h-9"
+                                />
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 pt-1">
+                              <Button size="sm" variant="ghost" type="button" onClick={() => setWizNewItemFormOpen(prev => ({ ...prev, [li.rowKey]: false }))}>
+                                Cancel
+                              </Button>
+                              <Button
+                                size="sm"
+                                type="button"
+                                disabled={wizNewItemSubmitting[li.rowKey]}
+                                onClick={() => handleAddNewItem(li.rowKey)}
+                              >
+                                {wizNewItemSubmitting[li.rowKey] ? "Adding…" : "Add to this PR →"}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* New item badges */}
+                        {li._isNewItem && !wizNewItemFormOpen[li.rowKey] && (
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${li._autoApproved ? "bg-green-100 text-green-800 border-green-200" : "bg-amber-100 text-amber-800 border-amber-200"}`}>
+                              {li._autoApproved ? "🟢 New Item Added to Master" : "🟡 Pending Procurement Approval"}
+                            </span>
+                          </div>
+                        )}
+
+                        {!li.item_id && !li._isNewItem && (li.description ?? "").trim().length > 2 && (
                           <p className="text-xs text-amber-600">⚠ Item not in database. Procurement team will be notified.</p>
                         )}
 
@@ -902,6 +1096,9 @@ export default function PurchaseRequisitions() {
                   </div>
 
                   <div className="flex items-center gap-3 pt-2">
+                    <Button variant="ghost" className="h-11 px-6 rounded-lg" onClick={() => setWizardStep(3)}>
+                      ← Back
+                    </Button>
                     <Button
                       variant="outline"
                       onClick={() => setWizLineItems((prev) => [...prev, emptyLine()])}
@@ -911,7 +1108,7 @@ export default function PurchaseRequisitions() {
                       {t("Add Item")}
                     </Button>
                     <Button
-                      className="h-12 px-8 rounded-lg"
+                      className="h-12 px-8 rounded-lg ml-auto"
                       disabled={!wizLineItems.some((li) => li.description.trim().length > 0)}
                       onClick={() => setWizardStep(5)}
                     >

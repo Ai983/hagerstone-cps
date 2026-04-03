@@ -9,10 +9,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Plus, Search } from "lucide-react";
 
@@ -49,6 +50,21 @@ type ItemForm = {
   preferred_brandsText: string;
   active: boolean;
 };
+
+type PendingRequest = {
+  id: string;
+  item_name: string;
+  category: string | null;
+  unit: string | null;
+  description: string | null;
+  requested_by_name: string | null;
+  requested_by_role: string | null;
+  pr_id: string | null;
+  status: string;
+  created_at: string | null;
+};
+
+const CPS_CATEGORIES_IM = ["Electrical", "Civil", "MEP", "Furniture", "Interiors", "IT & Infra", "Safety", "Tools", "Plumbing", "HVAC", "General"];
 
 const formatINR = (value: number | null | undefined) => {
   if (value === null || value === undefined) return "—";
@@ -88,8 +104,22 @@ export default function ItemMaster() {
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [activeOnly, setActiveOnly] = useState(true);
 
+  const [activeTab, setActiveTab] = useState("items");
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Pending item requests state
+  const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [activeRequest, setActiveRequest] = useState<PendingRequest | null>(null);
+  const [approveForm, setApproveForm] = useState({ name: "", category: "", unit: "", description: "", hsn_code: "" });
+  const [rejectReason, setRejectReason] = useState("");
+  const [approving, setApproving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const canManageRequests = ["procurement_head", "procurement_executive"].includes(user?.role ?? "");
 
   const [form, setForm] = useState<ItemForm>({
     name: "",
@@ -126,8 +156,96 @@ export default function ItemMaster() {
     setLoading(false);
   };
 
+  const fetchPendingRequests = async () => {
+    setPendingLoading(true);
+    const { data } = await supabase
+      .from("cps_pending_item_requests")
+      .select("id, item_name, category, unit, description, requested_by_name, requested_by_role, pr_id, status, created_at")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false });
+    setPendingRequests((data ?? []) as PendingRequest[]);
+    setPendingLoading(false);
+  };
+
+  const openApprove = (req: PendingRequest) => {
+    setActiveRequest(req);
+    setApproveForm({ name: req.item_name, category: req.category ?? "", unit: req.unit ?? "", description: req.description ?? "", hsn_code: "" });
+    setApproveOpen(true);
+  };
+
+  const openReject = (req: PendingRequest) => {
+    setActiveRequest(req);
+    setRejectReason("");
+    setRejectOpen(true);
+  };
+
+  const handleApprove = async () => {
+    if (!user || !activeRequest) return;
+    if (!approveForm.name.trim() || !approveForm.unit.trim()) { toast.error("Name and unit are required"); return; }
+    setApproving(true);
+    try {
+      const { data: item, error: itemErr } = await supabase
+        .from("cps_items")
+        .insert({
+          name: approveForm.name.trim(),
+          category: approveForm.category || null,
+          unit: approveForm.unit.trim(),
+          description: approveForm.description.trim() || null,
+          hsn_code: approveForm.hsn_code.trim() || null,
+          active: true,
+        } as any)
+        .select("id")
+        .single();
+      if (itemErr || !item) throw new Error(itemErr?.message || "Failed to create item");
+
+      await supabase.from("cps_pending_item_requests").update({
+        status: "approved",
+        reviewed_by: user.id,
+        reviewed_at: new Date().toISOString(),
+        approved_item_id: (item as any).id,
+      }).eq("id", activeRequest.id);
+
+      if (activeRequest.pr_id) {
+        await supabase.from("cps_pr_line_items")
+          .update({ item_id: (item as any).id } as any)
+          .eq("pr_id", activeRequest.pr_id)
+          .ilike("description", activeRequest.item_name);
+      }
+
+      toast.success(`"${approveForm.name}" added to item master`);
+      setApproveOpen(false);
+      await Promise.all([fetchPendingRequests(), fetchItems()]);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to approve");
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!user || !activeRequest) return;
+    if (!rejectReason.trim()) { toast.error("Rejection reason is required"); return; }
+    setRejecting(true);
+    try {
+      await supabase.from("cps_pending_item_requests").update({
+        status: "rejected",
+        reviewed_by: user.id,
+        reviewed_at: new Date().toISOString(),
+        rejection_reason: rejectReason.trim(),
+      }).eq("id", activeRequest.id);
+      toast.success("Request rejected");
+      setRejectOpen(false);
+      await fetchPendingRequests();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to reject");
+    } finally {
+      setRejecting(false);
+    }
+  };
+
   useEffect(() => {
     fetchItems();
+    if (canManageRequests) fetchPendingRequests();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -269,13 +387,30 @@ export default function ItemMaster() {
           <h1 className="text-2xl font-bold text-foreground">Item Master</h1>
           <p className="text-muted-foreground text-sm mt-1">153 items with benchmark pricing</p>
         </div>
-        {canManageSuppliers && (
+        {canManageSuppliers && activeTab === "items" && (
           <Button onClick={openAdd}>
             <Plus className="h-4 w-4 mr-2" />
             Add Item
           </Button>
         )}
       </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value="items">Item Master</TabsTrigger>
+          {canManageRequests && (
+            <TabsTrigger value="pending" className="relative">
+              Pending Approvals
+              {pendingRequests.length > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold leading-none">
+                  {pendingRequests.length}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
+        </TabsList>
+
+        <TabsContent value="items" className="mt-4 space-y-4">
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Card>
@@ -482,6 +617,56 @@ export default function ItemMaster() {
         )}
       </div>
 
+        </TabsContent>
+
+        {canManageRequests && (
+          <TabsContent value="pending" className="mt-4">
+            {pendingLoading ? (
+              <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+            ) : pendingRequests.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">No pending item requests</div>
+            ) : (
+              <div className="rounded-md border border-border/60 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Item Name</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead>Unit</TableHead>
+                      <TableHead>Requested By</TableHead>
+                      <TableHead>From PR</TableHead>
+                      <TableHead>Requested On</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pendingRequests.map(req => (
+                      <TableRow key={req.id}>
+                        <TableCell className="font-medium">{req.item_name}</TableCell>
+                        <TableCell className="text-muted-foreground">{req.category ?? "—"}</TableCell>
+                        <TableCell className="text-muted-foreground">{req.unit ?? "—"}</TableCell>
+                        <TableCell className="text-muted-foreground">
+                          <div>{req.requested_by_name ?? "—"}</div>
+                          {req.requested_by_role && <div className="text-xs capitalize">{req.requested_by_role.replace(/_/g, " ")}</div>}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{req.pr_id ? req.pr_id.slice(0, 8) + "…" : "—"}</TableCell>
+                        <TableCell className="text-muted-foreground text-xs">{req.created_at ? new Date(req.created_at).toLocaleDateString("en-IN") : "—"}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white h-7 text-xs" onClick={() => openApprove(req)}>Approve</Button>
+                            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => openReject(req)}>Reject</Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </TabsContent>
+        )}
+      </Tabs>
+
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
@@ -569,6 +754,75 @@ export default function ItemMaster() {
             <Button onClick={handleSave}>{editingId ? "Save Changes" : "Add Item"}</Button>
           </DialogFooter>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Approve Item Request Dialog */}
+      <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Approve & Add to Item Master</DialogTitle>
+            <DialogDescription>Review and edit details before adding to the master.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label>Item Name *</Label>
+              <Input value={approveForm.name} onChange={e => setApproveForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Category *</Label>
+                <Select value={approveForm.category} onValueChange={v => setApproveForm(f => ({ ...f, category: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                  <SelectContent>
+                    {CPS_CATEGORIES_IM.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Unit *</Label>
+                <Input value={approveForm.unit} onChange={e => setApproveForm(f => ({ ...f, unit: e.target.value }))} />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label>HSN Code</Label>
+              <Input value={approveForm.hsn_code} onChange={e => setApproveForm(f => ({ ...f, hsn_code: e.target.value }))} placeholder="Optional" />
+            </div>
+            <div className="space-y-1">
+              <Label>Description</Label>
+              <Textarea value={approveForm.description} onChange={e => setApproveForm(f => ({ ...f, description: e.target.value }))} rows={2} placeholder="Optional" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveOpen(false)} disabled={approving}>Cancel</Button>
+            <Button onClick={handleApprove} disabled={approving} className="bg-green-600 hover:bg-green-700">
+              {approving ? "Adding…" : "Add to Item Master"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Item Request Dialog */}
+      <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Reject Item Request</DialogTitle>
+            <DialogDescription>Provide a reason for rejecting "{activeRequest?.item_name}".</DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <Textarea
+              value={rejectReason}
+              onChange={e => setRejectReason(e.target.value)}
+              rows={3}
+              placeholder="Reason for rejection (required)"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectOpen(false)} disabled={rejecting}>Cancel</Button>
+            <Button variant="destructive" onClick={handleReject} disabled={rejecting}>
+              {rejecting ? "Rejecting…" : "Reject"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

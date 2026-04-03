@@ -23,7 +23,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Loader2, Trash2 } from "lucide-react";
 
 type RfqStatus = "draft" | "sent" | "reminder_1" | "reminder_2" | "closed" | "comparison_ready" | "cancelled";
 
@@ -48,10 +48,39 @@ type Supplier = {
   id: string;
   name: string;
   city: string | null;
+  state?: string | null;
+  gstin?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  whatsapp?: string | null;
   categories: string[] | null;
   performance_score: number | null;
   last_awarded_at: string | null;
   status: string | null;
+};
+
+type ReviewRfqSupplier = {
+  id: string;
+  rfq_id: string;
+  supplier_id: string;
+  supplier: {
+    id: string;
+    name: string;
+    whatsapp: string | null;
+    phone: string | null;
+    email: string | null;
+    state: string | null;
+    gstin: string | null;
+    categories: string[] | null;
+  };
+};
+
+type ReviewPrLineItem = {
+  id: string;
+  description: string;
+  quantity: number | null;
+  unit: string | null;
+  item: { id: string; name: string; benchmark_rate: number | null; category: string | null } | null;
 };
 
 const statusColor: Record<RfqStatus, { badge: string; label: string }> = {
@@ -133,6 +162,19 @@ export default function RFQs() {
 
   const [selectedSupplierIds, setSelectedSupplierIds] = useState<string[]>([]);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Review & Send dialog state
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewRfq, setReviewRfq] = useState<Rfq | null>(null);
+  const [reviewSuppliers, setReviewSuppliers] = useState<ReviewRfqSupplier[]>([]);
+  const [reviewPrItems, setReviewPrItems] = useState<ReviewPrLineItem[]>([]);
+  const [reviewDeadline, setReviewDeadline] = useState("");
+  const [showAddVendor, setShowAddVendor] = useState(false);
+  const [vendorSearch, setVendorSearch] = useState("");
+  const [vendorSearchResults, setVendorSearchResults] = useState<Supplier[]>([]);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [reviewRfqCategories, setReviewRfqCategories] = useState<string[]>([]);
 
   const selectedSuppliers = useMemo(() => {
     const set = new Set(selectedSupplierIds);
@@ -414,6 +456,157 @@ export default function RFQs() {
     await fetchRFQs();
   };
 
+  // -------------------------------------------------------------------------
+  // Review & Send flow
+  // -------------------------------------------------------------------------
+
+  const loadRFQDetails = async (rfqId: string, prId: string) => {
+    const [{ data: sups }, { data: items }] = await Promise.all([
+      supabase
+        .from("cps_rfq_suppliers")
+        .select("id, rfq_id, supplier_id, supplier:cps_suppliers(id, name, whatsapp, phone, email, state, gstin, categories)")
+        .eq("rfq_id", rfqId),
+      supabase
+        .from("cps_pr_line_items")
+        .select("id, description, quantity, unit, item:cps_items(id, name, benchmark_rate, category)")
+        .eq("pr_id", prId),
+    ]);
+    setReviewSuppliers((sups ?? []) as ReviewRfqSupplier[]);
+    setReviewPrItems((items ?? []) as ReviewPrLineItem[]);
+    // Extract unique categories from this RFQ's items
+    const cats = [...new Set(
+      (items ?? []).map((li: any) => li.item?.category).filter(Boolean)
+    )] as string[];
+    setReviewRfqCategories(cats);
+  };
+
+  const openReview = async (rfq: Rfq) => {
+    setReviewRfq(rfq);
+    setReviewDeadline(rfq.deadline ? rfq.deadline.split("T")[0] : new Date().toISOString().split("T")[0]);
+    setShowAddVendor(false);
+    setVendorSearch("");
+    setVendorSearchResults([]);
+    setReviewRfqCategories([]);
+    setReviewLoading(true);
+    setReviewOpen(true);
+    await loadRFQDetails(rfq.id, rfq.pr_id);
+    setReviewLoading(false);
+  };
+
+  const removeSupplierFromRFQ = async (rfqSupplierId: string) => {
+    if (reviewSuppliers.length <= 2) {
+      toast.error("Minimum 2 vendors required");
+      return;
+    }
+    await supabase.from("cps_rfq_suppliers").delete().eq("id", rfqSupplierId);
+    setReviewSuppliers(prev => prev.filter(s => s.id !== rfqSupplierId));
+  };
+
+  const searchVendors = async (q: string) => {
+    if (!q.trim()) { setVendorSearchResults([]); return; }
+    const existingIds = new Set(reviewSuppliers.map(s => s.supplier_id));
+    const { data } = await supabase
+      .from("cps_suppliers")
+      .select("id, name, city, state, gstin, phone, email, whatsapp, categories, performance_score, last_awarded_at, status")
+      .eq("status", "active")
+      .or(`name.ilike.%${q}%,city.ilike.%${q}%`)
+      .limit(8);
+    setVendorSearchResults(((data ?? []) as Supplier[]).filter(s => !existingIds.has(s.id)));
+  };
+
+  const addSupplierToRFQ = async (vendor: Supplier) => {
+    if (!reviewRfq) return;
+    const { data: inserted, error } = await supabase
+      .from("cps_rfq_suppliers")
+      .insert({ rfq_id: reviewRfq.id, supplier_id: vendor.id, response_status: "pending" } as any)
+      .select("id, rfq_id, supplier_id")
+      .single();
+    if (error || !inserted) { toast.error("Failed to add vendor"); return; }
+    const newEntry: ReviewRfqSupplier = {
+      id: (inserted as any).id,
+      rfq_id: (inserted as any).rfq_id,
+      supplier_id: (inserted as any).supplier_id,
+      supplier: {
+        id: vendor.id,
+        name: vendor.name,
+        whatsapp: vendor.whatsapp ?? null,
+        phone: vendor.phone ?? null,
+        email: vendor.email ?? null,
+        state: vendor.state ?? null,
+        gstin: vendor.gstin ?? null,
+        categories: vendor.categories,
+      },
+    };
+    setReviewSuppliers(prev => [...prev, newEntry]);
+    setVendorSearchResults(prev => prev.filter(s => s.id !== vendor.id));
+  };
+
+  const handleSendToSuppliers = async () => {
+    if (!reviewRfq || !user) return;
+    if (reviewSuppliers.length < 2) { toast.error("Minimum 2 vendors required"); return; }
+    setSending(true);
+    try {
+      const now = new Date().toISOString();
+
+      await supabase.from("cps_rfqs")
+        .update({ status: "sent", sent_at: now } as any)
+        .eq("id", reviewRfq.id);
+
+      await supabase.from("cps_rfq_suppliers")
+        .update({ response_status: "pending" } as any)
+        .eq("rfq_id", reviewRfq.id);
+
+      const { data: config } = await supabase
+        .from("cps_config")
+        .select("value")
+        .eq("key", "webhook_rfq_dispatch")
+        .single();
+
+      if (config?.value) {
+        fetch(String(config.value), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "rfq_dispatch",
+            rfq_id: reviewRfq.id,
+            rfq_number: reviewRfq.rfq_number,
+            title: reviewRfq.title,
+            deadline: reviewDeadline,
+            suppliers: reviewSuppliers.map(s => ({
+              supplier_id: s.supplier.id,
+              supplier_name: s.supplier.name,
+              supplier_whatsapp: s.supplier.whatsapp || s.supplier.phone || "",
+              supplier_email: s.supplier.email || "",
+            })),
+            items: reviewPrItems.map(i => ({
+              name: i.item?.name || i.description,
+              quantity: i.quantity,
+              unit: i.unit,
+            })),
+          }),
+        }).catch(e => console.error("RFQ webhook error:", e));
+      }
+
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id,
+        user_name: user.name ?? user.email ?? "",
+        action_type: "RFQ_SENT",
+        entity_type: "cps_rfqs",
+        entity_id: reviewRfq.id,
+        description: `RFQ ${reviewRfq.rfq_number} sent to ${reviewSuppliers.length} suppliers`,
+        logged_at: now,
+      });
+
+      toast.success(`RFQ sent to ${reviewSuppliers.length} suppliers!`);
+      setReviewOpen(false);
+      await fetchRFQs();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to send RFQ");
+    } finally {
+      setSending(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -517,7 +710,11 @@ export default function RFQs() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">{formatIndianDateTime(r.created_at)}</TableCell>
                       <TableCell className="text-right">
-                        {canCompare ? (
+                        {r.status === "draft" ? (
+                          <Button size="sm" onClick={() => openReview(r)}>
+                            Review &amp; Send
+                          </Button>
+                        ) : canCompare ? (
                           <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
                             Compare →
                           </Button>
@@ -575,7 +772,9 @@ export default function RFQs() {
                         )}
                         <span className="text-xs text-muted-foreground">Due {formatIndianDateTime(r.deadline)}</span>
                       </div>
-                      {canCompare ? (
+                      {r.status === "draft" ? (
+                        <Button size="sm" onClick={() => openReview(r)}>Review &amp; Send</Button>
+                      ) : canCompare ? (
                         <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>Compare →</Button>
                       ) : ["closed", "approved"].includes(r.status) ? (
                         <Button variant="ghost" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>View</Button>
@@ -754,6 +953,201 @@ export default function RFQs() {
               </Button>
             </DialogFooter>
           </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Review & Send Dialog */}
+      <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
+        <DialogContent className="max-w-3xl p-0">
+          <div className="overflow-y-auto max-h-[85vh]">
+            <div className="p-6">
+              <DialogHeader>
+                <DialogTitle>Review RFQ: {reviewRfq?.rfq_number}</DialogTitle>
+                <DialogDescription>Review selected vendors before sending to suppliers</DialogDescription>
+              </DialogHeader>
+
+              {reviewLoading ? (
+                <div className="flex items-center justify-center py-16 gap-3">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  <span className="text-muted-foreground">Loading RFQ details…</span>
+                </div>
+              ) : (
+                <div className="mt-6 space-y-6">
+
+                  {/* PR Items */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground mb-3">Items Requested ({reviewPrItems.length})</h3>
+                    <div className="rounded-md border border-border/60 overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Item</TableHead>
+                            <TableHead className="w-20">Qty</TableHead>
+                            <TableHead className="w-20">Unit</TableHead>
+                            <TableHead className="w-28">Benchmark Rate</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {reviewPrItems.map(item => (
+                            <TableRow key={item.id}>
+                              <TableCell className="font-medium">{item.item?.name || item.description}</TableCell>
+                              <TableCell className="text-muted-foreground">{item.quantity ?? "—"}</TableCell>
+                              <TableCell className="text-muted-foreground">{item.unit ?? "—"}</TableCell>
+                              <TableCell className="text-muted-foreground">
+                                {item.item?.benchmark_rate != null ? `₹${item.item.benchmark_rate}` : "—"}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {reviewPrItems.length === 0 && (
+                            <TableRow>
+                              <TableCell colSpan={4} className="text-center py-6 text-muted-foreground text-sm">No items found</TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+
+                  {/* Selected Vendors */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <h3 className="text-sm font-semibold text-foreground">
+                          Selected Vendors ({reviewSuppliers.length})
+                        </h3>
+                        {reviewRfqCategories.length > 0 && (
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            RFQ categories: {reviewRfqCategories.map(c => (
+                              <span key={c} className="inline-flex items-center mr-1 bg-primary/10 text-primary text-[10px] px-1.5 py-0.5 rounded">{c}</span>
+                            ))}
+                          </p>
+                        )}
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => setShowAddVendor(v => !v)}>
+                        + Add Vendor
+                      </Button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {reviewSuppliers.map(s => {
+                        const inCategory = !reviewRfqCategories.length ||
+                          (s.supplier.categories ?? []).some(c => reviewRfqCategories.includes(c));
+                        return (
+                          <div key={s.id} className="flex items-center justify-between p-3 border border-border/60 rounded-lg bg-muted/20">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className="font-medium text-sm">{s.supplier.name}</p>
+                                {!inCategory && reviewRfqCategories.length > 0 && (
+                                  <span className="text-[10px] bg-amber-100 text-amber-800 border border-amber-200 rounded px-1.5 py-0.5 leading-none">⚠ Outside category</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1 mt-1 flex-wrap">
+                                {(s.supplier.categories ?? []).slice(0, 3).map(c => (
+                                  <span key={c} className={`text-[10px] px-1.5 py-0.5 rounded leading-none ${reviewRfqCategories.includes(c) ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>{c}</span>
+                                ))}
+                              </div>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {s.supplier.whatsapp || s.supplier.phone || "No phone"} · {s.supplier.email || "No email"}
+                              </p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive hover:text-destructive shrink-0"
+                              onClick={() => removeSupplierFromRFQ(s.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {reviewSuppliers.length < 2 && (
+                      <p className="text-amber-600 text-sm mt-2">
+                        ⚠ Minimum 2 vendors required. Add more vendors to proceed.
+                      </p>
+                    )}
+
+                    {/* Add Vendor Search */}
+                    {showAddVendor && (
+                      <div className="mt-3 p-4 border border-border/60 rounded-lg bg-muted/30 space-y-3">
+                        <Input
+                          autoFocus
+                          placeholder="Search vendors by name or city…"
+                          value={vendorSearch}
+                          onChange={e => {
+                            setVendorSearch(e.target.value);
+                            searchVendors(e.target.value);
+                          }}
+                        />
+                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                          {vendorSearchResults.map(v => {
+                            const matched = !reviewRfqCategories.length ||
+                              (v.categories ?? []).some(c => reviewRfqCategories.includes(c));
+                            return (
+                              <div key={v.id} className="flex items-center justify-between p-2 border border-border/40 rounded bg-background">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <p className="text-sm font-medium truncate">{v.name}</p>
+                                    {!matched && reviewRfqCategories.length > 0 && (
+                                      <span className="text-[10px] bg-amber-100 text-amber-800 border border-amber-200 rounded px-1.5 py-0.5 leading-none shrink-0">⚠ Outside category</span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                    <span className="text-xs text-muted-foreground">{v.city ?? "—"}</span>
+                                    {(v.categories ?? []).slice(0, 3).map(c => (
+                                      <span key={c} className={`text-[10px] px-1 py-0.5 rounded leading-none ${reviewRfqCategories.includes(c) ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>{c}</span>
+                                    ))}
+                                  </div>
+                                </div>
+                                <Button size="sm" variant="outline" className="shrink-0 ml-2" onClick={() => addSupplierToRFQ(v)}>
+                                  Add
+                                </Button>
+                              </div>
+                            );
+                          })}
+                          {vendorSearch.trim() && vendorSearchResults.length === 0 && (
+                            <p className="text-xs text-muted-foreground text-center py-2">No results</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Deadline */}
+                  <div>
+                    <Label className="text-sm font-semibold">Quote Deadline</Label>
+                    <Input
+                      type="date"
+                      value={reviewDeadline}
+                      onChange={e => setReviewDeadline(e.target.value)}
+                      min={new Date().toISOString().split("T")[0]}
+                      className="mt-1 w-48"
+                    />
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex justify-end gap-3 pt-2">
+                    <Button variant="outline" onClick={() => setReviewOpen(false)} disabled={sending}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleSendToSuppliers}
+                      disabled={reviewSuppliers.length < 2 || sending}
+                    >
+                      {sending ? (
+                        <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</>
+                      ) : (
+                        `Send to ${reviewSuppliers.length} Supplier${reviewSuppliers.length !== 1 ? "s" : ""}`
+                      )}
+                    </Button>
+                  </div>
+
+                </div>
+              )}
+            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2 } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, Upload } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,7 @@ const NAV = [
   { title: "Delivery Tracker", url: "/delivery", icon: Truck, roles: ["all"] },
   { title: "Supplier Master", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","management","auditor"] },
   { title: "Item Master", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head"] },
+  { title: "Invoice Upload", url: "/invoices/upload", icon: Upload, roles: ["procurement_executive","procurement_head","management"] },
   { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor","procurement_head","management"] },
 ];
 
@@ -31,6 +32,7 @@ const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Purchase Requests", url: "/requisitions", icon: FileText },
   { title: "Delivery Tracker", url: "/delivery", icon: Truck },
+  { title: "Item Master", url: "/items", icon: Package },
 ];
 
 export function AppSidebar() {

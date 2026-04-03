@@ -21,6 +21,7 @@ const AuditLog = React.lazy(() => import("@/pages/AuditLog"));
 const VendorRegister = React.lazy(() => import("@/pages/VendorRegister"));
 const VendorStatus = React.lazy(() => import("@/pages/VendorStatus"));
 const VendorUploadQuote = React.lazy(() => import("@/pages/VendorUploadQuote"));
+const InvoiceUpload = React.lazy(() => import("@/pages/InvoiceUpload"));
 
 const Loader = () => (
   <div className="min-h-screen flex items-center justify-center">
@@ -64,6 +65,7 @@ const App = () => (
               <Route path="/purchase-orders" element={<Protected><PurchaseOrders /></Protected>} />
               <Route path="/delivery" element={<Protected><DeliveryTracker /></Protected>} />
               <Route path="/audit" element={<Protected><AuditLog /></Protected>} />
+              <Route path="/invoices/upload" element={<Protected><InvoiceUpload /></Protected>} />
               <Route path="*" element={<Protected><div className="p-8 text-center"><h1 className="text-2xl font-bold">404 — Page not found</h1></div></Protected>} />
             </Routes>
           </React.Suspense>

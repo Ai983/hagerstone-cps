@@ -24,7 +24,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Info, PenLine, Plus, Search } from "lucide-react";
+import { Info, PenLine, Plus, Search, Upload } from "lucide-react";
+
+import LegacyPOUploadModal from "@/components/pos/LegacyPOUploadModal";
 
 type PoStatus =
   | "draft"
@@ -62,6 +64,9 @@ type PoRow = {
   site_supervisor_id: string | null;
   created_at: string | null;
   created_by?: string | null; // anti-corruption
+  source?: string | null;
+  supplier_name_text?: string | null;
+  founder_approval_status?: string | null;
 };
 
 type SupplierRow = {
@@ -94,6 +99,20 @@ type PoLineItemRow = {
 };
 
 type UserRow = { id: string; name: string };
+
+type PaymentScheduleRow = {
+  id: string;
+  milestone_name: string | null;
+  milestone_order: number | null;
+  amount: number | null;
+  percentage: number | null;
+  due_trigger: string | null;
+  due_date: string | null;
+  status: string;
+  paid_at: string | null;
+  payment_reference: string | null;
+  payment_mode: string | null;
+};
 
 const formatDate = (d: string | null | undefined) => {
   if (!d) return "—";
@@ -199,6 +218,14 @@ export default function PurchaseOrders() {
   const [rejectReason, setRejectReason] = useState<string>("");
   const [standardTnCs, setStandardTnCs] = useState<Record<string, string>>({});
   const [approveSending, setApproveSending] = useState(false);
+  const [legacyModalOpen, setLegacyModalOpen] = useState(false);
+  const [viewPaymentSchedule, setViewPaymentSchedule] = useState<PaymentScheduleRow[]>([]);
+  const [markPaidOpen, setMarkPaidOpen] = useState(false);
+  const [markPaidRow, setMarkPaidRow] = useState<PaymentScheduleRow | null>(null);
+  const [markPaidDate, setMarkPaidDate] = useState("");
+  const [markPaidMode, setMarkPaidMode] = useState("NEFT/RTGS");
+  const [markPaidRef, setMarkPaidRef] = useState("");
+  const [markPaidSaving, setMarkPaidSaving] = useState(false);
 
   const eligibleRfqsOptions = eligibleRfqs;
 
@@ -218,7 +245,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status",
         )
         .order("created_at", { ascending: false });
 
@@ -556,20 +583,21 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status",
         )
         .eq("id", poId)
         .single();
       if (poErr) throw poErr;
       const po = poRow as PoRow;
       setViewPo(po);
+      setViewPaymentSchedule([]);
 
       const supplierId = po.supplier_id;
       const rfqId = po.rfq_id;
       const prId = po.pr_id;
       const approvedBy = po.approved_by;
 
-      const [supplierRes, rfqRes, prRes, userRes, lineRes, configRes] = await Promise.all([
+      const [supplierRes, rfqRes, prRes, userRes, lineRes, configRes, scheduleRes] = await Promise.all([
         supplierId ? supabase.from("cps_suppliers").select("id,name,gstin,phone,email,address_text,city,state").eq("id", supplierId).single() : Promise.resolve({ data: null, error: null }),
         rfqId ? supabase.from("cps_rfqs").select("id,rfq_number").eq("id", rfqId).single() : Promise.resolve({ data: null, error: null }),
         prId ? supabase.from("cps_purchase_requisitions").select("id,project_site,project_code").eq("id", prId).single() : Promise.resolve({ data: null, error: null }),
@@ -583,6 +611,11 @@ export default function PurchaseOrders() {
           .from("cps_config")
           .select("key,value")
           .in("key", ["tnc_payment", "tnc_warranty", "tnc_delivery", "tnc_general", "tnc_dispute", "tnc_penalty"]),
+        supabase
+          .from("cps_po_payment_schedules")
+          .select("id,milestone_name,milestone_order,amount,percentage,due_trigger,due_date,status,paid_at,payment_reference,payment_mode")
+          .eq("po_id", poId)
+          .order("milestone_order", { ascending: true }),
       ]);
 
       if ((supplierRes as any).error) throw (supplierRes as any).error;
@@ -596,6 +629,7 @@ export default function PurchaseOrders() {
       setViewPr((prRes as any).data as PrRow | null);
       setViewApprovedByUser((userRes as any).data as UserRow | null);
       setViewPoLineItems((lineRes as any).data as PoLineItemRow[]);
+      setViewPaymentSchedule(((scheduleRes as any).data ?? []) as PaymentScheduleRow[]);
       const tncs: Record<string, string> = {};
       ((configRes as any).data ?? []).forEach((row: any) => {
         tncs[String(row.key)] = String(row.value ?? "");
@@ -684,6 +718,34 @@ export default function PurchaseOrders() {
     }
   };
 
+  const openMarkPaid = (row: PaymentScheduleRow) => {
+    setMarkPaidRow(row);
+    setMarkPaidDate(new Date().toISOString().split("T")[0]);
+    setMarkPaidMode("NEFT/RTGS");
+    setMarkPaidRef("");
+    setMarkPaidOpen(true);
+  };
+
+  const commitMarkPaid = async () => {
+    if (!markPaidRow) return;
+    if (!markPaidDate) { toast.error("Payment date is required"); return; }
+    setMarkPaidSaving(true);
+    try {
+      const { error } = await supabase
+        .from("cps_po_payment_schedules")
+        .update({ status: "paid", paid_at: markPaidDate, payment_mode: markPaidMode || null, payment_reference: markPaidRef.trim() || null } as any)
+        .eq("id", markPaidRow.id);
+      if (error) throw error;
+      toast.success("Payment marked as paid");
+      setMarkPaidOpen(false);
+      if (viewPo) await openView(viewPo.id);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to update payment");
+    } finally {
+      setMarkPaidSaving(false);
+    }
+  };
+
   const approveSendPo = async () => {
     if (!user || !viewPo) return;
     setApproveSending(true);
@@ -708,13 +770,32 @@ export default function PurchaseOrders() {
       }]);
 
       // Fire-and-forget webhook
-      supabase.from("cps_config").select("value").eq("key", "webhook_po_dispatch").maybeSingle().then(({ data }) => {
-        if (data?.value) {
-          fetch(String(data.value), {
+      const po = viewPo;
+      Promise.all([
+        supabase.from("cps_suppliers").select("name, whatsapp, email, gstin, phone").eq("id", po.supplier_id).single(),
+        supabase.from("cps_config").select("value").eq("key", "webhook_po_dispatch").single(),
+      ]).then(([{ data: supplier }, { data: config }]) => {
+        if (config?.value) {
+          fetch(String(config.value), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ event: "po_approved", po_id: viewPo.id, po_number: viewPo.po_number }),
-          }).catch(() => {});
+            body: JSON.stringify({
+              event: "po_created",
+              po_id: po.id,
+              po_number: po.po_number,
+              supplier_id: po.supplier_id,
+              supplier_name: supplier?.name || "",
+              supplier_whatsapp: supplier?.whatsapp || supplier?.phone || "",
+              supplier_email: supplier?.email || "",
+              po_pdf_url: "",
+              project_code: po.project_code || "",
+              delivery_date: po.delivery_date || "",
+              grand_total: po.grand_total || 0,
+              payment_terms: po.payment_terms || "",
+              delivery_terms: po.delivery_terms || "",
+              ship_to_address: po.ship_to_address || "",
+            }),
+          }).catch(e => console.error("PO webhook error:", e));
         }
       });
 
@@ -840,10 +921,16 @@ export default function PurchaseOrders() {
           <p className="text-muted-foreground text-sm mt-1">Steps 16–18 — approve and generate POs</p>
         </div>
         {isProcurementHead && (
-          <Button onClick={() => preloadCreate()} disabled={createLoading}>
-            <Plus className="h-4 w-4 mr-2" />
-            Create PO
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setLegacyModalOpen(true)}>
+              <Upload className="h-4 w-4 mr-2" />
+              Upload Legacy PO
+            </Button>
+            <Button onClick={() => preloadCreate()} disabled={createLoading}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create PO
+            </Button>
+          </div>
         )}
       </div>
 
@@ -976,8 +1063,28 @@ export default function PurchaseOrders() {
               filteredRows.map((r) => (
                 <div key={r.id} className="p-4 space-y-2">
                   <div className="flex items-start justify-between gap-2">
-                    <span className="font-mono text-primary font-semibold text-sm">{r.po_number}</span>
-                    <Badge className={`text-xs border-0 ${statusBadgeCls[String(r.status)] ?? statusBadgeCls.draft}`}>{r.status}</Badge>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-mono text-primary font-semibold text-sm">{r.po_number}</span>
+                      {r.source === "legacy" && (
+                        <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200 rounded px-1 py-0.5 leading-none">LEGACY</span>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <Badge className={`text-xs border-0 ${statusBadgeCls[String(r.status)] ?? statusBadgeCls.draft}`}>{r.status}</Badge>
+                      {r.source === "legacy" && r.founder_approval_status && (
+                        <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none ${
+                          r.founder_approval_status === "approved" ? "bg-green-100 text-green-800 border-green-200" :
+                          r.founder_approval_status === "rejected" ? "bg-red-100 text-red-800 border-red-200" :
+                          r.founder_approval_status === "sent" ? "bg-blue-100 text-blue-800 border-blue-200" :
+                          "bg-muted text-muted-foreground border-border/80"
+                        }`}>
+                          {r.founder_approval_status === "approved" ? "Founder Approved" :
+                           r.founder_approval_status === "rejected" ? "Rejected by Founder" :
+                           r.founder_approval_status === "sent" ? "⏳ Awaiting Founder" :
+                           "Pending Approval"}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="text-xs text-muted-foreground">
                     {canViewPrices && r.grand_total != null ? `₹${Number(r.grand_total).toLocaleString("en-IN")}` : ""}
@@ -992,6 +1099,12 @@ export default function PurchaseOrders() {
           </div>
         </CardContent>
       </Card>
+
+      <LegacyPOUploadModal
+        open={legacyModalOpen}
+        onClose={() => setLegacyModalOpen(false)}
+        onSuccess={fetchPoRows}
+      />
 
       {/* Create PO Dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -1297,6 +1410,85 @@ export default function PurchaseOrders() {
                   </div>
                 </div>
 
+                {/* Payment Schedule */}
+                {viewPaymentSchedule.length > 0 && (
+                  <div className="space-y-3 border-t border-border/60 pt-4">
+                    <div className="font-medium text-sm">Payment Schedule</div>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-8">#</TableHead>
+                            <TableHead>Milestone</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                            <TableHead className="text-right">%</TableHead>
+                            <TableHead>Due</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Paid On</TableHead>
+                            {isProcurementHead && <TableHead className="text-right">Action</TableHead>}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {viewPaymentSchedule.map((row, idx) => (
+                            <TableRow key={row.id}>
+                              <TableCell className="text-muted-foreground text-xs">{idx + 1}</TableCell>
+                              <TableCell className="font-medium text-sm">{row.milestone_name ?? "—"}</TableCell>
+                              <TableCell className="text-right text-sm">{formatCurrency(row.amount, canViewPrices)}</TableCell>
+                              <TableCell className="text-right text-xs text-muted-foreground">
+                                {row.percentage != null ? `${Number(row.percentage).toFixed(1)}%` : "—"}
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                {row.due_trigger === "on_order" ? "On Order" :
+                                 row.due_trigger === "on_delivery" ? "On Delivery" :
+                                 row.due_trigger === "after_15_days" ? "15d After Delivery" :
+                                 row.due_trigger === "after_30_days" ? "30d After Delivery" :
+                                 row.due_date ? formatDate(row.due_date) : "Custom"}
+                              </TableCell>
+                              <TableCell>
+                                <span className={`text-xs font-medium px-1.5 py-0.5 rounded border leading-none ${
+                                  row.status === "paid" ? "bg-green-100 text-green-800 border-green-200" :
+                                  row.status === "overdue" ? "bg-red-100 text-red-800 border-red-200" :
+                                  row.status === "waived" ? "bg-muted text-muted-foreground border-border/60 italic" :
+                                  "bg-muted text-muted-foreground border-border/60"
+                                }`}>
+                                  {row.status === "paid" ? "Paid ✓" : row.status === "overdue" ? "Overdue" : row.status === "waived" ? "Waived" : "Pending"}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                {row.paid_at ? formatDate(row.paid_at) : "—"}
+                                {row.payment_reference && <div className="text-[10px]">{row.payment_reference}</div>}
+                              </TableCell>
+                              {isProcurementHead && (
+                                <TableCell className="text-right">
+                                  {row.status === "pending" && (
+                                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openMarkPaid(row)}>
+                                      Mark Paid
+                                    </Button>
+                                  )}
+                                </TableCell>
+                              )}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    {canViewPrices && (() => {
+                      const total = viewPaymentSchedule.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                      const paid = viewPaymentSchedule.filter(r => r.status === "paid").reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                      const remaining = total - paid;
+                      return (
+                        <div className="flex items-center gap-4 text-sm text-muted-foreground px-1">
+                          <span>Total: <strong className="text-foreground">₹{total.toLocaleString("en-IN")}</strong></span>
+                          <span>·</span>
+                          <span>Paid: <strong className="text-green-700">₹{paid.toLocaleString("en-IN")}</strong></span>
+                          <span>·</span>
+                          <span>Remaining: <strong className="text-amber-700">₹{remaining.toLocaleString("en-IN")}</strong></span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
                 {/* Standard T&Cs */}
                 {Object.keys(standardTnCs).length > 0 && (
                   <div className="space-y-2 border-t border-border/60 pt-4">
@@ -1427,6 +1619,44 @@ export default function PurchaseOrders() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Mark as Paid dialog */}
+      <Dialog open={markPaidOpen} onOpenChange={setMarkPaidOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Mark as Paid</DialogTitle>
+            <DialogDescription>{markPaidRow?.milestone_name ?? "Payment Milestone"}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div>
+              <Label>Payment Date *</Label>
+              <Input type="date" value={markPaidDate} onChange={(e) => setMarkPaidDate(e.target.value)} className="mt-1" />
+            </div>
+            <div>
+              <Label>Payment Mode</Label>
+              <Select value={markPaidMode} onValueChange={setMarkPaidMode}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {["NEFT/RTGS", "Cheque", "Cash", "UPI"].map((m) => (
+                    <SelectItem key={m} value={m}>{m}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Reference / UTR</Label>
+              <Input value={markPaidRef} onChange={(e) => setMarkPaidRef(e.target.value)} placeholder="Optional" className="mt-1" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMarkPaidOpen(false)} disabled={markPaidSaving}>Cancel</Button>
+            <Button onClick={commitMarkPaid} disabled={markPaidSaving}>
+              {markPaidSaving ? "Saving…" : "Confirm Payment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }
@@ -1534,14 +1764,36 @@ function PoTableRows({
 
         return (
           <TableRow key={r.id} className="hover:bg-muted/30">
-            <TableCell className="font-mono text-primary">{r.po_number}</TableCell>
-            <TableCell>{supplier?.name ?? "—"}</TableCell>
+            <TableCell className="font-mono text-primary">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {r.po_number}
+                {r.source === "legacy" && (
+                  <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200 rounded px-1 py-0.5 leading-none">LEGACY</span>
+                )}
+              </div>
+            </TableCell>
+            <TableCell>{supplier?.name ?? (r.supplier_name_text || "—")}</TableCell>
             <TableCell className="text-muted-foreground">{rfq?.rfq_number ?? "—"}</TableCell>
             <TableCell className="text-muted-foreground">{pr?.project_site ?? "—"}</TableCell>
             <TableCell className="text-right">{formatCurrency(r.grand_total, canViewPrices)}</TableCell>
             <TableCell className="text-muted-foreground">{formatDate(r.delivery_date)}</TableCell>
             <TableCell>
-              <Badge className={`text-xs border-0 ${statusBadgeCls[String(r.status)] ?? statusBadgeCls.draft}`}>{r.status}</Badge>
+              <div className="flex flex-col gap-1">
+                <Badge className={`text-xs border-0 ${statusBadgeCls[String(r.status)] ?? statusBadgeCls.draft}`}>{r.status}</Badge>
+                {r.source === "legacy" && r.founder_approval_status && (
+                  <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit ${
+                    r.founder_approval_status === "approved" ? "bg-green-100 text-green-800 border-green-200" :
+                    r.founder_approval_status === "rejected" ? "bg-red-100 text-red-800 border-red-200" :
+                    r.founder_approval_status === "sent" ? "bg-blue-100 text-blue-800 border-blue-200" :
+                    "bg-muted text-muted-foreground border-border/80"
+                  }`}>
+                    {r.founder_approval_status === "approved" ? "Founder Approved" :
+                     r.founder_approval_status === "rejected" ? "Rejected by Founder" :
+                     r.founder_approval_status === "sent" ? "⏳ Awaiting Founder" :
+                     "Pending Approval"}
+                  </span>
+                )}
+              </div>
             </TableCell>
             <TableCell className="text-muted-foreground">{approvedBy?.name ?? "—"}</TableCell>
             <TableCell className="text-right">

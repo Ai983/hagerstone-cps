@@ -32,20 +32,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [user, setUser] = useState<CpsUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const loadProfile = async (authUid: string) => {
-    const { data, error } = await supabase.from("cps_users").select("*").eq("auth_uid", authUid).single();
-    if (!error && data) { setUser(data as CpsUser); localStorage.setItem("cps_user", JSON.stringify(data)); }
+  const loadProfile = async (authUid: string, email?: string) => {
+    const { data, error } = await supabase.from("cps_users").select("*").eq("auth_uid", authUid).maybeSingle();
+    if (!error && data) {
+      setUser(data as CpsUser);
+      localStorage.setItem("cps_user", JSON.stringify(data));
+      return;
+    }
+    // Fallback: look up by email (e.g. new signup before trigger links auth_uid)
+    if (email) {
+      const { data: userByEmail } = await supabase.from("cps_users").select("*").eq("email", email).maybeSingle();
+      if (userByEmail) {
+        if (!userByEmail.auth_uid) {
+          await supabase.from("cps_users").update({ auth_uid: authUid }).eq("id", userByEmail.id);
+        }
+        const linked = { ...userByEmail, auth_uid: authUid };
+        setUser(linked as CpsUser);
+        localStorage.setItem("cps_user", JSON.stringify(linked));
+      }
+    }
   };
 
   useEffect(() => {
     const saved = localStorage.getItem("cps_user");
     if (saved) { try { setUser(JSON.parse(saved)); } catch {} }
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) loadProfile(session.user.id);
+      if (session?.user) loadProfile(session.user.id, session.user.email ?? undefined);
       setLoading(false);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) loadProfile(session.user.id);
+      if (session?.user) loadProfile(session.user.id, session.user.email ?? undefined);
       else {
         setUser(null);
         localStorage.removeItem("cps_user");
@@ -57,7 +73,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const signIn = async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) return { error };
-    if (data.user) await loadProfile(data.user.id);
+    if (data.user) await loadProfile(data.user.id, data.user.email ?? undefined);
     return { error: null };
   };
 
