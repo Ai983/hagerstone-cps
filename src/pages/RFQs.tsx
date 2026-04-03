@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 import { Plus, Search, Loader2, Trash2 } from "lucide-react";
+import { formatWhatsApp } from "@/lib/utils";
 
 type RfqStatus = "draft" | "sent" | "reminder_1" | "reminder_2" | "closed" | "comparison_ready" | "cancelled";
 
@@ -586,8 +587,8 @@ export default function RFQs() {
       .from("cps_suppliers")
       .insert({
         name: newVendorForm.name.trim(),
-        phone: newVendorForm.phone.trim(),
-        whatsapp: newVendorForm.phone.trim(),
+        phone: formatWhatsApp(newVendorForm.phone),
+        whatsapp: formatWhatsApp(newVendorForm.phone),
         email: newVendorForm.email.trim() || null,
         gstin: newVendorForm.gstin.trim() || null,
         status: "active",
@@ -638,7 +639,7 @@ export default function RFQs() {
       const now = new Date().toISOString();
       const top5Ids = new Set(matchedSuppliers.slice(0, 5).map((s) => s.id));
 
-      // Upsert rfq_suppliers for all selected
+      // Step 1 — Upsert rfq_suppliers for all selected
       const rfqSupplierRows = reviewSelectedIds.map((supplierId) => {
         const supplier = matchedSuppliers.find((s) => s.id === supplierId);
         const isManual = !top5Ids.has(supplierId) || supplier?._isNew;
@@ -652,64 +653,98 @@ export default function RFQs() {
         };
       });
 
-      await supabase
+      const { error: upsertErr } = await supabase
         .from("cps_rfq_suppliers")
         .upsert(rfqSupplierRows as any, { onConflict: "rfq_id,supplier_id" });
+      if (upsertErr) throw new Error("Failed to save suppliers: " + upsertErr.message);
 
-      await supabase.from("cps_rfqs")
+      // Step 2 — Update RFQ status to 'sent'
+      const { error: rfqUpdateErr } = await supabase
+        .from("cps_rfqs")
         .update({ status: "sent", sent_at: now } as any)
         .eq("id", reviewRfq.id);
+      if (rfqUpdateErr) throw new Error("Failed to update RFQ status: " + rfqUpdateErr.message);
 
-      const { data: config } = await supabase
-        .from("cps_config")
-        .select("value")
-        .eq("key", "webhook_rfq_dispatch")
-        .maybeSingle();
+      // Step 3 — Fetch webhook URL + portal base URL
+      const [webhookRes, portalRes] = await Promise.all([
+        supabase.from("cps_config").select("value").eq("key", "webhook_rfq_dispatch").maybeSingle(),
+        supabase.from("cps_config").select("value").eq("key", "portal_base_url").maybeSingle(),
+      ]);
+      const webhookUrl = webhookRes.data?.value as string | undefined;
+      const portalBase = (portalRes.data?.value as string | undefined) ?? "https://hagerstone-cps.vercel.app";
 
-      if (config?.value) {
-        const selectedSupplierData = matchedSuppliers.filter((s) =>
-          reviewSelectedIds.includes(s.id)
-        );
-        fetch(String(config.value), {
+      // Step 4 — Fetch fresh supplier details (phone/whatsapp may differ from local state)
+      const { data: supplierDetails } = await supabase
+        .from("cps_suppliers")
+        .select("id, name, whatsapp, phone, email, profile_complete")
+        .in("id", reviewSelectedIds);
+
+      // Step 5 — Generate upload tokens via RPC
+      const { data: tokens } = await supabase.rpc("cps_generate_upload_tokens", {
+        p_rfq_id: reviewRfq.id,
+      });
+
+      // Step 6 — Build per-supplier payload with upload URLs
+      const suppliersPayload = (supplierDetails ?? []).map((s: any) => {
+        const token = (tokens as any[] | null)?.find((t) => t.supplier_id === s.id);
+        const uploadUrl = token
+          ? `${portalBase}/vendor/upload-quote?token=${token.token}`
+          : `${portalBase}/vendor/upload-quote`;
+        return {
+          supplier_id: s.id,
+          supplier_name: s.name,
+          supplier_whatsapp: formatWhatsApp(s.whatsapp || s.phone),
+          supplier_email: s.email ?? "",
+          profile_complete: s.profile_complete ?? true,
+          upload_url: uploadUrl,
+        };
+      });
+
+      const itemsDescription = reviewPrItems
+        .map((i) => `${i.item?.name || i.description} (${i.quantity ?? ""} ${i.unit ?? ""})`.trim())
+        .join(", ");
+
+      // Step 7 — Fire webhook (non-blocking — don't fail the whole operation)
+      if (webhookUrl) {
+        fetch(webhookUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            event: "rfq_dispatch",
+            event: "rfq_dispatched",
             rfq_id: reviewRfq.id,
             rfq_number: reviewRfq.rfq_number,
-            title: reviewRfq.title,
+            rfq_title: reviewRfq.title,
+            items_description: itemsDescription,
             deadline: reviewDeadline,
-            suppliers: selectedSupplierData.map((s) => ({
-              supplier_id: s.id,
-              supplier_name: s.name,
-              supplier_whatsapp: s.whatsapp || s.phone || "",
-              supplier_email: s.email || "",
-              profile_complete: s.profile_complete ?? true,
-            })),
-            items: reviewPrItems.map((i) => ({
-              name: i.item?.name || i.description,
-              quantity: i.quantity,
-              unit: i.unit,
-            })),
+            suppliers: suppliersPayload,
+            total_suppliers: suppliersPayload.length,
           }),
-        }).catch((e) => console.error("RFQ webhook error:", e));
+        }).catch((e) => {
+          console.error("RFQ webhook error:", e);
+          toast.warning("RFQ saved but WhatsApp dispatch may have failed. Check with n8n team.");
+        });
       }
 
+      // Step 8 — Audit log
       await supabase.from("cps_audit_log").insert({
         user_id: user.id,
         user_name: user.name ?? user.email ?? "",
-        action_type: "RFQ_SENT",
-        entity_type: "cps_rfqs",
+        user_role: user.role,
+        action_type: "RFQ_DISPATCHED",
+        entity_type: "rfq",
         entity_id: reviewRfq.id,
-        description: `RFQ ${reviewRfq.rfq_number} sent to ${reviewSelectedIds.length} suppliers`,
+        entity_number: reviewRfq.rfq_number,
+        description: `RFQ ${reviewRfq.rfq_number} dispatched to ${suppliersPayload.length} suppliers via WhatsApp.`,
+        severity: "info",
         logged_at: now,
       });
 
-      toast.success(`RFQ sent to ${reviewSelectedIds.length} suppliers!`);
+      toast.success(`RFQ sent to ${suppliersPayload.length} suppliers via WhatsApp!`);
       setReviewOpen(false);
       await fetchRFQs();
     } catch (e: any) {
-      toast.error(e?.message || "Failed to send RFQ");
+      console.error("Send failed:", e);
+      toast.error(e?.message || "Failed to send RFQ. Please try again.");
     } finally {
       setSending(false);
     }
@@ -833,7 +868,12 @@ export default function RFQs() {
                             View Comparison
                           </Button>
                         ) : ["sent", "reminder_1", "reminder_2"].includes(r.status) ? (
-                          <span className="text-xs text-muted-foreground">Awaiting Quotes ({total} received)</span>
+                          <div className="flex flex-col items-end gap-1">
+                            <Button variant="outline" size="sm" onClick={() => openReview(r)}>
+                              View Dispatch
+                            </Button>
+                            <span className="text-[10px] text-muted-foreground">{total} quote{total !== 1 ? "s" : ""} received</span>
+                          </div>
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
@@ -882,6 +922,8 @@ export default function RFQs() {
                       </div>
                       {r.status === "draft" ? (
                         <Button size="sm" onClick={() => openReview(r)}>Review &amp; Send</Button>
+                      ) : ["sent", "reminder_1", "reminder_2"].includes(r.status) ? (
+                        <Button variant="outline" size="sm" onClick={() => openReview(r)}>View Dispatch</Button>
                       ) : canCompare ? (
                         <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>Compare →</Button>
                       ) : ["closed", "approved"].includes(r.status) ? (
@@ -1125,7 +1167,22 @@ export default function RFQs() {
                       </h3>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {reviewSelectedIds.length} suppliers selected
-                        {reviewRfqCategories.length > 0 && ` (best match for ${reviewRfqCategories.join(", ")})`}
+                        {reviewRfqCategories.length > 0 && ` · best match for ${reviewRfqCategories.join(", ")}`}
+                        {(() => {
+                          const whatsappCount = matchedSuppliers
+                            .filter((s) => reviewSelectedIds.includes(s.id) && formatWhatsApp(s.whatsapp || s.phone).length === 12)
+                            .length;
+                          const phoneOnly = reviewSelectedIds.length - whatsappCount;
+                          return (
+                            <>
+                              {" · "}
+                              <span className="text-green-600">{whatsappCount} will receive WhatsApp</span>
+                              {phoneOnly > 0 && (
+                                <span className="text-amber-600"> · {phoneOnly} phone-only (no WhatsApp)</span>
+                              )}
+                            </>
+                          );
+                        })()}
                       </p>
                     </div>
 
