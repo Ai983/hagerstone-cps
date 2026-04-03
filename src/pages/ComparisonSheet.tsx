@@ -1334,7 +1334,7 @@ Provide a JSON response with this exact structure:
             <>
               <div className="space-y-2">
                 <div className="text-sm font-medium">Reviewer Notes</div>
-                <Textarea rows={4} value={reviewNotes} onChange={(e) => setReviewNotes(e.target.value)} placeholder="Overall assessment and observations" disabled={!canSubmitManual} />
+                <Textarea rows={4} value={reviewNotes} onChange={(e) => setReviewNotes(e.target.value)} placeholder="Overall assessment and observations (optional)" />
               </div>
 
               <div className="grid grid-cols-1 gap-4">
@@ -1421,16 +1421,9 @@ Provide a JSON response with this exact structure:
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 flex-wrap">
-                {canSubmitManual && (
-                  <Button onClick={() => requestConfirmation("send")}>Send for Approval</Button>
-                )}
+              <div className="text-sm text-muted-foreground">
+                Manual review is completed. Awaiting procurement head / management approval via PO page.
               </div>
-              {!canSubmitManual && (
-                <div className="text-sm text-muted-foreground">
-                  Manual review is completed. Awaiting procurement head / management approval via PO page.
-                </div>
-              )}
             </>
           )}
 
