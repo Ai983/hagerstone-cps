@@ -67,6 +67,7 @@ type PoRow = {
   source?: string | null;
   supplier_name_text?: string | null;
   founder_approval_status?: string | null;
+  legacy_po_number?: string | null;
 };
 
 type SupplierRow = {
@@ -245,7 +246,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number",
         )
         .order("created_at", { ascending: false });
 
@@ -1763,14 +1764,20 @@ function PoTableRows({
         const canApproveByAntiCorruption = !(r.created_by && userId && r.created_by === userId);
 
         return (
-          <TableRow key={r.id} className="hover:bg-muted/30">
+          <TableRow key={r.id} className={r.source === "legacy" ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-muted/30"}>
             <TableCell className="font-mono text-primary">
               <div className="flex items-center gap-1.5 flex-wrap">
                 {r.po_number}
                 {r.source === "legacy" && (
-                  <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200 rounded px-1 py-0.5 leading-none">LEGACY</span>
+                  <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 leading-none">📄 LEGACY</span>
+                )}
+                {r.source === "direct" && (
+                  <span className="text-[10px] font-semibold bg-purple-100 text-purple-800 border border-purple-300 rounded px-1.5 py-0.5 leading-none">⚡ DIRECT</span>
                 )}
               </div>
+              {r.legacy_po_number && (
+                <div className="text-xs text-muted-foreground italic mt-0.5">{r.legacy_po_number}</div>
+              )}
             </TableCell>
             <TableCell>{supplier?.name ?? (r.supplier_name_text || "—")}</TableCell>
             <TableCell className="text-muted-foreground">{rfq?.rfq_number ?? "—"}</TableCell>
@@ -1780,17 +1787,17 @@ function PoTableRows({
             <TableCell>
               <div className="flex flex-col gap-1">
                 <Badge className={`text-xs border-0 ${statusBadgeCls[String(r.status)] ?? statusBadgeCls.draft}`}>{r.status}</Badge>
-                {r.source === "legacy" && r.founder_approval_status && (
+                {r.founder_approval_status && (
                   <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit ${
                     r.founder_approval_status === "approved" ? "bg-green-100 text-green-800 border-green-200" :
                     r.founder_approval_status === "rejected" ? "bg-red-100 text-red-800 border-red-200" :
                     r.founder_approval_status === "sent" ? "bg-blue-100 text-blue-800 border-blue-200" :
                     "bg-muted text-muted-foreground border-border/80"
                   }`}>
-                    {r.founder_approval_status === "approved" ? "Founder Approved" :
-                     r.founder_approval_status === "rejected" ? "Rejected by Founder" :
-                     r.founder_approval_status === "sent" ? "⏳ Awaiting Founder" :
-                     "Pending Approval"}
+                    {r.founder_approval_status === "approved" ? "✅ Founder Approved" :
+                     r.founder_approval_status === "rejected" ? "❌ Rejected" :
+                     r.founder_approval_status === "sent" ? "📱 Sent to Founders" :
+                     "⏳ Awaiting Approval"}
                   </span>
                 )}
               </div>

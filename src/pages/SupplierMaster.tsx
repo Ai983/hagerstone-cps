@@ -46,6 +46,9 @@ type Supplier = {
   blacklist_reason: string | null;
   notes: string | null;
   created_at: string | null;
+  profile_complete: boolean | null;
+  added_via: string | null;
+  verified: boolean | null;
 };
 
 type SupplierForm = {
@@ -139,7 +142,7 @@ export default function SupplierMaster() {
     const { data, error } = await supabase
       .from("cps_suppliers")
       .select(
-        "id,name,gstin,email,phone,whatsapp,city,state,status,performance_score,categories,win_rate,blacklist_reason,notes,created_at",
+        "id,name,gstin,email,phone,whatsapp,city,state,status,performance_score,categories,win_rate,blacklist_reason,notes,created_at,profile_complete,added_via,verified",
       )
       .order("name");
 
@@ -465,7 +468,7 @@ export default function SupplierMaster() {
                 filtered.map((s) => {
                   const sb = statusConfig[s.status];
                   return (
-                    <TableRow key={s.id} className="hover:bg-muted/30">
+                    <TableRow key={s.id} className={s.profile_complete === false ? "bg-amber-50/30 hover:bg-amber-50/50" : "hover:bg-muted/30"}>
                       <TableCell>
                         <div>
                           <div className="flex items-center gap-2">
@@ -502,20 +505,41 @@ export default function SupplierMaster() {
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">{formatPct(s.win_rate)}</TableCell>
                       <TableCell>
-                        {s.status === "blacklisted" && s.blacklist_reason ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild><Badge className={`text-xs border-0 ${sb.badge}`}>{sb.label}</Badge></TooltipTrigger>
-                            <TooltipContent><div className="max-w-[260px] text-xs">{s.blacklist_reason}</div></TooltipContent>
-                          </Tooltip>
-                        ) : (
-                          <Badge className={`text-xs border-0 ${sb.badge}`}>{sb.label}</Badge>
-                        )}
+                        <div className="flex flex-col gap-1">
+                          {s.status === "blacklisted" && s.blacklist_reason ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild><Badge className={`text-xs border-0 ${sb.badge}`}>{sb.label}</Badge></TooltipTrigger>
+                              <TooltipContent><div className="max-w-[260px] text-xs">{s.blacklist_reason}</div></TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <Badge className={`text-xs border-0 ${sb.badge}`}>{sb.label}</Badge>
+                          )}
+                          {s.profile_complete === false && (
+                            <span className="text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-300 rounded px-1.5 py-0.5 leading-none w-fit">📝 INCOMPLETE</span>
+                          )}
+                          {s.verified === false && s.profile_complete !== false && (
+                            <span className="text-[10px] font-semibold bg-orange-100 text-orange-700 border border-orange-300 rounded px-1.5 py-0.5 leading-none w-fit">⚠️ Unverified</span>
+                          )}
+                          {s.added_via === "legacy_quote" && (
+                            <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 leading-none w-fit">📄 Added via Quote</span>
+                          )}
+                          {s.added_via === "rfq_manual" && (
+                            <span className="text-[10px] font-semibold bg-purple-100 text-purple-800 border border-purple-300 rounded px-1.5 py-0.5 leading-none w-fit">✋ Added via RFQ</span>
+                          )}
+                        </div>
                       </TableCell>
                       {canManageSuppliers && (
                         <TableCell className="text-right">
-                          <Button variant="ghost" size="sm" onClick={() => openEdit(s)} className="text-xs">
-                            <Edit3 className="h-3.5 w-3.5 mr-1" />Edit
-                          </Button>
+                          <div className="flex items-center justify-end gap-1">
+                            {s.profile_complete === false && (
+                              <Button variant="outline" size="sm" onClick={() => openEdit(s)} className="text-xs text-amber-700 border-amber-300 hover:bg-amber-50">
+                                Complete Profile
+                              </Button>
+                            )}
+                            <Button variant="ghost" size="sm" onClick={() => openEdit(s)} className="text-xs">
+                              <Edit3 className="h-3.5 w-3.5 mr-1" />Edit
+                            </Button>
+                          </div>
                         </TableCell>
                       )}
                     </TableRow>

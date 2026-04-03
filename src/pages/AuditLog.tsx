@@ -283,9 +283,17 @@ export default function AuditLog() {
                       {r.user_role && <Badge className="bg-muted text-muted-foreground border-0 text-[10px] mt-0.5">{r.user_role}</Badge>}
                     </TableCell>
                     <TableCell>
-                      <Badge className={`text-xs border-0 ${actionBadgeCls[String(r.action_type ?? "").toUpperCase()] ?? "bg-muted text-muted-foreground"}`}>
-                        {r.action_type ?? "—"}
-                      </Badge>
+                      <div className="flex flex-col gap-1">
+                        <Badge className={`text-xs border-0 ${actionBadgeCls[String(r.action_type ?? "").toUpperCase()] ?? "bg-muted text-muted-foreground"}`}>
+                          {r.action_type ?? "—"}
+                        </Badge>
+                        {(r.action_type === "LEGACY_PO_UPLOADED" || r.action_type === "LEGACY_QUOTE_UPLOADED") && (
+                          <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 leading-none w-fit">📄 LEGACY</span>
+                        )}
+                        {r.action_type === "FOUNDER_APPROVAL_SENT" && (
+                          <span className="text-[10px] font-semibold bg-blue-100 text-blue-800 border border-blue-300 rounded px-1.5 py-0.5 leading-none w-fit">📱 FOUNDER APPROVAL</span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="text-xs text-muted-foreground">{r.entity_type ?? "—"}</div>

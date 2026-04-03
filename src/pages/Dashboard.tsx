@@ -54,6 +54,10 @@ export default function Dashboard() {
   const [pendingApprovals, setPendingApprovals] = useState<PendingPO[]>([]);
   const [approvingId, setApprovingId] = useState<string | null>(null);
 
+  const [legacyPOCount, setLegacyPOCount] = useState(0);
+  const [legacyQuoteCount, setLegacyQuoteCount] = useState(0);
+  const [incompleteVendorCount, setIncompleteVendorCount] = useState(0);
+
   const hideValues = user?.role === "requestor" || user?.role === "site_receiver";
 
   useEffect(() => {
@@ -90,6 +94,20 @@ export default function Dashboard() {
           setAvgSavings(vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
         }
       }
+
+      const startOfMonth = new Date();
+      startOfMonth.setDate(1);
+      startOfMonth.setHours(0, 0, 0, 0);
+      const startOfMonthISO = startOfMonth.toISOString();
+
+      const [legacyPORes, legacyQuoteRes, incompleteVendorRes] = await Promise.all([
+        supabase.from("cps_purchase_orders").select("id", { count: "exact", head: true }).eq("source", "legacy").gte("created_at", startOfMonthISO),
+        supabase.from("cps_quotes").select("id", { count: "exact", head: true }).eq("is_legacy", true).gte("created_at", startOfMonthISO),
+        supabase.from("cps_suppliers").select("id", { count: "exact", head: true }).eq("profile_complete", false),
+      ]);
+      setLegacyPOCount(legacyPORes.count ?? 0);
+      setLegacyQuoteCount(legacyQuoteRes.count ?? 0);
+      setIncompleteVendorCount(incompleteVendorRes.count ?? 0);
 
       const pipelineCounts = await fetchPipelineCounts();
       setPipeline(pipelineCounts);
@@ -313,6 +331,42 @@ export default function Dashboard() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Manual Entries This Month */}
+      {!hideValues && (legacyPOCount > 0 || legacyQuoteCount > 0 || incompleteVendorCount > 0) && (
+        <Card className="border-amber-200 bg-amber-50/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold text-amber-800 flex items-center gap-2">
+              📄 Manual Entries This Month
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1.5 pt-0">
+            {legacyPOCount > 0 && (
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Legacy POs</span>
+                <Badge className="bg-amber-100 text-amber-800 border border-amber-300 text-xs">{legacyPOCount}</Badge>
+              </div>
+            )}
+            {legacyQuoteCount > 0 && (
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Legacy Quotes</span>
+                <Badge className="bg-amber-100 text-amber-800 border border-amber-300 text-xs">{legacyQuoteCount}</Badge>
+              </div>
+            )}
+            {incompleteVendorCount > 0 && (
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">New Vendors (incomplete profile)</span>
+                <Badge className="bg-blue-100 text-blue-800 border border-blue-300 text-xs">{incompleteVendorCount}</Badge>
+              </div>
+            )}
+            <div className="pt-1">
+              <Button variant="ghost" size="sm" className="text-xs text-amber-700 h-7 px-2" onClick={() => navigate("/suppliers")}>
+                View All →
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Pending Approvals */}
       {canApprove && pendingApprovals.length > 0 && (

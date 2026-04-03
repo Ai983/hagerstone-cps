@@ -28,7 +28,7 @@ import { LegacyQuoteUploadModal } from "@/components/quotes/LegacyQuoteUploadMod
 
 type QuoteParseStatus = "pending" | "parsed" | "needs_review" | "reviewed" | "approved" | "failed";
 type QuoteComplianceStatus = "compliant" | "non_compliant" | "pending";
-type Channel = "email" | "portal" | "whatsapp";
+type Channel = "email" | "portal" | "whatsapp" | "legacy" | "phone";
 
 type QuoteListRow = {
   id: string;
@@ -57,6 +57,7 @@ type QuoteListRow = {
   ai_parsed_data: any | null;
   is_legacy: boolean | null;
   legacy_vendor_name: string | null;
+  submitted_by_human: boolean | null;
 };
 
 type QuoteLineItem = {
@@ -1008,19 +1009,25 @@ Rules:
                   const ps = parseStatusConfig[q.parse_status] ?? parseStatusConfig.pending;
                   const compBadge = complianceBadge(q.compliance_status);
                   return (
-                    <TableRow key={q.id} className="hover:bg-muted/30">
+                    <TableRow key={q.id} className={(q.is_legacy || q.channel === "legacy") ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-muted/30"}>
                       <TableCell className="font-mono text-primary">
                         <div className="flex flex-col gap-1">
                           <span>{q.blind_quote_ref}</span>
                           <div className="flex flex-wrap gap-1">
-                            {q.is_legacy && (
-                              <Badge className="text-xs border bg-amber-100 text-amber-800 border-amber-300">LEGACY</Badge>
+                            {(q.is_legacy || q.channel === "legacy") && (
+                              <Badge className="text-xs border bg-amber-100 text-amber-800 border-amber-300">📄 LEGACY</Badge>
+                            )}
+                            {q.channel === "phone" && (
+                              <Badge className="text-xs border bg-gray-100 text-gray-600 border-gray-300">📞 PHONE</Badge>
+                            )}
+                            {q.submitted_by_human && !(q.is_legacy || q.channel === "legacy") && (
+                              <Badge className="text-xs border bg-purple-100 text-purple-800 border-purple-300">✋ MANUAL</Badge>
                             )}
                             {q.supplier_id && supplierProfileMap[q.supplier_id] === false && (
-                              <Badge className="text-xs border bg-blue-100 text-blue-800 border-blue-300">NEW VENDOR</Badge>
+                              <Badge className="text-xs border bg-blue-100 text-blue-800 border-blue-300">🆕 NEW VENDOR</Badge>
                             )}
                             {q.parse_status === "needs_review" && (
-                              <Badge className="text-xs border bg-orange-100 text-orange-800 border-orange-300">⚠️ Review Required</Badge>
+                              <Badge className="text-xs border bg-red-100 text-red-800 border-red-300">⚠️ REVIEW</Badge>
                             )}
                           </div>
                         </div>
