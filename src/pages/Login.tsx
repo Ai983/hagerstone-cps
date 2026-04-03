@@ -26,6 +26,8 @@ export default function Login() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [regLoading, setRegLoading] = useState(false);
 
+  const [googleLoading, setGoogleLoading] = useState(false);
+
   const { signIn, user } = useAuth();
   const navigate = useNavigate();
 
@@ -39,6 +41,24 @@ export default function Login() {
       setLoginError(err.message || "Invalid credentials");
       setLoginLoading(false);
     } else navigate("/dashboard");
+  };
+
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/dashboard`,
+          queryParams: { access_type: "offline", prompt: "consent" },
+        },
+      });
+      if (error) throw error;
+      // Supabase redirects automatically on success
+    } catch (error: any) {
+      toast.error(error.message || "Google sign-in failed");
+      setGoogleLoading(false);
+    }
   };
 
   const handleRegister = async (e: React.FormEvent) => {
@@ -113,6 +133,29 @@ export default function Login() {
                     {loginLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Signing in...</> : "Sign In"}
                   </Button>
                 </form>
+
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-border" />
+                  </div>
+                  <div className="relative flex justify-center text-xs">
+                    <span className="bg-card px-2 text-muted-foreground">or</span>
+                  </div>
+                </div>
+
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={handleGoogleSignIn}
+                  disabled={googleLoading || loginLoading}
+                >
+                  {googleLoading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <img src="/google-icon.svg" className="h-4 w-4 mr-2" alt="Google" />
+                  )}
+                  Sign in with Google
+                </Button>
               </TabsContent>
 
               <TabsContent value="register" className="mt-0">

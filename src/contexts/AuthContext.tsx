@@ -32,14 +32,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [user, setUser] = useState<CpsUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const loadProfile = async (authUid: string, email?: string) => {
+  const loadProfile = async (authUid: string, email?: string, displayName?: string) => {
+    // 1. Try by auth_uid
     const { data, error } = await supabase.from("cps_users").select("*").eq("auth_uid", authUid).maybeSingle();
     if (!error && data) {
       setUser(data as CpsUser);
       localStorage.setItem("cps_user", JSON.stringify(data));
       return;
     }
-    // Fallback: look up by email (e.g. new signup before trigger links auth_uid)
+    // 2. Fallback: look up by email (e.g. pre-created account or new signup before trigger links auth_uid)
     if (email) {
       const { data: userByEmail } = await supabase.from("cps_users").select("*").eq("email", email).maybeSingle();
       if (userByEmail) {
@@ -49,6 +50,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         const linked = { ...userByEmail, auth_uid: authUid };
         setUser(linked as CpsUser);
         localStorage.setItem("cps_user", JSON.stringify(linked));
+        return;
+      }
+    }
+    // 3. Auto-create profile for new Google / OAuth sign-ins with no existing record
+    if (email) {
+      const name = displayName || email.split("@")[0];
+      const { data: newProfile } = await supabase
+        .from("cps_users")
+        .insert({ auth_uid: authUid, email, name, role: "requestor", active: true })
+        .select()
+        .single();
+      if (newProfile) {
+        setUser(newProfile as CpsUser);
+        localStorage.setItem("cps_user", JSON.stringify(newProfile));
       }
     }
   };
@@ -57,11 +72,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const saved = localStorage.getItem("cps_user");
     if (saved) { try { setUser(JSON.parse(saved)); } catch {} }
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) loadProfile(session.user.id, session.user.email ?? undefined);
+      if (session?.user) loadProfile(session.user.id, session.user.email ?? undefined, session.user.user_metadata?.full_name);
       setLoading(false);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) loadProfile(session.user.id, session.user.email ?? undefined);
+      if (session?.user) loadProfile(session.user.id, session.user.email ?? undefined, session.user.user_metadata?.full_name);
       else {
         setUser(null);
         localStorage.removeItem("cps_user");
