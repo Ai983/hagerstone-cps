@@ -137,34 +137,36 @@ export function buildPoPdf(data: PoPdfData): Blob {
   let y = ML;
 
   /* ── 1. Company header ── */
-  doc.setDrawColor(0);
-  doc.setLineWidth(0.4);
+  /* Logo is wide/horizontal — place right-aligned in top band */
+  const LOGO_W = 72;   /* mm */
+  const LOGO_H = 22;   /* mm — preserves approx 3.3:1 aspect of actual logo */
+  const HEADER_H = LOGO_H + 2;
 
-  /* Company name */
+  if (data.logoBase64) {
+    try {
+      doc.addImage(data.logoBase64, "PNG", W - MR - LOGO_W, y, LOGO_W, LOGO_H);
+    } catch (_) { /* logo optional */ }
+  }
+
+  /* Company name + GST left-aligned, vertically centred in header band */
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(13);
+  doc.setFontSize(11);
   doc.setTextColor(20, 20, 20);
-  doc.text(CO_NAME, ML, y + 5);
+  doc.text(CO_NAME, ML, y + 8);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(60, 60, 60);
-  doc.text(CO_GST, ML, y + 10);
+  doc.text(CO_GST, ML, y + 14);
 
-  /* Address on right */
-  const addrX = W - MR;
-  doc.setFontSize(7.5);
-  doc.text(CO_ADDR, addrX, y + 4, { align: "right" });
-  doc.text(CO_TEL + ";  " + CO_EMAIL, addrX, y + 8.5, { align: "right" });
+  /* Address + contact — left side, below GST (so they don't clash with logo) */
+  doc.setFontSize(7);
+  doc.setTextColor(80, 80, 80);
+  const coAddrLines = doc.splitTextToSize(CO_ADDR, CW - LOGO_W - 4);
+  doc.text(coAddrLines, ML, y + 19);
+  doc.text(CO_TEL + "   " + CO_EMAIL, ML, y + 19 + coAddrLines.length * 3.5);
 
-  /* Logo placeholder — replace with actual logo when available */
-  if (data.logoBase64) {
-    try {
-      doc.addImage(data.logoBase64, "PNG", W - MR - 22, y, 18, 14);
-    } catch (_) { /* ignore bad image */ }
-  }
-
-  y += 15;
+  y += HEADER_H + 4;
   doc.setDrawColor(0);
   doc.setLineWidth(0.5);
   doc.line(ML, y, W - MR, y);

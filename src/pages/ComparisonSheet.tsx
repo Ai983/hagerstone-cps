@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
+import logoUrl from "@/assets/Companylogo.png";
 
 import { AlertTriangle, Sparkles } from "lucide-react";
 
@@ -898,6 +899,22 @@ Provide a JSON response with this exact structure:
           /* try PDF generation — non-fatal if it fails */
           let poPdfUrl: string | null = null;
           try {
+            /* fetch logo as base64 */
+            let logoBase64: string | null = null;
+            try {
+              const logoResp = await fetch(logoUrl);
+              const logoBlob = await logoResp.blob();
+              logoBase64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                  const result = reader.result as string;
+                  resolve(result.split(",")[1] ?? result);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(logoBlob);
+              });
+            } catch (_) { /* logo optional */ }
+
             const { data: lineRes } = await supabase
               .from("cps_po_line_items")
               .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code")
@@ -921,6 +938,7 @@ Provide a JSON response with this exact structure:
               subTotal,
               gstAmount: gstTotal,
               grandTotal,
+              logoBase64,
               lineItems: fullLineItems.map((li: any) => ({
                 ...li,
                 total_value: Number(li.total_value ?? (Number(li.rate ?? 0) * Number(li.quantity ?? 0))),
