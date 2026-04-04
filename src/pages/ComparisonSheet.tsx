@@ -832,21 +832,37 @@ Provide a JSON response with this exact structure:
         try {
           const origin = window.location.origin;
 
-          /* fetch supplier name */
+          /* fetch full supplier details + ship_to_address from PO */
           let supplierName = suppliers.find((s) => s.id === supplierId)?.name ?? "";
           let supplierGstin: string | null = null;
+          let supplierState: string | null = null;
+          let supplierEmail: string | null = null;
           let supplierPhone: string | null = null;
-          if (supplierId) {
-            const { data: sup } = await supabase
-              .from("cps_suppliers")
-              .select("name,gstin,phone")
-              .eq("id", supplierId)
-              .maybeSingle();
-            if (sup) {
-              supplierName = (sup as any).name ?? supplierName;
-              supplierGstin = (sup as any).gstin ?? null;
-              supplierPhone = (sup as any).phone ?? null;
-            }
+          let supplierAddress: string | null = null;
+          let shipToAddress: string | null = null;
+
+          const [supRes, poRes] = await Promise.all([
+            supplierId
+              ? supabase.from("cps_suppliers")
+                  .select("name,gstin,state,email,phone,address_text,city,pincode")
+                  .eq("id", supplierId).maybeSingle()
+              : Promise.resolve({ data: null }),
+            supabase.from("cps_purchase_orders")
+              .select("ship_to_address")
+              .eq("id", poId).maybeSingle(),
+          ]);
+
+          if (supRes.data) {
+            const s = supRes.data as any;
+            supplierName    = s.name ?? supplierName;
+            supplierGstin   = s.gstin ?? null;
+            supplierState   = s.state ?? null;
+            supplierEmail   = s.email ?? null;
+            supplierPhone   = s.phone ?? null;
+            supplierAddress = [s.address_text, s.city, s.pincode].filter(Boolean).join(", ");
+          }
+          if (poRes.data) {
+            shipToAddress = (poRes.data as any).ship_to_address ?? null;
           }
 
           /* insert approval tokens first — this MUST succeed before webhook */
@@ -894,7 +910,12 @@ Provide a JSON response with this exact structure:
               poNumber,
               supplierName,
               supplierGstin,
+              supplierState,
+              supplierEmail,
               supplierPhone,
+              supplierAddress,
+              shipToAddress,
+              inspAt: shipToAddress?.split("\n")[0] ?? undefined,
               paymentTerms: _paymentTerms,
               deliveryDate: _deliveryDate,
               subTotal,
@@ -926,6 +947,7 @@ Provide a JSON response with this exact structure:
               po_id: poId,
               po_number: poNumber,
               supplier_name: supplierName,
+              site_name: shipToAddress?.split("\n")[0] ?? "",
               payment_terms: _paymentTerms,
               delivery_date: _deliveryDate,
               po_pdf_url: poPdfUrl ?? "",

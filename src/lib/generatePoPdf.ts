@@ -2,9 +2,10 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+/* ─────────────────────────────────────────────────────────── types ── */
+
 export interface PoPdfLineItem {
   description: string;
-  brand?: string | null;
   quantity: number;
   unit?: string | null;
   rate: number;
@@ -16,213 +17,460 @@ export interface PoPdfLineItem {
 
 export interface PoPdfData {
   poNumber: string;
+  poDate?: string | null;
+
+  /* supplier */
   supplierName: string;
   supplierGstin?: string | null;
+  supplierState?: string | null;
   supplierAddress?: string | null;
   supplierPhone?: string | null;
+  supplierEmail?: string | null;
+
+  /* delivery */
+  shipToAddress?: string | null;   // full delivery address shown in DELIVERY ADDRESS block
+  inspAt?: string | null;          // short site name shown in "Insp At" cell (e.g. "MAX, SAKET")
+
+  /* order */
   paymentTerms?: string | null;
   deliveryDate?: string | null;
   projectCode?: string | null;
-  shipToAddress?: string | null;
+
+  /* financials */
   subTotal: number;
   gstAmount: number;
   grandTotal: number;
+
   lineItems: PoPdfLineItem[];
+
+  /* optional logo — pass base64 string (without data-uri prefix) */
+  logoBase64?: string | null;
 }
 
-const INR = (n: number) =>
-  "\u20B9" +
-  n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/* ─────────────────────────────────────────────────────── helpers ── */
 
-const BROWN: [number, number, number] = [101, 55, 28];
-const GOLD: [number, number, number] = [180, 140, 60];
+const fmtDate = (d: string | null | undefined): string => {
+  if (!d) return "—";
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return d;
+  return dt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+};
+
+const addDays = (d: string | null | undefined, n: number): string => {
+  if (!d) return "—";
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return "—";
+  dt.setDate(dt.getDate() + n);
+  return dt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+};
+
+const INR = (n: number | null | undefined): string => {
+  if (n == null || isNaN(n)) return "—";
+  return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+/* Indian number to words */
+const amountInWords = (amount: number): string => {
+  const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+    "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+  const toWords = (n: number): string => {
+    if (n === 0) return "";
+    if (n < 20) return ones[n] + " ";
+    if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? " " + ones[n % 10] : "") + " ";
+    return ones[Math.floor(n / 100)] + " Hundred " + toWords(n % 100);
+  };
+
+  const r = Math.round(amount);
+  if (r === 0) return "Zero";
+  let w = "";
+  const cr = Math.floor(r / 10_000_000);
+  const lk = Math.floor((r % 10_000_000) / 100_000);
+  const th = Math.floor((r % 100_000) / 1_000);
+  const rm = r % 1_000;
+  if (cr) w += toWords(cr) + "Crore ";
+  if (lk) w += toWords(lk) + "Lakh ";
+  if (th) w += toWords(th) + "Thousand ";
+  if (rm) w += toWords(rm);
+  return w.trim();
+};
+
+/* ─────────────────────────────────────────── fixed company values ── */
+
+const CO_NAME    = "Hagerstone International Pvt. Ltd";
+const CO_GST     = "GST NO: 09AAECH3768B1ZM";
+const CO_ADDR    = "D-107, 91 Springboard Hub, Red FM Road, Sector-2, Noida, (U.P)";
+const CO_TEL     = "Tel: +91 9811596660";
+const CO_EMAIL   = "Email: procurement@hagerstone.com";
+const PREPARED   = "AJIT";
+const CHK        = "AVISHA";
+const AUTH_SIG   = "MR. BHASKAR TYAGI";
+
+const TERMS: string[] = [
+  "Please strictly mention PO number, packing detail & complete description of the item in your invoice, otherwise material will not be accepted.",
+  "Material supplied without test certificate will not be accepted (whenever applicable).",
+  "The packing of material should be standard as per company norms.",
+  "Delivery — Immediate.",
+  "Broken and damaged material will not be accepted; supplier to replace and bear all replacement charges.",
+  "Anything found varying from final design will be replaced by supplier at no cost.",
+];
+
+/* ─────────────────────────────────────────────────────── builder ── */
 
 export function buildPoPdf(data: PoPdfData): Blob {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-  const W = doc.internal.pageSize.getWidth();
-  const M = 14;
-  let y = M;
+  const W = doc.internal.pageSize.getWidth();   // 210
+  const H = doc.internal.pageSize.getHeight();  // 297
+  const ML = 6;   // left margin
+  const MR = 6;   // right margin
+  const CW = W - ML - MR;  // content width ≈ 198
 
-  /* ── company header ── */
-  doc.setFillColor(BROWN[0], BROWN[1], BROWN[2]);
-  doc.rect(0, 0, W, 22, "F");
-  doc.setTextColor(255, 255, 255);
+  /* today */
+  const today = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  const poDate = data.poDate ? fmtDate(data.poDate) : today;
+  const delivSch   = fmtDate(data.deliveryDate);
+  const poUpto     = addDays(data.deliveryDate, 5);
+  const validUpto  = addDays(data.deliveryDate, 13);
+
+  let y = ML;
+
+  /* ── 1. Company header ── */
+  doc.setDrawColor(0);
+  doc.setLineWidth(0.4);
+
+  /* Company name */
+  doc.setFont("helvetica", "bold");
   doc.setFontSize(13);
-  doc.setFont("helvetica", "bold");
-  doc.text("HAGERSTONE INTERNATIONAL (P) LTD", M, 9);
-  doc.setFontSize(7.5);
-  doc.setFont("helvetica", "normal");
-  doc.text(
-    "GST: 09AAECH3768B1ZM  |  D-107, 91 Springboard Hub, Red FM Road, Sector-2, Noida, UP  |  +91 8448992353",
-    M,
-    15
-  );
-  doc.text("procurement@hagerstone.com", M, 19.5);
-  y = 28;
+  doc.setTextColor(20, 20, 20);
+  doc.text(CO_NAME, ML, y + 5);
 
-  /* ── PO title bar ── */
-  doc.setTextColor(BROWN[0], BROWN[1], BROWN[2]);
-  doc.setFontSize(14);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(60, 60, 60);
+  doc.text(CO_GST, ML, y + 10);
+
+  /* Address on right */
+  const addrX = W - MR;
+  doc.setFontSize(7.5);
+  doc.text(CO_ADDR, addrX, y + 4, { align: "right" });
+  doc.text(CO_TEL + ";  " + CO_EMAIL, addrX, y + 8.5, { align: "right" });
+
+  /* Logo placeholder — replace with actual logo when available */
+  if (data.logoBase64) {
+    try {
+      doc.addImage(data.logoBase64, "PNG", W - MR - 22, y, 18, 14);
+    } catch (_) { /* ignore bad image */ }
+  }
+
+  y += 15;
+  doc.setDrawColor(0);
+  doc.setLineWidth(0.5);
+  doc.line(ML, y, W - MR, y);
+  y += 1;
+
+  /* ── 2. Supplier + Delivery block ── */
+  const leftW  = CW * 0.52;
+  const rightW = CW * 0.48;
+  const rightX = ML + leftW + 2;
+
+  /* LEFT: Supplier details */
   doc.setFont("helvetica", "bold");
-  doc.text("PURCHASE ORDER", M, y);
-  doc.setFontSize(11);
-  doc.text(data.poNumber, W - M, y, { align: "right" });
+  doc.setFontSize(7.5);
+  doc.setTextColor(20, 20, 20);
+  doc.text("Details of Supplier   :   " + data.supplierName.toUpperCase(), ML, y + 5);
+
+  const supLines: [string, string][] = [
+    ["GSTIN", data.supplierGstin ?? "—"],
+    ["State", data.supplierState ?? "—"],
+    ["Contact", data.supplierPhone ?? "—"],
+    ["Email", data.supplierEmail ?? "—"],
+    ["Address", data.supplierAddress ?? "—"],
+  ];
+
+  let sy = y + 10;
+  doc.setFontSize(7);
+  for (const [label, val] of supLines) {
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(60, 60, 60);
+    doc.text(label + ":", ML, sy);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(20, 20, 20);
+    /* wrap long values */
+    const wrapped = doc.splitTextToSize(val, leftW - 22);
+    doc.text(wrapped, ML + 22, sy);
+    sy += wrapped.length > 1 ? wrapped.length * 3.8 : 4;
+  }
+
+  /* RIGHT: Delivery address + PO metadata */
+  let ry = y + 3;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7.5);
+  doc.setTextColor(20, 20, 20);
+  doc.text("DELIVERY ADDRESS:", rightX, ry);
+  ry += 4;
+  if (data.shipToAddress) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    const addrLines = doc.splitTextToSize(data.shipToAddress, rightW - 4);
+    doc.text(addrLines, rightX, ry);
+    ry += addrLines.length * 3.8 + 2;
+  }
+
+  /* PO meta */
+  const metaRows: [string, string][] = [
+    ["PO No", data.poNumber],
+    ["Po Issue Date", poDate],
+    ["Po upto", poUpto],
+    ["Valid Upto", validUpto],
+    ["Mode of Payment", "NEFT/RTGS"],
+    ["Payment Terms", data.paymentTerms ?? "—"],
+    ["Eff.Dt", poDate],
+    ["Delivery Sch", delivSch],
+  ];
+
+  doc.setFontSize(7);
+  for (const [label, val] of metaRows) {
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(60, 60, 60);
+    doc.text(label + ":", rightX, ry);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(20, 20, 20);
+    doc.text(String(val), rightX + 30, ry);
+    ry += 4;
+  }
+
+  y = Math.max(sy, ry) + 2;
+
+  /* divider */
+  doc.setLineWidth(0.3);
+  doc.line(ML, y, W - MR, y);
+  y += 1;
+
+  /* ── 3. Terms/dispatch row (compact grid) ── */
+  const termCells: [string, string][][] = [
+    [
+      ["Price Basis", ""],
+      ["Dispatch By", "Road"],
+      ["Freight", "ADDED TO BE IN BILL"],
+      ["Insp At", data.inspAt ?? (data.shipToAddress?.split("\n")[0] ?? "—")],
+    ],
+    [
+      ["Insurance", "SUPPLIER SCOPE"],
+      ["Packing Terms", "STANDARD"],
+      ["Test Certificate", "REQUIRED"],
+      ["", ""],
+    ],
+    [
+      ["Warranty", "AS PER PI"],
+      ["Transporter", "SUPPLIER SCOPE"],
+      ["", ""],
+      ["", ""],
+    ],
+  ];
+
+  const cellW = CW / 4;
+  for (const row of termCells) {
+    let cx = ML;
+    for (const [label, val] of row) {
+      if (label) {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(6.5);
+        doc.setTextColor(80, 80, 80);
+        doc.text(label + " :", cx, y + 3.5);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(20, 20, 20);
+        doc.text(String(val), cx, y + 7);
+      }
+      cx += cellW;
+    }
+    y += 9;
+    doc.setLineWidth(0.2);
+    doc.setDrawColor(180, 180, 180);
+    doc.line(ML, y, W - MR, y);
+    doc.setDrawColor(0);
+  }
+
   y += 2;
 
-  /* ── gold underline ── */
-  doc.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
-  doc.setLineWidth(0.6);
-  doc.line(M, y, W - M, y);
-  y += 6;
+  /* "Dear Sir..." */
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(30, 30, 30);
+  doc.text("Dear Sir, We are pleased to place an order for the following items.", ML, y);
+  y += 4;
 
-  /* ── two-column info block ── */
-  const col2 = W / 2 + 4;
-  doc.setFontSize(8.5);
-  doc.setTextColor(50, 50, 50);
+  /* ── 4. Line items table ── */
+  const halfGst = (li: PoPdfLineItem) => (li.gst_percent / 2).toFixed(0) + "%";
+  const tableBody = data.lineItems.map((li, i) => [
+    i + 1,
+    li.hsn_code ?? "",
+    li.description,
+    "",          /* Image */
+    delivSch,    /* Delivery Date */
+    li.quantity,
+    li.unit ?? "",
+    li.rate + "/-" + (li.unit ? li.unit : ""),
+    "",          /* Disc% */
+    INR(li.total_value),
+    halfGst(li), /* SGST */
+    halfGst(li), /* CGST */
+    "",          /* IGST */
+  ]);
 
-  const infoRow = (
-    label: string,
-    value: string | null | undefined,
-    x: number,
-    cy: number
-  ) => {
-    if (!value) return;
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(BROWN[0], BROWN[1], BROWN[2]);
-    doc.text(label + ":", x, cy);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(50, 50, 50);
-    doc.text(value, x + 26, cy);
-  };
-
-  infoRow("Supplier", data.supplierName, M, y);
-  infoRow(
-    "Date",
-    new Date().toLocaleDateString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    }),
-    col2,
-    y
-  );
-  y += 5;
-
-  if (data.supplierGstin) infoRow("GST", data.supplierGstin, M, y);
-  if (data.paymentTerms) infoRow("Payment", data.paymentTerms, col2, y);
-  y += 5;
-
-  if (data.supplierPhone) infoRow("Phone", data.supplierPhone, M, y);
-  if (data.deliveryDate) {
-    const d = new Date(data.deliveryDate);
-    infoRow(
-      "Delivery",
-      isNaN(d.getTime())
-        ? data.deliveryDate
-        : d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }),
-      col2,
-      y
-    );
-  }
-  y += 5;
-
-  if (data.shipToAddress) {
-    infoRow("Ship To", data.shipToAddress.split("\n")[0], M, y);
-    y += 5;
-  }
-  if (data.projectCode) {
-    infoRow("Project", data.projectCode, M, y);
-    y += 5;
-  }
-
-  y += 3;
-
-  /* ── line items table ── */
   autoTable(doc, {
     startY: y,
-    margin: { left: M, right: M },
-    head: [
-      ["#", "Description", "Brand", "HSN", "Qty", "Unit", "Rate (₹)", "GST%", "Amount (₹)"],
-    ],
-    body: data.lineItems.map((li, i) => [
-      i + 1,
-      li.description,
-      li.brand ?? "",
-      li.hsn_code ?? "",
-      li.quantity,
-      li.unit ?? "",
-      INR(li.rate),
-      li.gst_percent + "%",
-      INR(li.total_value),
-    ]),
-    styles: { fontSize: 7.5, cellPadding: 2 },
+    margin: { left: ML, right: MR },
+    head: [[
+      "Sr.\nNo.", "HSN /\nSAC\nCode", "Description of Goods or Services",
+      "Image", "Delivery\nDate", "Qty", "Unit", "Rate", "Disc\n%",
+      "Total Value\nof Order", "SGST\n%Rate", "CGST\n%Rate", "IGST\n%Rate",
+    ]],
+    body: tableBody,
+    styles: { fontSize: 6.5, cellPadding: 1.5, lineColor: [0, 0, 0], lineWidth: 0.2 },
     headStyles: {
-      fillColor: BROWN,
-      textColor: [255, 255, 255],
+      fillColor: [220, 230, 241],
+      textColor: [20, 20, 20],
       fontStyle: "bold",
-      fontSize: 7.5,
+      fontSize: 6,
+      halign: "center",
+      valign: "middle",
     },
-    alternateRowStyles: { fillColor: [250, 246, 242] },
     columnStyles: {
-      0: { cellWidth: 7, halign: "center" },
-      1: { cellWidth: 52 },
-      2: { cellWidth: 22 },
-      3: { cellWidth: 16 },
-      4: { cellWidth: 10, halign: "right" },
-      5: { cellWidth: 10 },
-      6: { cellWidth: 22, halign: "right" },
-      7: { cellWidth: 10, halign: "right" },
-      8: { cellWidth: 22, halign: "right" },
+      0:  { cellWidth: 7,  halign: "center" },
+      1:  { cellWidth: 14, halign: "center" },
+      2:  { cellWidth: 46 },
+      3:  { cellWidth: 10, halign: "center" },
+      4:  { cellWidth: 16, halign: "center" },
+      5:  { cellWidth: 9,  halign: "right" },
+      6:  { cellWidth: 9,  halign: "center" },
+      7:  { cellWidth: 18, halign: "right" },
+      8:  { cellWidth: 8,  halign: "center" },
+      9:  { cellWidth: 20, halign: "right" },
+      10: { cellWidth: 10, halign: "center" },
+      11: { cellWidth: 10, halign: "center" },
+      12: { cellWidth: 10, halign: "center" },
+    },
+    didParseCell: (data) => {
+      if (data.section === "head" && data.column.index >= 10) {
+        data.cell.styles.fillColor = [220, 230, 241];
+      }
     },
   });
 
-  /* ── totals ── */
-  y = (doc as any).lastAutoTable.finalY + 5;
-  const tX = W - M - 58;
+  y = (doc as any).lastAutoTable.finalY;
 
-  const totalRow = (
-    label: string,
-    val: string,
-    bold = false,
-    cy = y
-  ) => {
-    doc.setFont("helvetica", bold ? "bold" : "normal");
-    if (bold) doc.setTextColor(BROWN[0], BROWN[1], BROWN[2]);
-    else doc.setTextColor(50, 50, 50);
-    doc.setFontSize(bold ? 9 : 8.5);
-    doc.text(label, tX, cy);
-    doc.text(val, W - M, cy, { align: "right" });
-    y += 5;
+  /* ── 5. Terms & Conditions + Totals ── */
+  const tcW = CW * 0.60;
+  const totW = CW * 0.38;
+  const totX = ML + tcW + 2;
+  const rowH = 5;
+  const startY5 = y;
+
+  /* T&C box */
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7);
+  doc.setTextColor(20, 20, 20);
+  doc.text("Terms & Conditions", ML, y + 4);
+  y += 6;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(6.5);
+  for (let i = 0; i < TERMS.length; i++) {
+    const lines = doc.splitTextToSize((i + 1) + ". " + TERMS[i], tcW - 2);
+    doc.text(lines, ML, y);
+    y += lines.length * 3.5 + 1;
+  }
+
+  /* Totals box (right side) */
+  let ty = startY5;
+
+  const drawTotalRow = (label: string, val: string, bold = false) => {
+    if (bold) {
+      doc.setFont("helvetica", "bold");
+      doc.setFillColor(230, 230, 230);
+      doc.rect(totX, ty, totW, rowH, "F");
+    } else {
+      doc.setFont("helvetica", "normal");
+    }
+    doc.setFontSize(7);
+    doc.setTextColor(20, 20, 20);
+    doc.text(label, totX + 2, ty + 3.5);
+    doc.text(val, totX + totW - 2, ty + 3.5, { align: "right" });
+    doc.setDrawColor(180);
+    doc.setLineWidth(0.2);
+    doc.rect(totX, ty, totW, rowH);
+    ty += rowH;
   };
 
-  totalRow("Subtotal (excl. GST)", INR(data.subTotal));
-  totalRow("GST", INR(data.gstAmount));
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7);
+  doc.text("Remarks :", totX + 2, ty + 4);
+  ty += 7;
 
-  doc.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
-  doc.setLineWidth(0.4);
-  doc.line(tX, y - 2, W - M, y - 2);
+  drawTotalRow("Total", INR(data.subTotal));
+  drawTotalRow("Freight / Loading", "");
+  drawTotalRow("CGST", INR(data.gstAmount / 2));
+  drawTotalRow("SGST", INR(data.gstAmount / 2));
+  drawTotalRow("IGST", "");
+  drawTotalRow("Grand Total", INR(data.grandTotal), true);
 
-  totalRow("GRAND TOTAL", INR(data.grandTotal), true);
+  y = Math.max(y, ty) + 3;
 
-  /* ── footer ── */
-  y += 6;
-  doc.setDrawColor(200, 200, 200);
+  /* ── 6. Amount in words ── */
   doc.setLineWidth(0.3);
-  doc.line(M, y, W - M, y);
+  doc.setDrawColor(0);
+  doc.line(ML, y, W - MR, y);
+  y += 4;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7);
+  doc.text("Total Order Value (In Words)", ML, y);
+  y += 4;
+  doc.setFont("helvetica", "normal");
+  doc.text("Rupees : " + amountInWords(data.grandTotal), ML, y);
+  y += 6;
+
+  /* ── 7. Signatures ── */
+  doc.setLineWidth(0.3);
+  doc.line(ML, y, W - MR, y);
   y += 5;
-  doc.setFont("helvetica", "italic");
+
+  const sigCols = [ML, ML + CW * 0.25, ML + CW * 0.50, ML + CW * 0.75];
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
+  doc.setTextColor(60, 60, 60);
+  doc.text("Prepared By :", sigCols[0], y);
+  doc.text("Prepared By : " + PREPARED, sigCols[1], y);
+  doc.text("Chk By : " + CHK, sigCols[2], y);
+  doc.text("Authorised Signatory", sigCols[3], y);
+  y += 5;
+  doc.setFont("helvetica", "bold");
   doc.setFontSize(7.5);
-  doc.setTextColor(140);
+  doc.setTextColor(20, 20, 20);
+  doc.text(AUTH_SIG, sigCols[3], y);
+
+  /* ── 8. Footer notice ── */
+  y = H - 10;
+  doc.setLineWidth(0.2);
+  doc.setDrawColor(150);
+  doc.line(ML, y, W - MR, y);
+  y += 4;
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(6.5);
+  doc.setTextColor(100);
   doc.text(
-    "This is a computer-generated Purchase Order. Authorized by Hagerstone International (P) Ltd.",
-    M,
-    y
+    "This is a Computer Generated Digitally Signed/Approved P.O. and does not require manual Signature.",
+    W / 2, y, { align: "center" }
   );
 
   return doc.output("blob");
 }
 
-/* ── upload to Supabase Storage ── */
+/* ─────────────────────────────── upload to Supabase Storage ── */
+
 export async function uploadPoPdf(
   supabase: SupabaseClient,
   poId: string,
@@ -234,10 +482,7 @@ export async function uploadPoPdf(
 
   const { error } = await supabase.storage
     .from("cps-po-pdfs")
-    .upload(path, pdfBlob, {
-      contentType: "application/pdf",
-      upsert: true,
-    });
+    .upload(path, pdfBlob, { contentType: "application/pdf", upsert: true });
 
   if (error) {
     console.error("PDF upload failed:", error.message);
