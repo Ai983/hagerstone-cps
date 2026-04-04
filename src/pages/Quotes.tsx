@@ -805,22 +805,29 @@ Rules:
     setSavingReview(false);
   };
 
-  // Approve a manually-entered quote (no AI parse needed — data already exists in line items)
+  // Approve a manually-entered quote (no AI parse needed — data already exists in line items or header)
   const approveManualQuote = async () => {
     if (!user || !reviewQuote) return;
     setSavingReview(true);
     try {
-      const totalQuoted = reviewItems.reduce((s, li) => s + (Number(li.rate) || 0) * (Number(li.quantity) || 0), 0);
-      const totalLanded = reviewItems.reduce((s, li) => {
-        const r = Number(li.rate) || 0;
-        const q = Number(li.quantity) || 0;
-        const g = Number(li.gst_percent) || 18;
-        const f = Number(li.freight) || 0;
-        const p = Number(li.packing) || 0;
-        return s + q * (r * (1 + g / 100) + f + p);
-      }, 0);
+      // Use computed totals from line items if available, otherwise fall back to quote header totals
+      const totalQuoted = reviewItems.length > 0
+        ? reviewItems.reduce((s, li) => s + (Number(li.rate) || 0) * (Number(li.quantity) || 0), 0)
+        : (reviewQuote.total_quoted_value ?? 0);
+      const totalLanded = reviewItems.length > 0
+        ? reviewItems.reduce((s, li) => {
+            const r = Number(li.rate) || 0;
+            const q = Number(li.quantity) || 0;
+            const g = Number(li.gst_percent) || 18;
+            const f = Number(li.freight) || 0;
+            const p = Number(li.packing) || 0;
+            return s + q * (r * (1 + g / 100) + f + p);
+          }, 0)
+        : (reviewQuote.total_landed_value ?? reviewQuote.total_quoted_value ?? 0);
 
-      const hasRates = reviewItems.some((li) => Number(li.rate) > 0);
+      const hasRates = reviewItems.length > 0
+        ? reviewItems.some((li) => Number(li.rate) > 0)
+        : (reviewQuote.total_quoted_value ?? 0) > 0;
       const hasPaymentTerms = (reviewQuote.payment_terms ?? "").trim().length > 0;
       const hasDeliveryTerms = (reviewQuote.delivery_terms ?? "").trim().length > 0;
       const hasGST = reviewItems.some((li) => Number(li.gst_percent) > 0);
@@ -1530,7 +1537,7 @@ Rules:
                   )}
 
                   {/* Fallback: show existing line items if no AI result */}
-                  {!aiResult && !aiParsing && reviewItems.length > 0 && (
+                  {!aiResult && !aiParsing && (reviewItems.length > 0 || reviewQuote.submitted_by_human || reviewQuote.parse_status === "parsed") && (
                     <div className="space-y-2">
                       <div className="text-xs font-semibold text-muted-foreground">Existing Line Items ({reviewItems.length})</div>
                       {reviewItems.map((it, idx) => (
