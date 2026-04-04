@@ -494,5 +494,14 @@ export async function uploadPoPdf(
   }
 
   const { data } = supabase.storage.from("cps-po-pdfs").getPublicUrl(path);
-  return data.publicUrl ?? null;
+  const publicUrl = data.publicUrl ?? null;
+
+  if (publicUrl) {
+    await supabase
+      .from("cps_purchase_orders")
+      .update({ po_pdf_url: publicUrl })
+      .eq("id", poId);
+  }
+
+  return publicUrl;
 }

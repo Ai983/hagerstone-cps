@@ -70,6 +70,7 @@ type PoRow = {
   founder_approval_status?: string | null;
   founder_approval_reason?: string | null;
   legacy_po_number?: string | null;
+  po_pdf_url?: string | null;
 };
 
 type SupplierRow = {
@@ -249,7 +250,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url",
         )
         .order("created_at", { ascending: false });
 
@@ -929,7 +930,7 @@ export default function PurchaseOrders() {
               supplier_name: supplier?.name || "",
               supplier_whatsapp: supplier?.whatsapp || supplier?.phone || "",
               supplier_email: supplier?.email || "",
-              po_pdf_url: "",
+              po_pdf_url: po.po_pdf_url || "",
               project_code: po.project_code || "",
               delivery_date: po.delivery_date || "",
               grand_total: po.grand_total || 0,
@@ -1722,22 +1723,37 @@ export default function PurchaseOrders() {
                         >
                           Reject PO
                         </Button>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span>
-                              <Button
-                                onClick={approveSendPo}
-                                disabled={approveSending || (viewPo.created_by != null && viewPo.created_by === user?.id)}
-                                className="bg-green-600 hover:bg-green-700 text-white"
-                              >
-                                {approveSending ? "Sending..." : "Send to Supplier"}
-                              </Button>
-                            </span>
-                          </TooltipTrigger>
-                          {viewPo.created_by && viewPo.created_by === user?.id ? (
-                            <TooltipContent>You cannot approve a PO you created</TooltipContent>
-                          ) : null}
-                        </Tooltip>
+                        {(() => {
+                          const selfCreated = viewPo.created_by != null && viewPo.created_by === user?.id;
+                          const hasTokens = viewPoTokens.length > 0;
+                          const anyApproved = viewPoTokens.some(t => t.response === "approved");
+                          const anyRejected = viewPoTokens.some(t => t.response === "rejected");
+                          const founderBlocked = hasTokens && (!anyApproved || anyRejected);
+                          const isDisabled = approveSending || selfCreated || founderBlocked;
+                          const tooltipMsg = selfCreated
+                            ? "You cannot approve a PO you created"
+                            : anyRejected
+                            ? "Cannot send — a founder has rejected this PO"
+                            : founderBlocked
+                            ? "Waiting for at least one founder to approve"
+                            : null;
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <Button
+                                    onClick={approveSendPo}
+                                    disabled={isDisabled}
+                                    className="bg-green-600 hover:bg-green-700 text-white"
+                                  >
+                                    {approveSending ? "Sending..." : "Send to Supplier"}
+                                  </Button>
+                                </span>
+                              </TooltipTrigger>
+                              {tooltipMsg && <TooltipContent>{tooltipMsg}</TooltipContent>}
+                            </Tooltip>
+                          );
+                        })()}
                       </div>
                     </div>
                   )}
