@@ -44,7 +44,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   let y = M;
 
   /* ── company header ── */
-  doc.setFillColor(...BROWN);
+  doc.setFillColor(BROWN[0], BROWN[1], BROWN[2]);
   doc.rect(0, 0, W, 22, "F");
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(13);
@@ -61,7 +61,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   y = 28;
 
   /* ── PO title bar ── */
-  doc.setTextColor(...BROWN);
+  doc.setTextColor(BROWN[0], BROWN[1], BROWN[2]);
   doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
   doc.text("PURCHASE ORDER", M, y);
@@ -70,7 +70,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   y += 2;
 
   /* ── gold underline ── */
-  doc.setDrawColor(...GOLD);
+  doc.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
   doc.setLineWidth(0.6);
   doc.line(M, y, W - M, y);
   y += 6;
@@ -88,7 +88,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   ) => {
     if (!value) return;
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(...BROWN);
+    doc.setTextColor(BROWN[0], BROWN[1], BROWN[2]);
     doc.text(label + ":", x, cy);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(50, 50, 50);
@@ -187,7 +187,8 @@ export function buildPoPdf(data: PoPdfData): Blob {
     cy = y
   ) => {
     doc.setFont("helvetica", bold ? "bold" : "normal");
-    doc.setTextColor(bold ? ...BROWN : [50, 50, 50] as [number, number, number]);
+    if (bold) doc.setTextColor(BROWN[0], BROWN[1], BROWN[2]);
+    else doc.setTextColor(50, 50, 50);
     doc.setFontSize(bold ? 9 : 8.5);
     doc.text(label, tX, cy);
     doc.text(val, W - M, cy, { align: "right" });
@@ -197,7 +198,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   totalRow("Subtotal (excl. GST)", INR(data.subTotal));
   totalRow("GST", INR(data.gstAmount));
 
-  doc.setDrawColor(...GOLD);
+  doc.setDrawColor(GOLD[0], GOLD[1], GOLD[2]);
   doc.setLineWidth(0.4);
   doc.line(tX, y - 2, W - M, y - 2);
 
