@@ -896,6 +896,22 @@ Provide a JSON response with this exact structure:
             return;
           }
 
+          /* fetch line items + compute totals (needed for both PDF and webhook) */
+          const { data: lineRes } = await supabase
+            .from("cps_po_line_items")
+            .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code")
+            .eq("po_id", poId);
+          const fullLineItems = (lineRes ?? []) as any[];
+
+          const calcLineItems = fullLineItems.map((li: any) => ({
+            ...li,
+            total_value: Number(li.total_value ?? (Number(li.rate ?? 0) * Number(li.quantity ?? 0))),
+            gst_amount:  Number(li.gst_amount  ?? (Number(li.rate ?? 0) * Number(li.quantity ?? 0) * Number(li.gst_percent ?? 0) / 100)),
+          }));
+          const subTotal   = calcLineItems.reduce((a, li) => a + li.total_value, 0);
+          const gstTotal   = calcLineItems.reduce((a, li) => a + li.gst_amount, 0);
+          const grandTotal = subTotal + gstTotal;
+
           /* try PDF generation — non-fatal if it fails */
           let poPdfUrl: string | null = null;
           try {
@@ -915,14 +931,6 @@ Provide a JSON response with this exact structure:
               });
             } catch (_) { /* logo optional */ }
 
-            const { data: lineRes } = await supabase
-              .from("cps_po_line_items")
-              .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code")
-              .eq("po_id", poId);
-            const fullLineItems = (lineRes ?? []) as any[];
-            const subTotal = fullLineItems.reduce((a, li) => a + Number(li.total_value ?? (Number(li.rate ?? 0) * Number(li.quantity ?? 0))), 0);
-            const gstTotal = fullLineItems.reduce((a, li) => a + Number(li.gst_amount ?? (Number(li.rate ?? 0) * Number(li.quantity ?? 0) * Number(li.gst_percent ?? 0) / 100)), 0);
-            const grandTotal = subTotal + gstTotal;
             const pdfBlob = buildPoPdf({
               poNumber,
               supplierName,
@@ -939,11 +947,7 @@ Provide a JSON response with this exact structure:
               gstAmount: gstTotal,
               grandTotal,
               logoBase64,
-              lineItems: fullLineItems.map((li: any) => ({
-                ...li,
-                total_value: Number(li.total_value ?? (Number(li.rate ?? 0) * Number(li.quantity ?? 0))),
-                gst_amount: Number(li.gst_amount ?? (Number(li.rate ?? 0) * Number(li.quantity ?? 0) * Number(li.gst_percent ?? 0) / 100)),
-              })),
+              lineItems: calcLineItems,
             });
             poPdfUrl = await uploadPoPdf(supabase, poId, poNumber, pdfBlob);
           } catch (pdfErr) {
@@ -956,7 +960,7 @@ Provide a JSON response with this exact structure:
             .update({ founder_approval_status: "pending" })
             .eq("id", poId);
 
-          /* fire webhook */
+          /* fire webhook — financial values now always present */
           await fetch(webhookUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -968,6 +972,9 @@ Provide a JSON response with this exact structure:
               site_name: shipToAddress?.split("\n")[0] ?? "",
               payment_terms: _paymentTerms,
               delivery_date: _deliveryDate,
+              total_value: subTotal,
+              gst_amount: gstTotal,
+              grand_total: grandTotal,
               po_pdf_url: poPdfUrl ?? "",
               dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
               bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",

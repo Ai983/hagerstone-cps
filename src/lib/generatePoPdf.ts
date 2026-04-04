@@ -468,7 +468,9 @@ export function buildPoPdf(data: PoPdfData): Blob {
     W / 2, y, { align: "center" }
   );
 
-  return doc.output("blob");
+  /* Use arraybuffer → Blob — reliable across all jsPDF versions */
+  const buf = doc.output("arraybuffer");
+  return new Blob([buf], { type: "application/pdf" });
 }
 
 /* ─────────────────────────────── upload to Supabase Storage ── */
