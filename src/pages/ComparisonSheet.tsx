@@ -763,6 +763,41 @@ Provide a JSON response with this exact structure:
         .eq("id", rfq.pr_id)
         .maybeSingle();
 
+      // Fetch quote line items BEFORE PO insert so we can compute and store totals
+      const { data: quoteLineItems, error: qliErr } = await supabase
+        .from("cps_quote_line_items")
+        .select("*")
+        .eq("quote_id", quote.id);
+      if (qliErr) throw qliErr;
+
+      // Compute totals from quote line items so they're stored on the PO and line items
+      const poLineItemsToInsert = (quoteLineItems ?? []).map((li: any) => {
+        const qty      = Number(li.quantity   ?? 0);
+        const rate     = Number(li.rate       ?? 0);
+        const gstPct   = Number(li.gst_percent ?? 0);
+        const lineTotal = qty * rate;
+        const lineGst   = lineTotal * gstPct / 100;
+        return {
+          pr_line_item_id:   li.pr_line_item_id ?? null,
+          item_id:           li.item_id ?? null,
+          description:       li.original_description ?? "",
+          brand:             li.brand ?? null,
+          quantity:          qty,
+          unit:              li.unit ?? null,
+          rate,
+          gst_percent:       gstPct,
+          freight:           Number(li.freight ?? 0),
+          packing:           Number(li.packing ?? 0),
+          total_landed_rate: Number(li.total_landed_rate ?? 0),
+          hsn_code:          li.hsn_code ?? null,
+          total_value:       lineTotal,
+          gst_amount:        lineGst,
+        };
+      });
+      const poSubTotal   = poLineItemsToInsert.reduce((s, li) => s + li.total_value, 0);
+      const poGstTotal   = poLineItemsToInsert.reduce((s, li) => s + li.gst_amount, 0);
+      const poGrandTotal = poSubTotal + poGstTotal;
+
       const { data: poInserted, error: poInsertErr } = await supabase.from("cps_purchase_orders").insert([
         {
           po_number: poNumber,
@@ -778,35 +813,18 @@ Provide a JSON response with this exact structure:
           delivery_date: prData?.required_by ?? null,
           warranty_months: quote.warranty_months ?? null,
           created_by: user.id,
+          total_value: poSubTotal,
+          gst_amount:  poGstTotal,
+          grand_total: poGrandTotal,
         },
       ]).select("id").single();
       if (poInsertErr) throw poInsertErr;
 
       const poId = (poInserted as any).id as string;
 
-      const { data: quoteLineItems, error: qliErr } = await supabase
-        .from("cps_quote_line_items")
-        .select("*")
-        .eq("quote_id", quote.id);
-      if (qliErr) throw qliErr;
-
-      if (quoteLineItems && quoteLineItems.length > 0) {
+      if (poLineItemsToInsert.length > 0) {
         const { error: poLiErr } = await supabase.from("cps_po_line_items").insert(
-          quoteLineItems.map((li: any) => ({
-            po_id: poId,
-            pr_line_item_id: li.pr_line_item_id ?? null,
-            item_id: li.item_id ?? null,
-            description: li.original_description ?? "",
-            brand: li.brand ?? null,
-            quantity: li.quantity ?? 0,
-            unit: li.unit ?? null,
-            rate: li.rate ?? 0,
-            gst_percent: li.gst_percent ?? 0,
-            freight: li.freight ?? 0,
-            packing: li.packing ?? 0,
-            total_landed_rate: li.total_landed_rate ?? 0,
-            hsn_code: li.hsn_code ?? null,
-          })),
+          poLineItemsToInsert.map((li) => ({ po_id: poId, ...li })),
         );
         if (poLiErr) throw poLiErr;
       }
@@ -896,21 +914,17 @@ Provide a JSON response with this exact structure:
             return;
           }
 
-          /* fetch line items + compute totals (needed for both PDF and webhook) */
+          /* use totals already computed at PO creation — guaranteed non-zero */
+          const subTotal   = poSubTotal;
+          const gstTotal   = poGstTotal;
+          const grandTotal = poGrandTotal;
+
+          /* fetch line items for PDF table (totals already stored correctly in DB) */
           const { data: lineRes } = await supabase
             .from("cps_po_line_items")
             .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code")
             .eq("po_id", poId);
-          const fullLineItems = (lineRes ?? []) as any[];
-
-          const calcLineItems = fullLineItems.map((li: any) => ({
-            ...li,
-            total_value: Number(li.total_value ?? (Number(li.rate ?? 0) * Number(li.quantity ?? 0))),
-            gst_amount:  Number(li.gst_amount  ?? (Number(li.rate ?? 0) * Number(li.quantity ?? 0) * Number(li.gst_percent ?? 0) / 100)),
-          }));
-          const subTotal   = calcLineItems.reduce((a, li) => a + li.total_value, 0);
-          const gstTotal   = calcLineItems.reduce((a, li) => a + li.gst_amount, 0);
-          const grandTotal = subTotal + gstTotal;
+          const calcLineItems = (lineRes ?? []) as any[];
 
           /* try PDF generation — non-fatal if it fails */
           let poPdfUrl: string | null = null;
