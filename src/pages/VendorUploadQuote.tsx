@@ -415,11 +415,13 @@ export default function VendorUploadQuote() {
             hsn_code: entry.hsn_code.trim() || null,
             confidence_score: 100,
             human_corrected: false,
-            sort_order: idx,
           };
         });
         const { error: lineErr } = await supabase.from("cps_quote_line_items").insert(lineItemsPayload);
-        if (lineErr) console.error("Line items insert error:", lineErr);
+        if (lineErr) {
+          console.error("Line items insert error:", lineErr);
+          toast.error("Failed to save line item details: " + lineErr.message);
+        }
       }
 
       // 6. Mark token used
