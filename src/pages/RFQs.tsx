@@ -43,6 +43,7 @@ type Rfq = {
   status: RfqStatus;
   deadline: string | null;
   created_at: string | null;
+  target_category: string | null;
 };
 
 type Supplier = {
@@ -213,7 +214,7 @@ export default function RFQs() {
     setSupplierCountByRfqId({});
     setTotalQuotesByRfq({});
     setApprovedQuotesByRfq({});
-    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,pr_id,title,status,deadline,created_at").order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,pr_id,title,status,deadline,created_at,target_category").order("created_at", { ascending: false });
     if (error) {
       console.error("RFQ list load error:", error);
       toast.error("Failed to load RFQs");
@@ -473,31 +474,37 @@ export default function RFQs() {
   // -------------------------------------------------------------------------
 
   // Load PR line items only — does NOT touch cps_rfq_suppliers
-  const loadPrItems = async (prId: string): Promise<string[]> => {
+  const loadPrItems = async (prId: string, targetCategory: string | null): Promise<string[]> => {
     const { data: items } = await supabase
       .from("cps_pr_line_items")
       .select("id, description, quantity, unit, item:cps_items(id, name, benchmark_rate, category)")
       .eq("pr_id", prId);
-    setReviewPrItems((items ?? []) as unknown as ReviewPrLineItem[]);
-    const cats = [...new Set(
-      (items ?? []).map((li: any) => li.item?.category).filter(Boolean)
-    )] as string[];
+    const all = (items ?? []) as unknown as ReviewPrLineItem[];
+
+    // Filter items to only show what's relevant for this RFQ's category scope
+    const filtered = targetCategory === null        ? all
+      : targetCategory === "General"               ? all.filter((li) => !li.item?.category)
+      :                                              all.filter((li) => li.item?.category === targetCategory);
+
+    setReviewPrItems(filtered);
+
+    const cats: string[] = (!targetCategory || targetCategory === "General") ? []
+      : [targetCategory];
     setReviewRfqCategories(cats);
     return cats;
   };
 
   const loadMatchedSuppliers = async (categories: string[]): Promise<Supplier[]> => {
-    const base = supabase
+    // General RFQ (no category) → no auto-match; procurement picks manually
+    if (categories.length === 0) return [];
+
+    const { data } = await supabase
       .from("cps_suppliers")
       .select("id, name, phone, whatsapp, email, city, state, gstin, categories, performance_score, profile_complete, last_awarded_at, status, added_via")
       .eq("status", "active")
+      .overlaps("categories", categories)
       .order("performance_score", { ascending: false })
       .limit(20);
-
-    const { data } =
-      categories.length > 0
-        ? await base.overlaps("categories", categories)
-        : await base;
 
     return (data ?? []) as Supplier[];
   };
@@ -521,13 +528,13 @@ export default function RFQs() {
 
     if (rfq.status === "draft") {
       // Draft: load suggestions from cps_suppliers directly — cps_rfq_suppliers is empty
-      const cats = await loadPrItems(rfq.pr_id);
+      const cats = await loadPrItems(rfq.pr_id, rfq.target_category ?? null);
       const matched = await loadMatchedSuppliers(cats);
       setMatchedSuppliers(matched);
       setReviewSelectedIds(matched.slice(0, 5).map((s) => s.id));
     } else {
       // Sent / reminder: show who was already dispatched from cps_rfq_suppliers
-      const cats = await loadPrItems(rfq.pr_id);
+      await loadPrItems(rfq.pr_id, rfq.target_category ?? null);
       const { data: sups } = await supabase
         .from("cps_rfq_suppliers")
         .select("supplier_id, cps_suppliers(id, name, whatsapp, phone, email, city, categories, performance_score, profile_complete, last_awarded_at, status, added_via)")
@@ -537,7 +544,6 @@ export default function RFQs() {
         .filter(Boolean) as Supplier[];
       setMatchedSuppliers(dispatched);
       setReviewSelectedIds(dispatched.map((s) => s.id));
-      void cats; // categories already set inside loadPrItems
     }
 
     setReviewLoading(false);
@@ -858,7 +864,16 @@ export default function RFQs() {
                   const canCompare = r.status === "comparison_ready";
                   return (
                     <TableRow key={r.id} className="hover:bg-muted/30">
-                      <TableCell className="font-mono text-primary">{r.rfq_number}</TableCell>
+                      <TableCell className="font-mono text-primary">
+                        <div className="flex flex-col gap-1">
+                          <span>{r.rfq_number}</span>
+                          {r.target_category && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded leading-none w-fit ${
+                              r.target_category === "General" ? "bg-amber-100 text-amber-700" : "bg-primary/10 text-primary"
+                            }`}>{r.target_category}</span>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell>{r.title}</TableCell>
                       <TableCell className="text-muted-foreground">{prDisplayById[r.pr_id] ?? r.pr_id}</TableCell>
                       <TableCell className="text-muted-foreground">{supplierCountByRfqId[r.id] ?? 0}</TableCell>
@@ -929,7 +944,14 @@ export default function RFQs() {
                 return (
                   <div key={r.id} className="p-4 space-y-2">
                     <div className="flex items-start justify-between gap-2">
-                      <span className="font-mono text-primary font-semibold text-sm">{r.rfq_number}</span>
+                      <div className="flex flex-col gap-1">
+                        <span className="font-mono text-primary font-semibold text-sm">{r.rfq_number}</span>
+                        {r.target_category && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded leading-none w-fit ${
+                            r.target_category === "General" ? "bg-amber-100 text-amber-700" : "bg-primary/10 text-primary"
+                          }`}>{r.target_category}</span>
+                        )}
+                      </div>
                       <Badge className={`text-xs border-0 ${sc.badge}`}>{sc.label}</Badge>
                     </div>
                     <p className="text-sm font-medium">{r.title}</p>
@@ -1137,12 +1159,21 @@ export default function RFQs() {
           <div className="overflow-y-auto max-h-[85vh]">
             <div className="p-6">
               <DialogHeader>
-                <DialogTitle>Review RFQ: {reviewRfq?.rfq_number}</DialogTitle>
+                <DialogTitle className="flex items-center gap-2 flex-wrap">
+                  Review RFQ: {reviewRfq?.rfq_number}
+                  {reviewRfq?.target_category && (
+                    <span className={`text-xs font-normal px-2 py-0.5 rounded ${
+                      reviewRfq.target_category === "General" ? "bg-amber-100 text-amber-700" : "bg-primary/10 text-primary"
+                    }`}>{reviewRfq.target_category}</span>
+                  )}
+                </DialogTitle>
                 <DialogDescription>
                   {reviewRfq?.status === "draft"
                     ? reviewRfqCategories.length > 0
-                      ? `Suggested for ${reviewRfqCategories.join(", ")} — select who to send to`
-                      : "Select suppliers to send this RFQ to"
+                      ? `Showing ${reviewRfq?.target_category} items — select suppliers to send to`
+                      : reviewRfq?.target_category === "General"
+                        ? "General items — search and add suppliers manually"
+                        : "Select suppliers to send this RFQ to"
                     : `Dispatched to ${matchedSuppliers.length} suppliers`}
                 </DialogDescription>
               </DialogHeader>

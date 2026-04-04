@@ -539,10 +539,17 @@ export default function PurchaseRequisitions() {
         const { data: rfqResult, error: rfqError } = await supabase.rpc("cps_auto_create_rfq_for_pr", {
           p_pr_id: prId, p_created_by: user.id,
         });
-        if (!rfqError && rfqResult?.success) {
-          // Ensure RFQ stays in draft — procurement head reviews vendors before webhook fires
-          await supabase.from("cps_rfqs").update({ status: "draft" }).eq("id", rfqResult.rfq_id);
-          toast.success(`${rfqResult.rfq_number} created — review vendors in RFQs before dispatch`);
+        if (!rfqError && rfqResult?.success && Array.isArray(rfqResult.rfqs)) {
+          const rfqs: Array<{ rfq_id: string; rfq_number: string; category: string; supplier_count: number }> = rfqResult.rfqs;
+          // Ensure all RFQs stay in draft — procurement head reviews vendors before dispatch
+          await supabase.from("cps_rfqs").update({ status: "draft" }).in("id", rfqs.map((r) => r.rfq_id));
+          if (rfqs.length === 1) {
+            toast.success(`${rfqs[0].rfq_number} created — review vendors before dispatch`);
+          } else {
+            const parts = rfqs.map((r) =>
+              `${r.category} (${r.supplier_count === 0 ? "select manually" : r.supplier_count + " suppliers"})`);
+            toast.success(`${rfqs.length} RFQs created from ${rfqResult.base_number}: ${parts.join(", ")}`);
+          }
         }
       } catch { /* rfq failure non-blocking */ }
 
