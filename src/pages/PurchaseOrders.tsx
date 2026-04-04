@@ -1728,14 +1728,16 @@ export default function PurchaseOrders() {
                           const hasTokens = viewPoTokens.length > 0;
                           const anyApproved = viewPoTokens.some(t => t.response === "approved");
                           const anyRejected = viewPoTokens.some(t => t.response === "rejected");
+                          const founderApprovalComplete = hasTokens && anyApproved && !anyRejected;
                           const founderBlocked = hasTokens && (!anyApproved || anyRejected);
-                          const isDisabled = approveSending || selfCreated || founderBlocked;
-                          const tooltipMsg = selfCreated
-                            ? "You cannot approve a PO you created"
-                            : anyRejected
+                          // Self-created restriction is waived when founders have already approved
+                          const isDisabled = approveSending || founderBlocked || (!founderApprovalComplete && selfCreated);
+                          const tooltipMsg = anyRejected
                             ? "Cannot send — a founder has rejected this PO"
                             : founderBlocked
                             ? "Waiting for at least one founder to approve"
+                            : !founderApprovalComplete && selfCreated
+                            ? "You cannot approve a PO you created"
                             : null;
                           return (
                             <Tooltip>
