@@ -805,6 +805,87 @@ Rules:
     setSavingReview(false);
   };
 
+  // Approve a manually-entered quote (no AI parse needed — data already exists in line items)
+  const approveManualQuote = async () => {
+    if (!user || !reviewQuote) return;
+    setSavingReview(true);
+    try {
+      const totalQuoted = reviewItems.reduce((s, li) => s + (Number(li.rate) || 0) * (Number(li.quantity) || 0), 0);
+      const totalLanded = reviewItems.reduce((s, li) => {
+        const r = Number(li.rate) || 0;
+        const q = Number(li.quantity) || 0;
+        const g = Number(li.gst_percent) || 18;
+        const f = Number(li.freight) || 0;
+        const p = Number(li.packing) || 0;
+        return s + q * (r * (1 + g / 100) + f + p);
+      }, 0);
+
+      const hasRates = reviewItems.some((li) => Number(li.rate) > 0);
+      const hasPaymentTerms = (reviewQuote.payment_terms ?? "").trim().length > 0;
+      const hasDeliveryTerms = (reviewQuote.delivery_terms ?? "").trim().length > 0;
+      const hasGST = reviewItems.some((li) => Number(li.gst_percent) > 0);
+      const complianceStatus = hasRates && hasPaymentTerms && hasDeliveryTerms && hasGST ? "compliant" : "pending";
+
+      const { error: quoteErr } = await supabase.from("cps_quotes").update({
+        parse_status: "approved",
+        compliance_status: complianceStatus,
+        total_quoted_value: totalQuoted,
+        total_landed_value: totalLanded,
+        reviewed_by: user.id,
+        reviewed_at: new Date().toISOString(),
+        missing_fields: [],
+      }).eq("id", reviewQuote.id);
+      if (quoteErr) { toast.error("Failed to approve quote"); setSavingReview(false); return; }
+
+      // Update line items with computed landed rate
+      for (const li of reviewItems) {
+        const r = Number(li.rate) || 0;
+        const g = Number(li.gst_percent) || 18;
+        const f = Number(li.freight) || 0;
+        const p = Number(li.packing) || 0;
+        await supabase.from("cps_quote_line_items")
+          .update({ total_landed_rate: r * (1 + g / 100) + f + p, human_corrected: true })
+          .eq("id", li.id);
+      }
+
+      if (reviewQuote.supplier_id) {
+        await supabase.from("cps_rfq_suppliers")
+          .update({ response_status: "responded" })
+          .eq("rfq_id", reviewQuote.rfq_id).eq("supplier_id", reviewQuote.supplier_id);
+      }
+
+      // Auto-advance RFQ to comparison_ready when ≥2 quotes approved
+      const { count: approvedCount } = await supabase
+        .from("cps_quotes")
+        .select("id", { count: "exact", head: true })
+        .eq("rfq_id", reviewQuote.rfq_id)
+        .eq("parse_status", "approved");
+
+      if (approvedCount !== null && approvedCount >= 2) {
+        await supabase.from("cps_rfqs")
+          .update({ status: "comparison_ready" })
+          .eq("id", reviewQuote.rfq_id)
+          .eq("status", "sent");
+      }
+
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id, user_name: user.name, user_role: user.role,
+        action_type: "QUOTE_REVIEWED", entity_type: "quote",
+        entity_id: reviewQuote.id, entity_number: reviewQuote.blind_quote_ref,
+        description: `Quote ${reviewQuote.blind_quote_ref} approved (manual portal entry). ${reviewItems.length} items. Compliance: ${complianceStatus}.`,
+        severity: "info",
+        logged_at: new Date().toISOString(),
+      });
+
+      toast.success("Quote approved");
+      setReviewOpen(false);
+      await fetchQuotes();
+    } catch (e: any) {
+      toast.error("Failed to approve: " + e?.message);
+    }
+    setSavingReview(false);
+  };
+
   const openLogDialog = async () => {
     setLogDialogOpen(true);
     setLogError(null);
@@ -1459,16 +1540,40 @@ Rules:
                         </div>
                       ))}
                       <div className="border-t border-border/60 pt-3 space-y-2">
-                        <div className="text-xs font-semibold text-muted-foreground">Mark as Reviewed</div>
-                        <Button size="sm" className="w-full" disabled={reviewQuote.parse_status === "reviewed" || Boolean(reviewQuote.reviewed_at)} onClick={markQuoteReviewed}>
-                          Mark as Reviewed
-                        </Button>
-                        <div className="space-y-1 pt-2">
-                          <Textarea rows={2} value={nonCompliantReason} onChange={(e) => setNonCompliantReason(e.target.value)} placeholder="Reason for non-compliance (required)" className="text-xs" />
-                          <Button variant="destructive" size="sm" className="w-full" onClick={flagNonCompliant}>
-                            Flag Non-Compliant
-                          </Button>
-                        </div>
+                        {/* For manually-entered portal quotes — full approve without AI */}
+                        {(reviewQuote.submitted_by_human || reviewQuote.parse_status === "parsed") &&
+                          reviewQuote.parse_status !== "approved" ? (
+                          <>
+                            <Button
+                              className="w-full h-10"
+                              disabled={savingReview}
+                              onClick={approveManualQuote}
+                            >
+                              {savingReview
+                                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Approving…</>
+                                : <><CheckCircle2 className="h-4 w-4 mr-2" />Approve Quote</>}
+                            </Button>
+                            <div className="space-y-1 pt-1">
+                              <Textarea rows={2} value={nonCompliantReason} onChange={(e) => setNonCompliantReason(e.target.value)} placeholder="Reason for non-compliance (required)" className="text-xs" />
+                              <Button variant="destructive" size="sm" className="w-full" onClick={flagNonCompliant}>
+                                Flag Non-Compliant
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="text-xs font-semibold text-muted-foreground">Mark as Reviewed</div>
+                            <Button size="sm" className="w-full" disabled={reviewQuote.parse_status === "reviewed" || reviewQuote.parse_status === "approved" || Boolean(reviewQuote.reviewed_at)} onClick={markQuoteReviewed}>
+                              Mark as Reviewed
+                            </Button>
+                            <div className="space-y-1 pt-2">
+                              <Textarea rows={2} value={nonCompliantReason} onChange={(e) => setNonCompliantReason(e.target.value)} placeholder="Reason for non-compliance (required)" className="text-xs" />
+                              <Button variant="destructive" size="sm" className="w-full" onClick={flagNonCompliant}>
+                                Flag Non-Compliant
+                              </Button>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
