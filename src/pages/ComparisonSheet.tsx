@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
 
 import { AlertTriangle, Sparkles } from "lucide-react";
 
@@ -821,8 +822,104 @@ Provide a JSON response with this exact structure:
         },
       ]);
 
-      toast.success(`${poNumber} created successfully`);
+      toast.success(`${poNumber} created successfully — sending to founders for approval`);
       navigate("/purchase-orders");
+
+      /* ── fire-and-forget: PDF + approval tokens + n8n webhook ── */
+      const _paymentTerms = quote.payment_terms ?? null;
+      const _deliveryDate = prData?.required_by ?? null;
+      (async () => {
+        try {
+          const origin = window.location.origin;
+
+          /* fetch full line items + supplier details for PDF */
+          const [lineRes, supRes] = await Promise.all([
+            supabase
+              .from("cps_po_line_items")
+              .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code")
+              .eq("po_id", poId),
+            supplierId
+              ? supabase.from("cps_suppliers").select("name,gstin,phone").eq("id", supplierId).maybeSingle()
+              : Promise.resolve({ data: null }),
+          ]);
+
+          const fullLineItems = (lineRes.data ?? []) as any[];
+          const sup = (supRes as any).data as any;
+          const supplierName = sup?.name ?? suppliers.find((s) => s.id === supplierId)?.name ?? "";
+
+          const subTotal = fullLineItems.reduce((a, li) => a + Number(li.total_value ?? 0), 0);
+          const gstTotal = fullLineItems.reduce((a, li) => a + Number(li.gst_amount ?? 0), 0);
+          const grandTotal = subTotal + gstTotal;
+
+          /* generate PDF */
+          const pdfBlob = buildPoPdf({
+            poNumber,
+            supplierName,
+            supplierGstin: sup?.gstin ?? null,
+            supplierPhone: sup?.phone ?? null,
+            paymentTerms: _paymentTerms,
+            deliveryDate: _deliveryDate,
+            subTotal,
+            gstAmount: gstTotal,
+            grandTotal,
+            lineItems: fullLineItems,
+          });
+
+          /* upload PDF */
+          const poPdfUrl = await uploadPoPdf(supabase, poId, poNumber, pdfBlob);
+
+          /* insert approval tokens */
+          const { data: insertedTokens, error: tokErr } = await supabase
+            .from("cps_po_approval_tokens")
+            .insert([
+              { po_id: poId, founder_name: "Dhruv" },
+              { po_id: poId, founder_name: "Bhaskar" },
+            ])
+            .select("token,founder_name");
+          if (tokErr || !insertedTokens) return;
+
+          const approvalLinks = (insertedTokens as Array<{ token: string; founder_name: string }>).map((t) => ({
+            founder_name: t.founder_name,
+            link: `${origin}/approve-po?token=${t.token}`,
+          }));
+
+          /* fetch webhook URL */
+          const { data: cfgRow } = await supabase
+            .from("cps_config")
+            .select("value")
+            .eq("key", "webhook_po_founder_approval")
+            .maybeSingle();
+          const webhookUrl = (cfgRow as any)?.value as string | undefined;
+          if (!webhookUrl) return;
+
+          /* mark PO pending */
+          await supabase
+            .from("cps_purchase_orders")
+            .update({ founder_approval_status: "pending" })
+            .eq("id", poId);
+
+          await fetch(webhookUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              event: "po_created",
+              po_id: poId,
+              po_number: poNumber,
+              supplier_name: supplierName,
+              grand_total: grandTotal,
+              gst_amount: gstTotal,
+              total_value: subTotal,
+              payment_terms: _paymentTerms,
+              delivery_date: _deliveryDate,
+              po_pdf_url: poPdfUrl,
+              dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
+              bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
+            }),
+          });
+        } catch (_) {
+          /* non-blocking */
+        }
+      })();
     } catch (e: any) {
       console.error("Create PO error:", e);
       toast.error(e?.message || "Failed to create PO");

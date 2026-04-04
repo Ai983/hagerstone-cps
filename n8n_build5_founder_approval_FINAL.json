@@ -1,0 +1,346 @@
+{
+  "name": "CPS — Build 5 — Founder PO Approval (WhatsApp)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "build-5-founder-approval",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "648de8c2-1f57-4d5f-affd-d5ef7d342420",
+      "name": "Webhook — PO Approval Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-640, 288],
+      "webhookId": "build-5-founder-approval"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"received\", \"message\": \"Approval request queued\" }",
+        "options": {}
+      },
+      "id": "94171f68-8374-4949-b151-3f5253715dc1",
+      "name": "Respond 200 Immediately",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [-432, 96]
+    },
+    {
+      "parameters": {
+        "jsCode": "const formatINR = (amount) => {\n  return new Intl.NumberFormat('en-IN', {\n    style: 'currency',\n    currency: 'INR',\n    minimumFractionDigits: 0,\n    maximumFractionDigits: 0,\n  }).format(amount);\n};\n\nconst raw = $input.first().json;\nconst body = raw.body || raw;\n\nconst grandTotal = parseFloat(body.grand_total || 0);\nconst totalValue = parseFloat(body.total_value  || 0);\nconst gstAmount  = parseFloat(body.gst_amount   || 0);\n\nconst poDate = body.delivery_date\n  ? new Date(body.delivery_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })\n  : 'Not specified';\n\nconst buildCaption = (approvalLink) =>\n  '\\uD83C\\uDFD7\\uFE0F *HAGERSTONE \\u2014 PO APPROVAL REQUIRED*\\n\\n' +\n  '\\uD83D\\uDCCB *PO No:* '             + body.po_number     + '\\n' +\n  '\\uD83C\\uDFE2 *Supplier:* '          + (body.supplier_name || 'N/A') + '\\n' +\n  '\\uD83D\\uDCC5 *Delivery Date:* '     + poDate             + '\\n' +\n  '\\uD83D\\uDCB0 *Value (excl GST):* '  + formatINR(totalValue) + '\\n' +\n  '\\uD83E\\uDDFE *GST:* '               + formatINR(gstAmount)  + '\\n' +\n  '\\uD83D\\uDCB5 *Grand Total:* *'      + formatINR(grandTotal) + '*' +\n  (body.payment_terms ? '\\n\\uD83D\\uDCB3 *Payment:* ' + body.payment_terms : '') +\n  '\\n\\n\\u2705 *Approve / Reject PO:*\\n' + approvalLink +\n  '\\n\\n_System PO#: ' + body.po_number + '_';\n\nreturn [{\n  json: {\n    po_id:                 body.po_id,\n    po_number:             body.po_number,\n    supplier_name:         body.supplier_name,\n    total_value:           totalValue,\n    gst_amount:            gstAmount,\n    grand_total:           grandTotal,\n    payment_terms:         body.payment_terms,\n    po_pdf_url:            body.po_pdf_url || '',\n    grand_total_formatted: formatINR(grandTotal),\n    dhruv_approval_link:   body.dhruv_approval_link   || '',\n    bhaskar_approval_link: body.bhaskar_approval_link || '',\n    dhruv_caption:   buildCaption(body.dhruv_approval_link   || ''),\n    bhaskar_caption: buildCaption(body.bhaskar_approval_link || ''),\n  }\n}];"
+      },
+      "id": "4506e0b0-d812-42f2-846d-5e957571cbc1",
+      "name": "Format Approval Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-432, 288]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Format Approval Message').item.json.po_pdf_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "f011b6fd-2d79-42e9-88b8-73e23b5f96bc",
+      "name": "Download PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-160, 288]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get binary PDF data from Download node\nconst binaryData = $input.first().binary?.data;\n\nif (!binaryData) {\n  throw new Error('No binary data received from PDF download node');\n}\n\nconst base64String = binaryData.data;\nconst mimeType     = binaryData.mimeType   || 'application/pdf';\nconst fileName     = binaryData.fileName   || 'purchase_order.pdf';\nconst base64Uri    = `data:${mimeType};base64,${base64String}`;\n\n// Get captions from Format node (per-founder unique approval links)\nconst fmt = $('Format Approval Message').first().json;\n\nconst dhruvPayload = JSON.stringify({\n  to_number:   '917860650640',\n  type:        'media',\n  message:     base64Uri,\n  text:        fmt.dhruv_caption,\n  filename:    fileName,\n  skip_filter: false\n});\n\nconst bhaskarPayload = JSON.stringify({\n  to_number:   '919958131069',\n  type:        'media',\n  message:     base64Uri,\n  text:        fmt.bhaskar_caption,\n  filename:    fileName,\n  skip_filter: false\n});\n\nreturn [{\n  json: {\n    ...fmt,\n    pdf_base64:      base64String,\n    pdf_mime_type:   mimeType,\n    pdf_file_name:   fileName,\n    dhruv_payload:   dhruvPayload,\n    bhaskar_payload: bhaskarPayload,\n  }\n}];"
+      },
+      "id": "7aa21047-22e2-44b5-a75e-bc8abafc7aaa",
+      "name": "Build Maytapi Payloads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [100, 288]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.maytapi.com/api/b8cce1b9-0f9f-4aef-994c-d232716471f0/46821/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-maytapi-key",
+              "value": "ebfd5e67-6403-4921-b300-a54364f2c470"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.dhruv_payload }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "564e1f1e-5e09-40fb-a58f-4f44238ef85b",
+      "name": "Send PDF — Dhruv",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [340, 176]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "7dbefe71-e409-4dcd-b027-9e51f453cbf4",
+      "name": "Wait 3 Seconds",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [580, 176],
+      "webhookId": "wait-build5-v2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.maytapi.com/api/b8cce1b9-0f9f-4aef-994c-d232716471f0/46821/sendMessage",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-maytapi-key",
+              "value": "ebfd5e67-6403-4921-b300-a54364f2c470"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $('Build Maytapi Payloads').item.json.bhaskar_payload }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "71fb6b53-c973-4606-8824-d96b6aa8178b",
+      "name": "Send PDF — Bhaskar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [820, 176]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://orhbzvoqtingmqjbjzqw.supabase.co/rest/v1/cps_purchase_orders?id=eq.{{ $('Format Approval Message').item.json.po_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yaGJ6dm9xdGluZ21xamJqenF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMjI5NzEsImV4cCI6MjA4NzU5ODk3MX0.9il_tRoJYIlt6MLfmujcIOjLbgjl7V0KCuRx9RnWX60"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yaGJ6dm9xdGluZ21xamJqenF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMjI5NzEsImV4cCI6MjA4NzU5ODk3MX0.9il_tRoJYIlt6MLfmujcIOjLbgjl7V0KCuRx9RnWX60"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "founder_approval_status",
+              "value": "sent"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "911e37b6-19a9-47e2-b664-f18e843a6742",
+      "name": "Update PO: founder_approval_status = sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1060, 176]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://orhbzvoqtingmqjbjzqw.supabase.co/rest/v1/cps_audit_log",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yaGJ6dm9xdGluZ21xamJqenF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMjI5NzEsImV4cCI6MjA4NzU5ODk3MX0.9il_tRoJYIlt6MLfmujcIOjLbgjl7V0KCuRx9RnWX60"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9yaGJ6dm9xdGluZ21xamJqenF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMjI5NzEsImV4cCI6MjA4NzU5ODk3MX0.9il_tRoJYIlt6MLfmujcIOjLbgjl7V0KCuRx9RnWX60"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action_type",
+              "value": "FOUNDER_APPROVAL_SENT"
+            },
+            {
+              "name": "entity_type",
+              "value": "purchase_order"
+            },
+            {
+              "name": "entity_id",
+              "value": "={{ $('Format Approval Message').item.json.po_id }}"
+            },
+            {
+              "name": "description",
+              "value": "=Founder approval PDF sent for PO {{ $('Format Approval Message').item.json.po_number }} — {{ $('Format Approval Message').item.json.supplier_name }} — {{ $('Format Approval Message').item.json.grand_total_formatted }}. Sent to Dhruv & Bhaskar via WhatsApp with individual approval links."
+            },
+            {
+              "name": "logged_at",
+              "value": "={{ new Date().toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7e2aaa92-639e-4adf-94a9-516a75746cc9",
+      "name": "Write Audit Log",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 176]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook — PO Approval Request": {
+      "main": [
+        [
+          {
+            "node": "Respond 200 Immediately",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Format Approval Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Approval Message": {
+      "main": [
+        [
+          {
+            "node": "Download PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PDF": {
+      "main": [
+        [
+          {
+            "node": "Build Maytapi Payloads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Maytapi Payloads": {
+      "main": [
+        [
+          {
+            "node": "Send PDF — Dhruv",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send PDF — Dhruv": {
+      "main": [
+        [
+          {
+            "node": "Wait 3 Seconds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 3 Seconds": {
+      "main": [
+        [
+          {
+            "node": "Send PDF — Bhaskar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send PDF — Bhaskar": {
+      "main": [
+        [
+          {
+            "node": "Update PO: founder_approval_status = sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update PO: founder_approval_status = sent": {
+      "main": [
+        [
+          {
+            "node": "Write Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "build5-final-v1",
+  "meta": {
+    "instanceId": "df2f0e5c9dbe819a14ac893dfa1b7350e9193fd4a130156c1aff60bb0617bf53"
+  },
+  "tags": [{ "name": "CPS" }]
+}

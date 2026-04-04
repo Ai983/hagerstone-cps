@@ -22,6 +22,7 @@ const VendorRegister = React.lazy(() => import("@/pages/VendorRegister"));
 const VendorStatus = React.lazy(() => import("@/pages/VendorStatus"));
 const VendorUploadQuote = React.lazy(() => import("@/pages/VendorUploadQuote"));
 const InvoiceUpload = React.lazy(() => import("@/pages/InvoiceUpload"));
+const ApprovePoPage = React.lazy(() => import("@/pages/ApprovePoPage"));
 
 const Loader = () => (
   <div className="min-h-screen flex items-center justify-center">
@@ -46,6 +47,7 @@ const App = () => (
               <Route path="/vendor/register" element={<VendorRegister />} />
               <Route path="/vendor/status" element={<VendorStatus />} />
               <Route path="/vendor/upload-quote" element={<VendorUploadQuote />} />
+              <Route path="/approve-po" element={<ApprovePoPage />} />
               <Route path="/login" element={<Login />} />
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />

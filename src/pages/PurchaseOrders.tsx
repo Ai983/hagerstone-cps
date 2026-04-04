@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -215,6 +216,7 @@ export default function PurchaseOrders() {
   const [viewPr, setViewPr] = useState<PrRow | null>(null);
   const [viewApprovedByUser, setViewApprovedByUser] = useState<UserRow | null>(null);
   const [viewPoLineItems, setViewPoLineItems] = useState<PoLineItemRow[]>([]);
+  const [viewPoTokens, setViewPoTokens] = useState<Array<{ id: string; founder_name: string; response: string | null; reason: string | null; used_at: string | null }>>([]);
 
   const [approvalNotes, setApprovalNotes] = useState<string>("");
   const [rejectReason, setRejectReason] = useState<string>("");
@@ -559,9 +561,120 @@ export default function PurchaseOrders() {
       const { error: insLinesErr } = await supabase.from("cps_po_line_items").insert(poLinesPayload);
       if (insLinesErr) throw insLinesErr;
 
-      toast.success(`PO ${String(poNumber)} created — pending procurement head approval`);
+      toast.success(`PO ${String(poNumber)} created — sending to founders for approval`);
       setCreateOpen(false);
       await fetchPoRows();
+
+      /* ── fire-and-forget: PDF + approval tokens + n8n webhook ── */
+      const _lineItemsForPdf = normalizedLineItems;
+      const _subTotal = subTotal;
+      const _gstTotal = gstTotal;
+      const _grandTotal = grandTotal;
+      const _poNumber = String(poNumber);
+      const _supplierId = createSupplierId;
+      const _paymentTerms = createPaymentTerms;
+      const _deliveryDate = createDeliveryDate;
+      const _shipTo = createShipTo;
+      (async () => {
+        try {
+          const origin = window.location.origin;
+
+          /* get supplier details for PDF */
+          let supplierName = "";
+          let supplierGstin: string | null = null;
+          let supplierPhone: string | null = null;
+          if (_supplierId) {
+            const { data: sup } = await supabase
+              .from("cps_suppliers")
+              .select("name,gstin,phone")
+              .eq("id", _supplierId)
+              .maybeSingle();
+            supplierName = (sup as any)?.name ?? "";
+            supplierGstin = (sup as any)?.gstin ?? null;
+            supplierPhone = (sup as any)?.phone ?? null;
+          }
+
+          /* generate PDF */
+          const pdfBlob = buildPoPdf({
+            poNumber: _poNumber,
+            supplierName,
+            supplierGstin,
+            supplierPhone,
+            paymentTerms: _paymentTerms || null,
+            deliveryDate: _deliveryDate || null,
+            shipToAddress: _shipTo || null,
+            subTotal: _subTotal,
+            gstAmount: _gstTotal,
+            grandTotal: _grandTotal,
+            lineItems: _lineItemsForPdf.map((li) => ({
+              description: li.description,
+              brand: li.brand,
+              quantity: li.quantity,
+              unit: li.unit,
+              rate: li.rate,
+              gst_percent: li.gst_percent,
+              gst_amount: li.gst_amount,
+              total_value: li.total_value,
+              hsn_code: li.hsn_code,
+            })),
+          });
+
+          /* upload PDF to Supabase Storage */
+          const poPdfUrl = await uploadPoPdf(supabase, poId, _poNumber, pdfBlob);
+
+          /* insert approval tokens */
+          const { data: insertedTokens, error: tokErr } = await supabase
+            .from("cps_po_approval_tokens")
+            .insert([
+              { po_id: poId, founder_name: "Dhruv" },
+              { po_id: poId, founder_name: "Bhaskar" },
+            ])
+            .select("token,founder_name");
+          if (tokErr || !insertedTokens) throw tokErr;
+
+          const approvalLinks = (insertedTokens as Array<{ token: string; founder_name: string }>).map((t) => ({
+            founder_name: t.founder_name,
+            link: `${origin}/approve-po?token=${t.token}`,
+          }));
+
+          /* fetch webhook URL */
+          const { data: cfgRow } = await supabase
+            .from("cps_config")
+            .select("value")
+            .eq("key", "webhook_po_founder_approval")
+            .maybeSingle();
+          const webhookUrl = (cfgRow as any)?.value as string | undefined;
+          if (!webhookUrl) return;
+
+          /* mark PO as pending */
+          await supabase
+            .from("cps_purchase_orders")
+            .update({ founder_approval_status: "pending" })
+            .eq("id", poId);
+
+          /* POST to n8n */
+          await fetch(webhookUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              event: "po_created",
+              po_id: poId,
+              po_number: _poNumber,
+              supplier_name: supplierName,
+              grand_total: _grandTotal,
+              gst_amount: _gstTotal,
+              total_value: _subTotal,
+              payment_terms: _paymentTerms || null,
+              delivery_date: _deliveryDate || null,
+              po_pdf_url: poPdfUrl,
+              dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
+              bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
+            }),
+          });
+        } catch (_) {
+          /* non-blocking — silently ignore */
+        }
+      })();
     } catch (e: any) {
       toast.error(e?.message || "Failed to create PO");
     } finally {
@@ -579,6 +692,7 @@ export default function PurchaseOrders() {
     setViewPr(null);
     setViewApprovedByUser(null);
     setViewPoLineItems([]);
+    setViewPoTokens([]);
     setApprovalNotes("");
     setRejectReason("");
     try {
@@ -599,7 +713,7 @@ export default function PurchaseOrders() {
       const prId = po.pr_id;
       const approvedBy = po.approved_by;
 
-      const [supplierRes, rfqRes, prRes, userRes, lineRes, configRes, scheduleRes] = await Promise.all([
+      const [supplierRes, rfqRes, prRes, userRes, lineRes, configRes, scheduleRes, tokensRes] = await Promise.all([
         supplierId ? supabase.from("cps_suppliers").select("id,name,gstin,phone,email,address_text,city,state").eq("id", supplierId).single() : Promise.resolve({ data: null, error: null }),
         rfqId ? supabase.from("cps_rfqs").select("id,rfq_number").eq("id", rfqId).single() : Promise.resolve({ data: null, error: null }),
         prId ? supabase.from("cps_purchase_requisitions").select("id,project_site,project_code").eq("id", prId).single() : Promise.resolve({ data: null, error: null }),
@@ -618,6 +732,11 @@ export default function PurchaseOrders() {
           .select("id,milestone_name,milestone_order,amount,percentage,due_trigger,due_date,status,paid_at,payment_reference,payment_mode")
           .eq("po_id", poId)
           .order("milestone_order", { ascending: true }),
+        supabase
+          .from("cps_po_approval_tokens")
+          .select("id,founder_name,response,reason,used_at")
+          .eq("po_id", poId)
+          .order("created_at", { ascending: true }),
       ]);
 
       if ((supplierRes as any).error) throw (supplierRes as any).error;
@@ -632,6 +751,7 @@ export default function PurchaseOrders() {
       setViewApprovedByUser((userRes as any).data as UserRow | null);
       setViewPoLineItems((lineRes as any).data as PoLineItemRow[]);
       setViewPaymentSchedule(((scheduleRes as any).data ?? []) as PaymentScheduleRow[]);
+      setViewPoTokens(((tokensRes as any).data ?? []) as Array<{ id: string; founder_name: string; response: string | null; reason: string | null; used_at: string | null }>);
       const tncs: Record<string, string> = {};
       ((configRes as any).data ?? []).forEach((row: any) => {
         tncs[String(row.key)] = String(row.value ?? "");
@@ -1523,8 +1643,53 @@ export default function PurchaseOrders() {
 
                 {/* Approval section */}
                 <div className="border-t border-border/60 pt-4 space-y-4">
-                  {/* Founder feedback block */}
-                  {viewPo.founder_approval_status === "approved" && (
+                  {/* Founder feedback — individual cards per founder */}
+                  {viewPoTokens.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Founder Responses</p>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        {viewPoTokens.map((tok) => {
+                          const responded = !!tok.used_at;
+                          const approved = tok.response === "approved";
+                          const rejected = tok.response === "rejected";
+                          return (
+                            <div
+                              key={tok.id}
+                              className={`rounded-lg border p-3 space-y-1 ${
+                                approved ? "border-green-200 bg-green-50" :
+                                rejected ? "border-red-200 bg-red-50" :
+                                "border-amber-200 bg-amber-50"
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-base">{approved ? "✅" : rejected ? "❌" : "⏳"}</span>
+                                <span className={`text-sm font-semibold ${
+                                  approved ? "text-green-800" : rejected ? "text-red-800" : "text-amber-800"
+                                }`}>
+                                  {tok.founder_name}
+                                </span>
+                                <span className={`ml-auto text-xs font-medium ${
+                                  approved ? "text-green-700" : rejected ? "text-red-700" : "text-amber-700"
+                                }`}>
+                                  {approved ? "Approved" : rejected ? "Rejected" : "Awaiting"}
+                                </span>
+                              </div>
+                              {responded && tok.reason && (
+                                <p className={`text-xs italic pl-6 ${approved ? "text-green-700" : "text-red-700"}`}>
+                                  "{tok.reason}"
+                                </p>
+                              )}
+                              {!responded && (
+                                <p className="text-xs text-amber-600 pl-6">Form sent — waiting for response</p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {/* Fallback for POs without tokens (legacy or manual) */}
+                  {viewPoTokens.length === 0 && viewPo.founder_approval_status === "approved" && (
                     <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-1">
                       <span className="text-sm font-semibold text-green-800">✅ Founders Approved</span>
                       {viewPo.founder_approval_reason && (
@@ -1532,17 +1697,12 @@ export default function PurchaseOrders() {
                       )}
                     </div>
                   )}
-                  {viewPo.founder_approval_status === "rejected" && (
+                  {viewPoTokens.length === 0 && viewPo.founder_approval_status === "rejected" && (
                     <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-1">
                       <span className="text-sm font-semibold text-red-800">❌ Founders Rejected</span>
                       {viewPo.founder_approval_reason && (
                         <p className="text-sm text-red-700 italic">"{viewPo.founder_approval_reason}"</p>
                       )}
-                    </div>
-                  )}
-                  {(viewPo.founder_approval_status === "sent" || viewPo.founder_approval_status === "pending") && (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
-                      <p className="text-sm text-amber-800">⏳ Awaiting founder response — form sent to founders</p>
                     </div>
                   )}
 
@@ -1553,17 +1713,15 @@ export default function PurchaseOrders() {
                         <div className="text-sm text-muted-foreground">Review founder feedback above, then send to supplier.</div>
                       </div>
                       <div className="flex gap-3">
-                        {viewPo.founder_approval_status === "rejected" && (
-                          <Button
-                            onClick={() => {
-                              const reason = window.prompt("Rejection reason:");
-                              if (reason !== null) commitRejectWithReason(reason);
-                            }}
-                            variant="destructive"
-                          >
-                            Reject PO
-                          </Button>
-                        )}
+                        <Button
+                          onClick={() => {
+                            const reason = window.prompt("Rejection reason:");
+                            if (reason !== null) commitRejectWithReason(reason);
+                          }}
+                          variant="destructive"
+                        >
+                          Reject PO
+                        </Button>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <span>
