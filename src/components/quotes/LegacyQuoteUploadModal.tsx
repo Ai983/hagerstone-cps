@@ -113,15 +113,8 @@ const extractQuoteDetails = async (
           source: { type: "base64", media_type: mediaType, data: base64 },
         };
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
+  const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
+    body: {
       model: "claude-opus-4-5",
       max_tokens: 2000,
       messages: [
@@ -173,11 +166,11 @@ Rules:
           ],
         },
       ],
-    }),
+    },
   });
 
-  const data = await response.json();
-  const raw = data.content?.[0]?.text || "{}";
+  if (fnError) throw new Error("Claude proxy error: " + fnError.message);
+  const raw = data?.content?.[0]?.text || "{}";
   return JSON.parse(raw.replace(/```json|```/g, "").trim()) as ExtractedData;
 };
 

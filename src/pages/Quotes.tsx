@@ -557,12 +557,6 @@ export default function Quotes() {
   };
 
   const parseQuoteWithAI = async (url: string, prItems: PrLineItem[]) => {
-    const apiKey = (import.meta as any).env?.VITE_ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      toast.error("Anthropic API key not configured. Add VITE_ANTHROPIC_API_KEY to .env");
-      return null;
-    }
-
     try {
       // Step 1: Download the file as blob
       const fileResponse = await fetch(url);
@@ -664,30 +658,18 @@ Rules:
 - confidence = 0-100 based on how clearly readable the data was`,
       });
 
-      // Step 5: Call Claude API
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
+      // Step 5: Call Claude API via Edge Function (server-side key)
+      const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
+        body: {
           model: "claude-sonnet-4-20250514",
           max_tokens: 4000,
           messages: [{ role: "user", content }],
-        }),
+        },
       });
+      if (fnError) throw new Error("Claude proxy error: " + fnError.message);
+      if (data?.error) throw new Error("Claude API error: " + data.error);
 
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error("Claude API error:", response.status, errText);
-        throw new Error(`API returned ${response.status}: ${errText}`);
-      }
-
-      const data = await response.json();
-      const text = data.content?.[0]?.text ?? "";
+      const text = data?.content?.[0]?.text ?? "";
       console.log("Claude raw response:", text);
 
       const clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();

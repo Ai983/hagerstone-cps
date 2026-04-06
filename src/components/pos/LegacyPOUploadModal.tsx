@@ -173,15 +173,8 @@ export default function LegacyPOUploadModal({ open, onClose, onSuccess }: Legacy
         ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64Data } }
         : { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } };
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
+      const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
+        body: {
           model: "claude-opus-4-5",
           max_tokens: 1024,
           messages: [
@@ -218,11 +211,10 @@ Rules:
               ],
             },
           ],
-        }),
+        },
       });
-
-      const data = await response.json();
-      const rawText = data.content?.[0]?.text || "{}";
+      if (fnError) throw fnError;
+      const rawText = data?.content?.[0]?.text || "{}";
       const cleanJson = rawText.replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(cleanJson);
 
@@ -274,15 +266,8 @@ Rules:
         reader.readAsDataURL(file);
       });
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify({
+      const { data, error: fnErr } = await supabase.functions.invoke("claude-proxy", {
+        body: {
           model: "claude-opus-4-5",
           max_tokens: 300,
           messages: [{
@@ -313,11 +298,10 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
               },
             ],
           }],
-        }),
+        },
       });
-
-      const data = await response.json();
-      const raw = data.content?.[0]?.text || "{}";
+      if (fnErr) throw fnErr;
+      const raw = data?.content?.[0]?.text || "{}";
       const clean = raw.replace(/```json|```/g, "").trim();
       const result = JSON.parse(clean);
 

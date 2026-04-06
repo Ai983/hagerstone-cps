@@ -92,15 +92,9 @@ const extractQuoteWithAI = async (file: File, rfqItems: LineItem[]) => {
     ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
     : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
+  const { supabase } = await import("@/integrations/supabase/client");
+  const { data, error } = await supabase.functions.invoke("claude-proxy", {
+    body: {
       model: "claude-opus-4-5",
       max_tokens: 1500,
       messages: [{
@@ -132,11 +126,11 @@ Return ONLY valid JSON (no markdown):
           },
         ],
       }],
-    }),
+    },
   });
 
-  const data = await response.json();
-  const raw = data.content?.[0]?.text || "{}";
+  if (error) throw new Error("AI parse error: " + error.message);
+  const raw = data?.content?.[0]?.text || "{}";
   return JSON.parse(raw.replace(/```json|```/g, "").trim());
 };
 
@@ -258,7 +252,7 @@ export default function VendorUploadQuote() {
     if (!f) return;
     if (f.size > MAX_FILE_SIZE) { toast.error("File too large — maximum 25 MB"); return; }
     setFile(f);
-    const hasApiKey = !!import.meta.env.VITE_ANTHROPIC_API_KEY;
+    const hasApiKey = true; // key is server-side in Edge Function
     if (!hasApiKey) { setTimeout(goNext, 400); return; }
     setAiStatus("extracting");
     try {

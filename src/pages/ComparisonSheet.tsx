@@ -648,12 +648,6 @@ export default function ComparisonSheetPage() {
     if (!sheet || !rfq || suppliers.length === 0) return;
     setAiLoading(true);
     try {
-      const apiKey = (import.meta as any).env?.VITE_ANTHROPIC_API_KEY;
-      if (!apiKey) {
-        toast.error("AI API key not configured");
-        return;
-      }
-
       const comparisonData = {
         rfq_number: rfq.rfq_number,
         title: rfq.title,
@@ -684,21 +678,13 @@ export default function ComparisonSheetPage() {
         })),
       };
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
+      const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
+        body: {
           model: "claude-sonnet-4-20250514",
           max_tokens: 1024,
-          messages: [
-            {
-              role: "user",
-              content: `You are a procurement advisor for Hagerstone International, a construction/MEP/EPC company. Analyze the following supplier comparison data and provide a recommendation.
+          messages: [{
+            role: "user",
+            content: `You are a procurement advisor for Hagerstone International, a construction/MEP/EPC company. Analyze the following supplier comparison data and provide a recommendation.
 
 Comparison Data:
 ${JSON.stringify(comparisonData, null, 2)}
@@ -712,18 +698,12 @@ Provide a JSON response with this exact structure:
   "potential_savings": number or null (estimated ₹ savings vs benchmark if applicable),
   "disclaimer": "AI-generated recommendation for reference only. Human review and approval required."
 }`,
-            },
-          ],
-        }),
+          }],
+        },
       });
+      if (fnError) throw new Error("Claude proxy error: " + fnError.message);
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`AI API error: ${errText}`);
-      }
-
-      const result = await response.json();
-      const content = result.choices?.[0]?.message?.content ?? result.content?.[0]?.text ?? "";
+      const content = result?.content?.[0]?.text ?? "";
       const jsonMatch = content.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("Could not parse AI response");
       const parsed = JSON.parse(jsonMatch[0]);

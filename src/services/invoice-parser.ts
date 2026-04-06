@@ -92,8 +92,6 @@ export async function parseInvoiceWithClaude(
   mimeType: string,
   fileName: string,
 ): Promise<ParsedInvoice> {
-  const key = import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined;
-  if (!key) throw new Error("VITE_ANTHROPIC_API_KEY is not set");
 
   const isPdf = mimeType === "application/pdf";
   const isImage = mimeType.startsWith("image/");
@@ -127,32 +125,19 @@ export async function parseInvoiceWithClaude(
     text: `Parse this Indian invoice/bill. Filename: "${fileName}". Extract all vendor details, invoice details, and line items. Return ONLY the JSON object, nothing else.`,
   });
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({
+  const { supabase } = await import("@/integrations/supabase/client");
+  const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
+    body: {
       model: "claude-sonnet-4-20250514",
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content }],
-    }),
+    },
   });
+  if (fnError) throw new Error("Claude proxy error: " + fnError.message);
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Claude API error: ${response.status} — ${err}`);
-  }
-
-  const data = (await response.json()) as {
-    content?: Array<{ type: string; text?: string }>;
-  };
   const text =
-    (data.content ?? [])
+    ((data?.content ?? []) as Array<{ type: string; text?: string }>)
       .filter((c) => c.type === "text")
       .map((c) => c.text ?? "")
       .join("") ?? "";
