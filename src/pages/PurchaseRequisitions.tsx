@@ -1246,17 +1246,21 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      Any special instructions? <span className="text-muted-foreground/60">/ कोई विशेष निर्देश?</span>
+                      Any special instructions? <span className="text-muted-foreground/60">/ कोई विशेष निर्देश?</span>{' '}
+                      <span className="text-primary">*</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Optional — skip to submit / वैकल्पिक — छोड़ें या भरें</p>
+                    <p className="text-sm text-muted-foreground">Required — describe delivery/quality notes / आवश्यक — डिलीवरी/गुणवत्ता निर्देश लिखें</p>
                   </div>
                   <Textarea
                     autoFocus
                     value={wizNotes}
                     onChange={(e) => setWizNotes(e.target.value)}
                     placeholder="e.g. ISI marked only, deliver before 9am, contact site manager on arrival..."
-                    className="text-base min-h-[120px] resize-none"
+                    className={`text-base min-h-[120px] resize-none ${!wizNotes.trim() ? 'border-destructive/50' : ''}`}
                   />
+                  {!wizNotes.trim() && (
+                    <p className="text-xs text-destructive">Please add instructions before submitting / कृपया निर्देश भरें</p>
+                  )}
                   <div className="flex items-center gap-3">
                     <Button
                       variant="outline"
@@ -1267,7 +1271,7 @@ export default function PurchaseRequisitions() {
                     </Button>
                     <Button
                       className="h-12 px-8 rounded-lg"
-                      disabled={wizSubmitting}
+                      disabled={wizSubmitting || !wizNotes.trim()}
                       onClick={submitWizard}
                     >
                       {wizSubmitting ? "Submitting..." : (lang === 'hi' ? 'अनुरोध जमा करें' : 'Submit PR')}
