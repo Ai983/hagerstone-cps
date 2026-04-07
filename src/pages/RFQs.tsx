@@ -985,7 +985,7 @@ export default function RFQs() {
       </Card>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-4xl p-0">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-4xl p-0">
           <div className="overflow-y-auto max-h-[80vh] pr-2">
           <div className="p-6">
             <DialogHeader>
@@ -1155,7 +1155,7 @@ export default function RFQs() {
 
       {/* Review & Send Dialog */}
       <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
-        <DialogContent className="max-w-3xl p-0">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-3xl p-0">
           <div className="overflow-y-auto max-h-[85vh]">
             <div className="p-6">
               <DialogHeader>

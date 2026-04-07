@@ -488,7 +488,7 @@ export default function ItemMaster() {
 
       <div className="hidden lg:block">
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -668,7 +668,7 @@ export default function ItemMaster() {
       </Tabs>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-3xl">
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit Item" : "Add Item"}</DialogTitle>
             <DialogDescription>Update benchmark and procurement details.</DialogDescription>

@@ -756,7 +756,7 @@ export default function PurchaseRequisitions() {
 
       {/* Typeform Wizard Overlay */}
       {wizardOpen && (
-        <div className="fixed inset-0 z-50 bg-background flex flex-col">
+        <div className="fixed inset-0 z-[200] bg-background flex flex-col">
           {/* Top bar: progress + close */}
           <div className="shrink-0 px-6 pt-4 pb-2">
             <div className="flex items-center justify-between mb-3">
@@ -1311,7 +1311,7 @@ export default function PurchaseRequisitions() {
 
       {/* Detail Dialog */}
       <Dialog open={detailOpen} onOpenChange={(v) => setDetailOpen(v)}>
-        <DialogContent className="max-w-4xl p-0">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-4xl p-0">
           <div className="overflow-y-auto max-h-[80vh] pr-2">
           <div className="p-6">
             {detailPr && (
@@ -1393,7 +1393,7 @@ export default function PurchaseRequisitions() {
 
       {/* Document View Dialog */}
       <Dialog open={docOpen} onOpenChange={(v) => setDocOpen(v)}>
-        <DialogContent className="max-w-4xl p-0 max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-4xl p-0">
           <div className="p-8 print:p-4" id="pr-document">
             {docPr && (
               <div className="space-y-6">

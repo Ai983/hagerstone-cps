@@ -1059,7 +1059,7 @@ Rules:
 
       <div className="hidden lg:block">
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -1293,7 +1293,7 @@ Rules:
 
       {/* Review Quote Dialog — Full Screen Two Panel */}
       <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
-        <DialogContent className="max-w-7xl h-[90vh] p-0 flex flex-col">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-7xl h-[90vh] p-0 flex flex-col">
           {reviewQuote && (
             <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
               {/* LEFT PANEL — File Preview */}

@@ -437,7 +437,7 @@ export default function SupplierMaster() {
 
       <div className="hidden lg:block">
       <Card>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -683,7 +683,7 @@ export default function SupplierMaster() {
 
       {/* Add/Edit Supplier Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-3xl">
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit Supplier" : "Add New Supplier"}</DialogTitle>
             <DialogDescription>{editingId ? "Update supplier details." : "Create a new supplier record."}</DialogDescription>

@@ -881,7 +881,7 @@ export default function DeliveryTracker() {
 
       {/* ── GRN Dialog ─────────────────────────────────────────────────────── */}
       <Dialog open={grnOpen} onOpenChange={setGrnOpen}>
-        <DialogContent className="max-w-5xl p-0">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-5xl p-0">
           <div className="overflow-y-auto max-h-[80vh] pr-2">
           <DialogHeader className="px-6 pt-6">
             <DialogTitle>Goods Received Note — {grnPo?.po_number}</DialogTitle>

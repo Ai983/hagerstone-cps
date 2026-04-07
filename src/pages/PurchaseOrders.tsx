@@ -1253,7 +1253,7 @@ export default function PurchaseOrders() {
 
       {/* Create PO Dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-5xl p-0">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-5xl p-0">
           <div className="overflow-y-auto max-h-[80vh] pr-2">
           <DialogHeader className="px-6 pt-6">
             <DialogTitle>Create Purchase Order</DialogTitle>
@@ -1396,7 +1396,7 @@ export default function PurchaseOrders() {
 
       {/* PO Detail Dialog */}
       <Dialog open={viewOpen} onOpenChange={setViewOpen}>
-        <DialogContent className="max-w-4xl p-0">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-4xl p-0">
           <div className="overflow-y-auto max-h-[80vh] pr-2">
           <DialogHeader className="px-6 pt-6">
             <DialogTitle>Purchase Order</DialogTitle>
