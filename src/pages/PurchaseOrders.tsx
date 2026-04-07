@@ -670,6 +670,8 @@ export default function PurchaseOrders() {
               po_pdf_url: poPdfUrl,
               dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
               bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
+              dhruv_whatsapp: "919910820078",
+              bhaskar_whatsapp: "919953001048",
             }),
           });
         } catch (_) {

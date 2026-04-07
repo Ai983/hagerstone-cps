@@ -505,6 +505,8 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
               po_pdf_url: fileUrl,
               uploaded_by: user.name ?? user.email ?? "",
               uploaded_at: now,
+              dhruv_whatsapp: "919910820078",
+              bhaskar_whatsapp: "919953001048",
             }),
           });
           webhookSent = true;

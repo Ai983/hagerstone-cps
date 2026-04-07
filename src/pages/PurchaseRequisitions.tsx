@@ -82,6 +82,8 @@ type LineItem = {
   preferredBrand: string;
   requiredFor: string;
   materialCode: string;
+  color: string;
+  referenceImages: File[];
   _isNewItem?: boolean;
   _autoApproved?: boolean;
   _newItemData?: { category: string; description: string };
@@ -207,6 +209,8 @@ export default function PurchaseRequisitions() {
     preferredBrand: "",
     requiredFor: "",
     materialCode: "",
+    color: "",
+    referenceImages: [],
   });
 
   const twoWeeksFromNow = () => {
@@ -473,16 +477,37 @@ export default function PurchaseRequisitions() {
 
       const prId = (prInsert as any).id as string;
 
-      const linePayload = validLines.map((li, idx) => ({
-        pr_id: prId,
-        item_id: li.item_id,
-        description: li.description.trim(),
-        quantity: Number(li.quantity ?? 1),
-        unit: li.unit || "nos",
-        specs: li.requiredFor.trim() || null,
-        preferred_brands: li.preferredBrand.trim() ? li.preferredBrand.split(",").map(s => s.trim()).filter(Boolean) : null,
-        sort_order: idx,
-      }));
+      // Upload reference images to Supabase storage
+      const imageUrlsByRow: Record<string, string[]> = {};
+      for (const li of validLines) {
+        if (li.referenceImages.length === 0) continue;
+        const urls: string[] = [];
+        for (const file of li.referenceImages) {
+          const ext = file.name.split(".").pop() ?? "jpg";
+          const path = `pr-images/${prId}/${li.rowKey}-${Date.now()}.${ext}`;
+          const { error: upErr } = await supabase.storage.from("cps-quotes").upload(path, file, { upsert: true });
+          if (!upErr) {
+            const { data: pubData } = supabase.storage.from("cps-quotes").getPublicUrl(path);
+            if (pubData?.publicUrl) urls.push(pubData.publicUrl);
+          }
+        }
+        imageUrlsByRow[li.rowKey] = urls;
+      }
+
+      const linePayload = validLines.map((li, idx) => {
+        const imgUrls = imageUrlsByRow[li.rowKey] ?? [];
+        const specParts = [li.requiredFor.trim(), li.color.trim() ? `Colour: ${li.color.trim()}` : "", imgUrls.length ? `Images: ${imgUrls.join(",")}` : ""].filter(Boolean);
+        return {
+          pr_id: prId,
+          item_id: li.item_id,
+          description: li.description.trim(),
+          quantity: Number(li.quantity ?? 1),
+          unit: li.unit || "nos",
+          specs: specParts.join(" | ") || null,
+          preferred_brands: li.preferredBrand.trim() ? li.preferredBrand.split(",").map(s => s.trim()).filter(Boolean) : null,
+          sort_order: idx,
+        };
+      });
 
       const { error: linesErr } = await supabase.from("cps_pr_line_items").insert(linePayload);
       if (linesErr) throw new Error("Failed to insert items: " + linesErr.message);
@@ -508,7 +533,7 @@ export default function PurchaseRequisitions() {
               approved_item_id: li.item_id,
             } as any);
           } else {
-            await supabase.from("cps_pending_item_requests").insert({
+            const { error: pendingErr } = await supabase.from("cps_pending_item_requests").insert({
               item_name: li.description,
               category: li._newItemData?.category || null,
               unit: li.unit,
@@ -518,11 +543,11 @@ export default function PurchaseRequisitions() {
               requested_by_name: user.name ?? user.email ?? "",
               requested_by_role: user.role ?? null,
               pr_id: prId,
-              pr_line_item_description: li.description,
               status: "pending",
             } as any);
+            if (pendingErr) console.error("Failed to create pending item request:", pendingErr.message);
           }
-        } catch { /* non-blocking */ }
+        } catch (e) { console.error("Pending item request error:", e); }
       }
 
       try {
@@ -765,10 +790,10 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      {lang === 'hi' ? 'यह किस प्रोजेक्ट के लिए है?' : 'Which project is this for?'}{' '}
+                      Which project is this for? <span className="text-muted-foreground/60">/ यह किस प्रोजेक्ट के लिए है?</span>{' '}
                       <span className="text-primary">*</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Select a project to auto-fill the delivery address</p>
+                    <p className="text-sm text-muted-foreground">Select a project to auto-fill the delivery address / प्रोजेक्ट चुनें</p>
                   </div>
                   <Select
                     value={wizProjectId}
@@ -820,9 +845,9 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      {lang === 'hi' ? 'डिलीवरी का पता' : 'Delivery location for this project'}
+                      Delivery location <span className="text-muted-foreground/60">/ डिलीवरी का पता</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Pre-filled from project — edit if needed</p>
+                    <p className="text-sm text-muted-foreground">Pre-filled from project — edit if needed / प्रोजेक्ट से भरा है — जरूरत हो तो बदलें</p>
                   </div>
                   <Textarea
                     autoFocus
@@ -852,10 +877,10 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      {lang === 'hi' ? 'इन सामग्रियों की कब जरूरत है?' : 'When do you need these materials?'}{' '}
+                      When do you need these? <span className="text-muted-foreground/60">/ इन सामग्रियों की कब जरूरत है?</span>{' '}
                       <span className="text-primary">*</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Default is 2 weeks from today</p>
+                    <p className="text-sm text-muted-foreground">Default is 2 weeks from today / डिफ़ॉल्ट: आज से 2 हफ्ते बाद</p>
                   </div>
                   <Input
                     autoFocus
@@ -886,9 +911,9 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      {lang === 'hi' ? 'आपको कौन सी सामग्री चाहिए?' : 'What materials do you need?'}
+                      What materials do you need? <span className="text-muted-foreground/60">/ आपको कौन सी सामग्री चाहिए?</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Search item master or type manually</p>
+                    <p className="text-sm text-muted-foreground">Search item master or type manually / आइटम खोजें या मैन्युअल लिखें</p>
                   </div>
 
                   <div className="space-y-4 max-h-[55vh] overflow-y-auto pr-1">
@@ -1064,7 +1089,7 @@ export default function PurchaseRequisitions() {
 
                         <div className="grid grid-cols-3 gap-3">
                           <div className="space-y-1">
-                            <Label className="text-xs text-muted-foreground">{t("Quantity")}</Label>
+                            <Label className="text-xs text-muted-foreground">Quantity / <span className="text-muted-foreground/70">मात्रा</span></Label>
                             <Input
                               type="number"
                               min={1}
@@ -1074,7 +1099,7 @@ export default function PurchaseRequisitions() {
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs text-muted-foreground">{t("Unit")}</Label>
+                            <Label className="text-xs text-muted-foreground">Unit / <span className="text-muted-foreground/70">इकाई</span></Label>
                             <Input
                               value={li.unit}
                               onChange={(e) => setWizLineItems((prev) => prev.map((r) => r.rowKey === li.rowKey ? { ...r, unit: e.target.value } : r))}
@@ -1082,7 +1107,7 @@ export default function PurchaseRequisitions() {
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs text-muted-foreground">{t("Preferred Brand")}</Label>
+                            <Label className="text-xs text-muted-foreground">Brand / <span className="text-muted-foreground/70">ब्रांड</span></Label>
                             <Input
                               value={li.preferredBrand}
                               onChange={(e) => setWizLineItems((prev) => prev.map((r) => r.rowKey === li.rowKey ? { ...r, preferredBrand: e.target.value } : r))}
@@ -1091,14 +1116,102 @@ export default function PurchaseRequisitions() {
                             />
                           </div>
                         </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs text-muted-foreground">{t("Required for Which Work")}</Label>
-                          <Input
-                            value={li.requiredFor}
-                            onChange={(e) => setWizLineItems((prev) => prev.map((r) => r.rowKey === li.rowKey ? { ...r, requiredFor: e.target.value } : r))}
-                            placeholder="e.g. Plumbing work on Floor 3, Block B"
-                            className="h-11"
-                          />
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <Label className="text-xs text-muted-foreground">Required for / <span className="text-muted-foreground/70">किस कार्य के लिए</span></Label>
+                            <Input
+                              value={li.requiredFor}
+                              onChange={(e) => setWizLineItems((prev) => prev.map((r) => r.rowKey === li.rowKey ? { ...r, requiredFor: e.target.value } : r))}
+                              placeholder="e.g. Floor 3, Block B"
+                              className="h-11"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs text-muted-foreground">Colour / <span className="text-muted-foreground/70">रंग</span></Label>
+                            <Input
+                              value={li.color}
+                              onChange={(e) => setWizLineItems((prev) => prev.map((r) => r.rowKey === li.rowKey ? { ...r, color: e.target.value } : r))}
+                              placeholder="e.g. White, RAL 9010"
+                              className="h-11"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Reference image upload */}
+                        <div className="space-y-2">
+                          <Label className="text-xs text-muted-foreground">
+                            Reference Photos / <span className="text-muted-foreground/70">संदर्भ फ़ोटो</span>
+                            <span className="ml-1 text-muted-foreground/50">({li.referenceImages.length}/5)</span>
+                          </Label>
+                          {li.referenceImages.length < 5 && (
+                            <div className="flex gap-2">
+                              <label className="flex-1 cursor-pointer">
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  capture="environment"
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file) return;
+                                    setWizLineItems((prev) => prev.map((r) =>
+                                      r.rowKey === li.rowKey && r.referenceImages.length < 5
+                                        ? { ...r, referenceImages: [...r.referenceImages, file] }
+                                        : r
+                                    ));
+                                    e.target.value = "";
+                                  }}
+                                />
+                                <div className="h-10 flex items-center justify-center gap-1.5 rounded-lg border border-border/60 bg-muted/30 hover:bg-muted/60 transition-colors text-xs text-muted-foreground font-medium">
+                                  📷 Camera / कैमरा
+                                </div>
+                              </label>
+                              <label className="flex-1 cursor-pointer">
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  multiple
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const files = Array.from(e.target.files ?? []);
+                                    setWizLineItems((prev) => prev.map((r) => {
+                                      if (r.rowKey !== li.rowKey) return r;
+                                      const remaining = 5 - r.referenceImages.length;
+                                      return { ...r, referenceImages: [...r.referenceImages, ...files.slice(0, remaining)] };
+                                    }));
+                                    e.target.value = "";
+                                  }}
+                                />
+                                <div className="h-10 flex items-center justify-center gap-1.5 rounded-lg border border-border/60 bg-muted/30 hover:bg-muted/60 transition-colors text-xs text-muted-foreground font-medium">
+                                  🖼 Gallery / गैलरी
+                                </div>
+                              </label>
+                            </div>
+                          )}
+                          {li.referenceImages.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {li.referenceImages.map((file, imgIdx) => (
+                                <div key={imgIdx} className="relative group">
+                                  <img
+                                    src={URL.createObjectURL(file)}
+                                    alt={`ref-${imgIdx + 1}`}
+                                    className="h-16 w-16 object-cover rounded-lg border border-border/60"
+                                  />
+                                  <button
+                                    type="button"
+                                    className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-destructive text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                    onClick={() => setWizLineItems((prev) => prev.map((r) =>
+                                      r.rowKey === li.rowKey
+                                        ? { ...r, referenceImages: r.referenceImages.filter((_, i) => i !== imgIdx) }
+                                        : r
+                                    ))}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1133,9 +1246,9 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      {lang === 'hi' ? 'कोई विशेष निर्देश?' : 'Any special instructions?'}
+                      Any special instructions? <span className="text-muted-foreground/60">/ कोई विशेष निर्देश?</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Optional — press Enter or skip to submit</p>
+                    <p className="text-sm text-muted-foreground">Optional — skip to submit / वैकल्पिक — छोड़ें या भरें</p>
                   </div>
                   <Textarea
                     autoFocus
