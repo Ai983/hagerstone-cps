@@ -101,14 +101,20 @@ const formatIndianDate = (d: string | null | undefined) => {
   if (!d) return "—";
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return "—";
-  return dt.toLocaleDateString("en-IN");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${dt.getFullYear()}`;
 };
 
 const formatIndianDateTime = (d: string | null | undefined) => {
   if (!d) return "—";
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return "—";
-  return dt.toLocaleString("en-IN");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const min = String(dt.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm}/${dt.getFullYear()} ${hh}:${min}`;
 };
 
 const rpcResultToString = (data: unknown) => {
@@ -892,10 +898,19 @@ export default function RFQs() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">{formatIndianDateTime(r.created_at)}</TableCell>
                       <TableCell className="text-right">
-                        {r.status === "draft" ? (
+                        {r.status === "draft" && total === 0 ? (
                           <Button size="sm" onClick={() => openReview(r)}>
                             Review &amp; Send
                           </Button>
+                        ) : r.status === "draft" && total > 0 ? (
+                          <div className="flex flex-col items-end gap-1">
+                            <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
+                              View Quotes ({total}) →
+                            </Button>
+                            <Button variant="ghost" size="sm" className="text-xs h-6" onClick={() => openReview(r)}>
+                              Send to suppliers
+                            </Button>
+                          </div>
                         ) : canCompare ? (
                           <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
                             Compare →
@@ -966,8 +981,10 @@ export default function RFQs() {
                         )}
                         <span className="text-xs text-muted-foreground">Due {formatIndianDateTime(r.deadline)}</span>
                       </div>
-                      {r.status === "draft" ? (
+                      {r.status === "draft" && total === 0 ? (
                         <Button size="sm" onClick={() => openReview(r)}>Review &amp; Send</Button>
+                      ) : r.status === "draft" && total > 0 ? (
+                        <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>View Quotes ({total}) →</Button>
                       ) : ["sent", "reminder_1", "reminder_2"].includes(r.status) ? (
                         <Button variant="outline" size="sm" onClick={() => openReview(r)}>View Dispatch</Button>
                       ) : canCompare ? (
@@ -1300,6 +1317,15 @@ export default function RFQs() {
                           </div>
                         )}
                       </>
+                    )}
+
+                    {/* No category match guidance */}
+                    {matchedSuppliers.length === 0 && reviewRfq?.status === "draft" && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800 mb-2">
+                        {reviewRfqCategories.length > 0
+                          ? `No registered vendors found for category "${reviewRfqCategories.join(", ")}". Search any vendor by name above — all active suppliers are searchable.`
+                          : "General RFQ — no category filter. Search vendors by name above."}
+                      </div>
                     )}
 
                     {/* Supplier rows */}

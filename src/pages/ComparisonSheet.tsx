@@ -1602,6 +1602,24 @@ Provide a JSON response with this exact structure:
         </CardContent>
       </Card>
 
+      {/* Single-quote bypass — if only 1 quote received, allow direct PO */}
+      {canApprove && sheet.status !== "approved" && sheet.status !== "rejected" && (sheet.total_quotes_received ?? 0) === 1 && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardContent className="py-4">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <p className="text-sm font-semibold text-amber-900">Single Quote Received</p>
+                <p className="text-xs text-amber-700 mt-0.5">Only 1 quote was received for this RFQ. You can bypass the standard comparison and proceed directly to PO creation.</p>
+              </div>
+              <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
+                onClick={createPO} disabled={creatingPO}>
+                {creatingPO ? "Creating PO..." : "Proceed Directly to PO →"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Approval Section — visible to procurement_head / management after review */}
       {canApprove && (manualStatus === "reviewed" || manualStatus === "sent_for_approval") && sheet.status !== "approved" && sheet.status !== "rejected" && (
         <Card>
