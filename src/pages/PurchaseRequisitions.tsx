@@ -26,6 +26,7 @@ type PurchaseRequisition = {
   project_site: string;
   project_code: string | null;
   requested_by: string;
+  requested_by_name: string;
   status: PRStatus;
   required_by: string;
   notes: string | null;
@@ -107,7 +108,9 @@ const formatIndianDate = (dateLike: string | Date | null | undefined) => {
   if (!dateLike) return "—";
   const d = typeof dateLike === "string" ? new Date(dateLike) : dateLike;
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-IN");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear()}`;
 };
 
 const formatRequiredByDate = (dateStr: string) => {
@@ -253,12 +256,20 @@ export default function PurchaseRequisitions() {
       }
     }
 
+    const requestedByIds = [...new Set(prRows.map((p: any) => p.requested_by).filter(Boolean))];
+    let userMap: Record<string, string> = {};
+    if (requestedByIds.length) {
+      const { data: users } = await supabase.from("cps_users").select("id, name").in("id", requestedByIds);
+      if (users) userMap = Object.fromEntries((users as any[]).map((u) => [u.id, u.name]));
+    }
+
     setPrList(
       prRows.map(
         (p) =>
           ({
             ...(p as PurchaseRequisition),
             items_count: counts[String(p.id)] ?? 0,
+            requested_by_name: userMap[p.requested_by] ?? "—",
           }) as PurchaseRequisition,
       ),
     );
@@ -465,7 +476,7 @@ export default function PurchaseRequisitions() {
         .insert([{
           pr_number: prNumber,
           project_site: wizProjectSite.trim(),
-          project_code: null,
+          project_code: wizProjectName.trim() || null,
           requested_by: user.id,
           status: "pending" as const,
           required_by: wizRequiredBy,
@@ -649,20 +660,21 @@ export default function PurchaseRequisitions() {
             <TableHeader>
               <TableRow>
                 <TableHead>PR Number</TableHead>
+                <TableHead>Project Name</TableHead>
                 <TableHead>Project Site</TableHead>
-                <TableHead>Project Code</TableHead>
+                <TableHead>Created By</TableHead>
                 <TableHead>Items</TableHead>
                 <TableHead>Required By</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Raised On</TableHead>
-                <TableHead className="text-right">View</TableHead>
+                <TableHead className="text-right"></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 8 }).map((__, j) => (
+                    {Array.from({ length: 9 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-28" />
                       </TableCell>
@@ -671,7 +683,7 @@ export default function PurchaseRequisitions() {
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-10">
+                  <TableCell colSpan={9} className="text-center py-10">
                     <div className="mx-auto max-w-md space-y-3">
                       <div className="flex justify-center">
                         <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center">
@@ -689,20 +701,18 @@ export default function PurchaseRequisitions() {
                 filtered.map((pr) => {
                   const badge = statusBadge(pr.status);
                   return (
-                    <TableRow key={pr.id} className="hover:bg-muted/30">
+                    <TableRow key={pr.id} className="hover:bg-muted/50 cursor-pointer" onClick={() => openDetail(pr)}>
                       <TableCell className="font-mono text-primary">{pr.pr_number}</TableCell>
-                      <TableCell>{pr.project_site}</TableCell>
-                      <TableCell className="text-muted-foreground">{pr.project_code ?? "—"}</TableCell>
+                      <TableCell className="font-medium">{pr.project_code ?? "—"}</TableCell>
+                      <TableCell className="text-muted-foreground text-sm">{pr.project_site}</TableCell>
+                      <TableCell className="text-muted-foreground">{pr.requested_by_name}</TableCell>
                       <TableCell>{pr.items_count}</TableCell>
                       <TableCell className="text-muted-foreground">{formatRequiredByDate(pr.required_by)}</TableCell>
                       <TableCell>
                         <Badge className={`text-xs border-0 ${badge.className}`}>{badge.label}</Badge>
                       </TableCell>
                       <TableCell className="text-muted-foreground">{formatIndianDate(pr.created_at)}</TableCell>
-                      <TableCell className="text-right space-x-1">
-                        <Button variant="ghost" size="sm" onClick={() => openDetail(pr)}>
-                          View
-                        </Button>
+                      <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="View as Document">
                           <Printer className="h-3.5 w-3.5" />
                         </Button>
@@ -731,22 +741,18 @@ export default function PurchaseRequisitions() {
           filtered.map((pr) => {
             const badge = statusBadge(pr.status);
             return (
-              <Card key={pr.id} className="p-4">
+              <Card key={pr.id} className="p-4 cursor-pointer active:bg-muted/50" onClick={() => openDetail(pr)}>
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <div className="font-mono text-primary text-sm font-semibold">{pr.pr_number}</div>
-                    <div className="text-sm text-foreground mt-0.5">{pr.project_site}</div>
-                    {pr.project_code && <div className="text-xs text-muted-foreground">{pr.project_code}</div>}
+                    {pr.project_code && <div className="text-sm font-medium text-foreground mt-0.5">{pr.project_code}</div>}
+                    <div className="text-xs text-muted-foreground mt-0.5">{pr.project_site}</div>
+                    <div className="text-xs text-muted-foreground">By {pr.requested_by_name}</div>
                   </div>
                   <Badge className={`text-xs border-0 ${badge.className} shrink-0`}>{badge.label}</Badge>
                 </div>
-                <div className="flex items-center justify-between mt-3">
-                  <div className="text-xs text-muted-foreground">
-                    {pr.items_count} items · Required by {formatRequiredByDate(pr.required_by)}
-                  </div>
-                  <Button variant="ghost" size="sm" onClick={() => openDetail(pr)} className="h-8 text-xs">
-                    {t("View")}
-                  </Button>
+                <div className="text-xs text-muted-foreground mt-3">
+                  {pr.items_count} items · Required by {formatRequiredByDate(pr.required_by)}
                 </div>
               </Card>
             );
