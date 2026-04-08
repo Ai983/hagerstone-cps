@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "management" | "finance" | "site_receiver" | "auditor";
+export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "it_head" | "management" | "finance" | "site_receiver" | "auditor";
 
 export interface CpsUser {
   id: string; email: string; name: string; role: CpsRole;
@@ -102,12 +102,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   return (
     <AuthContext.Provider value={{
       user, loading, signIn, signOut,
-      canApprove: role === "procurement_head" || role === "management",
-      canCreateRFQ: role === "procurement_executive" || role === "procurement_head",
-      canViewAudit: role === "auditor" || role === "procurement_head" || role === "management",
+      canApprove: role === "procurement_head" || role === "it_head" || role === "management",
+      canCreateRFQ: role === "procurement_executive" || role === "procurement_head" || role === "it_head",
+      canViewAudit: role === "auditor" || role === "procurement_head" || role === "it_head" || role === "management",
       canViewPrices: role !== "requestor" && role !== "site_receiver",
-      canManageSuppliers: role === "procurement_head" || role === "procurement_executive",
-      isProcurementHead: role === "procurement_head",
+      canManageSuppliers: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
+      isProcurementHead: role === "procurement_head" || role === "it_head",
       isManagement: role === "management",
       isEmployee: role === "requestor" || role === "site_receiver",
     }}>

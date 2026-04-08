@@ -119,7 +119,7 @@ export default function ItemMaster() {
   const [rejectReason, setRejectReason] = useState("");
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
-  const canManageRequests = ["procurement_head", "procurement_executive"].includes(user?.role ?? "");
+  const canManageRequests = ["procurement_head", "it_head", "procurement_executive"].includes(user?.role ?? "");
 
   const [form, setForm] = useState<ItemForm>({
     name: "",

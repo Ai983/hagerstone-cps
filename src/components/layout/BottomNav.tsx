@@ -33,7 +33,7 @@ const EMPLOYEE_NAV = [
 
 const ROLE_LABELS: Record<string, string> = {
   requestor: "Requestor", procurement_executive: "Proc. Executive",
-  procurement_head: "Proc. Head", management: "Management",
+  procurement_head: "Proc. Head", it_head: "IT Head", management: "Management",
   finance: "Finance", site_receiver: "Site Receiver", auditor: "Auditor",
 };
 

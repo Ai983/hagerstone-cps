@@ -396,7 +396,7 @@ export default function PurchaseRequisitions() {
 
     setWizNewItemSubmitting(prev => ({ ...prev, [rowKey]: true }));
     try {
-      const isProcurement = ["procurement_executive", "procurement_head", "management"].includes(user.role ?? "");
+      const isProcurement = ["procurement_executive", "procurement_head", "it_head", "management"].includes(user.role ?? "");
 
       if (isProcurement) {
         // Directly insert into cps_items

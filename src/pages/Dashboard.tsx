@@ -193,7 +193,7 @@ export default function Dashboard() {
       { label: "Create RFQ", path: "/rfqs", icon: Send },
       { label: "Review Quotes", path: "/quotes", icon: Eye },
     ];
-    if (role === "procurement_head") return [
+    if (role === "procurement_head" || role === "it_head") return [
       { label: "Pending Approvals", path: "/purchase-orders", icon: CheckCircle2 },
       { label: "Create PO", path: "/purchase-orders", icon: ShoppingCart },
     ];

@@ -7,15 +7,15 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, roles: ["all"] },
   { title: "Purchase Requests", url: "/requisitions", icon: FileText, roles: ["all"] },
-  { title: "RFQs", url: "/rfqs", icon: Send, roles: ["procurement_executive","procurement_head","management","auditor"] },
-  { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive","procurement_head","management","auditor"] },
-  { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","management"] },
-  { title: "Purchase Orders", url: "/purchase-orders", icon: ShoppingCart, roles: ["procurement_executive","procurement_head","management","finance"] },
+  { title: "RFQs", url: "/rfqs", icon: Send, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
+  { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
+  { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management"] },
+  { title: "Purchase Orders", url: "/purchase-orders", icon: ShoppingCart, roles: ["procurement_executive","procurement_head","it_head","management","finance"] },
   { title: "Delivery Tracker", url: "/delivery", icon: Truck, roles: ["all"] },
-  { title: "Supplier Master", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","management","auditor"] },
-  { title: "Item Master", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head"] },
-  { title: "Invoice Upload", url: "/invoices/upload", icon: Upload, roles: ["procurement_executive","procurement_head","management"] },
-  { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor","procurement_head","management"] },
+  { title: "Supplier Master", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
+  { title: "Item Master", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head","it_head"] },
+  { title: "Invoice Upload", url: "/invoices/upload", icon: Upload, roles: ["procurement_executive","procurement_head","it_head","management"] },
+  { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor","procurement_head","it_head","management"] },
 ];
 
 

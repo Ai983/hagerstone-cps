@@ -642,7 +642,7 @@ export default function DeliveryTracker() {
 
   // ── Role checks ────────────────────────────────────────────────────────────
 
-  const canAddUpdate = user?.role === "procurement_executive" || user?.role === "procurement_head" || user?.role === "management";
+  const canAddUpdate = user?.role === "procurement_executive" || user?.role === "procurement_head" || user?.role === "it_head" || user?.role === "management";
   const canConfirmGrn = user?.role === "site_receiver" || canApprove;
 
   // ── Render ─────────────────────────────────────────────────────────────────

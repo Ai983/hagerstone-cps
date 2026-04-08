@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 
 const ROLE_COLORS: Record<string, string> = {
   procurement_head: "bg-primary/10 text-primary",
+  it_head: "bg-primary/10 text-primary",
   management: "bg-purple-100 text-purple-800",
   auditor: "bg-red-100 text-red-800",
   procurement_executive: "bg-blue-100 text-blue-800",
@@ -13,7 +14,7 @@ const ROLE_COLORS: Record<string, string> = {
 
 const ROLE_LABELS: Record<string, string> = {
   requestor: "Requestor", procurement_executive: "Procurement Executive",
-  procurement_head: "Procurement Head", management: "Management",
+  procurement_head: "Procurement Head", it_head: "IT Head", management: "Management",
   finance: "Finance", site_receiver: "Site Receiver", auditor: "Auditor",
 };
 

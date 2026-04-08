@@ -100,7 +100,7 @@ type VendorRegistration = {
 
 export default function SupplierMaster() {
   const { canManageSuppliers, user } = useAuth();
-  const isProcurementHead = user?.role === "procurement_head";
+  const isProcurementHead = user?.role === "procurement_head" || user?.role === "it_head";
 
   const [allSuppliers, setAllSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
