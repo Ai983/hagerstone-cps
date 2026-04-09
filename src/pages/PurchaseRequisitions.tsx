@@ -17,8 +17,8 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight } from "lucide-react";
 
-// DB CHECK constraint allows: pending, validated, duplicate_flagged, rfq_created, po_issued, delivered, cancelled
-type PRStatus = "pending" | "validated" | "duplicate_flagged" | "rfq_created" | "po_issued" | "delivered" | "cancelled";
+// DB CHECK constraint allows: pending, pending_design, validated, duplicate_flagged, rfq_created, po_issued, delivered, cancelled
+type PRStatus = "pending" | "pending_design" | "validated" | "duplicate_flagged" | "rfq_created" | "po_issued" | "delivered" | "cancelled";
 
 type PurchaseRequisition = {
   id: string;
@@ -127,6 +127,8 @@ const statusBadge = (status: PRStatus) => {
   switch (status) {
     case "pending":
       return { className: "bg-blue-100 text-blue-800 border-blue-200", label: "Pending" };
+    case "pending_design":
+      return { className: "bg-violet-100 text-violet-800 border-violet-200", label: "Design Review" };
     case "validated":
       return { className: "bg-green-100 text-green-800 border-green-200", label: "Validated" };
     case "duplicate_flagged":
@@ -159,7 +161,7 @@ const rpcResultToString = (data: unknown) => {
 };
 
 export default function PurchaseRequisitions() {
-  const { user, canViewPrices, isProcurementHead } = useAuth();
+  const { user, canViewPrices } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [itemsLoading, setItemsLoading] = useState(true);
@@ -228,7 +230,8 @@ export default function PurchaseRequisitions() {
       .from("cps_purchase_requisitions")
       .select("id, pr_number, project_site, project_code, requested_by, status, required_by, notes, created_at")
       .order("created_at", { ascending: false });
-    if (!isProcurementHead) prQuery = prQuery.eq("requested_by", user?.id ?? "");
+    const isRestrictedRole = user?.role === "requestor" || user?.role === "site_receiver" || user?.role === "design_team";
+    if (isRestrictedRole) prQuery = prQuery.eq("requested_by", user?.id ?? "");
     const { data: prs, error } = await prQuery;
 
     if (error) {
@@ -478,7 +481,7 @@ export default function PurchaseRequisitions() {
           project_site: wizProjectSite.trim(),
           project_code: wizProjectName.trim() || null,
           requested_by: user.id,
-          status: "pending" as const,
+          status: "pending_design" as const,
           required_by: wizRequiredBy,
           notes: wizNotes.trim() || null,
         }])
@@ -571,23 +574,8 @@ export default function PurchaseRequisitions() {
         }]);
       } catch { /* audit failure non-blocking */ }
 
-      try {
-        const { data: rfqResult, error: rfqError } = await supabase.rpc("cps_auto_create_rfq_for_pr", {
-          p_pr_id: prId, p_created_by: user.id,
-        });
-        if (!rfqError && rfqResult?.success && Array.isArray(rfqResult.rfqs)) {
-          const rfqs: Array<{ rfq_id: string; rfq_number: string; category: string; supplier_count: number }> = rfqResult.rfqs;
-          // Ensure all RFQs stay in draft — procurement head reviews vendors before dispatch
-          await supabase.from("cps_rfqs").update({ status: "draft" }).in("id", rfqs.map((r) => r.rfq_id));
-          if (rfqs.length === 1) {
-            toast.success(`${rfqs[0].rfq_number} created — review vendors before dispatch`);
-          } else {
-            const parts = rfqs.map((r) =>
-              `${r.category} (${r.supplier_count === 0 ? "select manually" : r.supplier_count + " suppliers"})`);
-            toast.success(`${rfqs.length} RFQs created from ${rfqResult.base_number}: ${parts.join(", ")}`);
-          }
-        }
-      } catch { /* rfq failure non-blocking */ }
+      // Design team will add specs before RFQ is created — no auto-RFQ here
+      toast.success(`PR ${prNumber} submitted — design team will add material specs before RFQ dispatch`);
 
       setWizSuccess({ prNumber, itemsCount: validLines.length });
       setWizardStep(6);
