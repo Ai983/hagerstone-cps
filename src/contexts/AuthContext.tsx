@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "it_head" | "management" | "finance" | "site_receiver" | "auditor";
+export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "it_head" | "management" | "finance" | "site_receiver" | "auditor" | "design_team";
 
 export interface CpsUser {
   id: string; email: string; name: string; role: CpsRole;
@@ -15,7 +15,7 @@ interface AuthContextType {
   canApprove: boolean; canCreateRFQ: boolean; canViewAudit: boolean;
   canViewPrices: boolean; canManageSuppliers: boolean;
   isProcurementHead: boolean; isManagement: boolean;
-  isEmployee: boolean;
+  isEmployee: boolean; isDesignTeam: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -102,14 +102,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   return (
     <AuthContext.Provider value={{
       user, loading, signIn, signOut,
-      canApprove: role === "procurement_head" || role === "it_head" || role === "management",
+      canApprove: role === "procurement_head" || role === "it_head" || role === "management" || role === "procurement_executive",
       canCreateRFQ: role === "procurement_executive" || role === "procurement_head" || role === "it_head",
-      canViewAudit: role === "auditor" || role === "procurement_head" || role === "it_head" || role === "management",
+      canViewAudit: role === "auditor" || role === "procurement_head" || role === "it_head" || role === "management" || role === "procurement_executive",
       canViewPrices: role !== "requestor" && role !== "site_receiver",
       canManageSuppliers: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
-      isProcurementHead: role === "procurement_head" || role === "it_head",
+      isProcurementHead: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
       isManagement: role === "management",
       isEmployee: role === "requestor" || role === "site_receiver",
+      isDesignTeam: role === "design_team",
     }}>
       {children}
     </AuthContext.Provider>

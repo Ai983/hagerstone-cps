@@ -146,6 +146,7 @@ export default function RFQs() {
   const [loading, setLoading] = useState(true);
   const [rfqs, setRfqs] = useState<Rfq[]>([]);
   const [prDisplayById, setPrDisplayById] = useState<Record<string, string>>({});
+  const [prTitleById, setPrTitleById] = useState<Record<string, string>>({});
   const [supplierCountByRfqId, setSupplierCountByRfqId] = useState<Record<string, number>>({});
   const [totalQuotesByRfq, setTotalQuotesByRfq] = useState<Record<string, number>>({});
   const [approvedQuotesByRfq, setApprovedQuotesByRfq] = useState<Record<string, number>>({});
@@ -217,6 +218,7 @@ export default function RFQs() {
   const fetchRFQs = async () => {
     setLoading(true);
     setPrDisplayById({});
+    setPrTitleById({});
     setSupplierCountByRfqId({});
     setTotalQuotesByRfq({});
     setApprovedQuotesByRfq({});
@@ -256,7 +258,7 @@ export default function RFQs() {
     if (prIds.length) {
       const { data: prs } = await supabase
         .from("cps_purchase_requisitions")
-        .select("id,pr_number,project_site")
+        .select("id,pr_number,project_site,project_code")
         .in("id", prIds);
 
       const prRows = (prs ?? []) as PurchaseRequisition[];
@@ -270,10 +272,13 @@ export default function RFQs() {
       });
 
       const display: Record<string, string> = {};
+      const titles: Record<string, string> = {};
       prRows.forEach((p) => {
-        display[p.id] = `${p.pr_number} | ${p.project_site} | ${byPr[p.id] ?? 0} items`;
+        display[p.id] = `${p.pr_number} | ${byPr[p.id] ?? 0} items`;
+        titles[p.id] = p.project_code ?? p.project_site;
       });
       setPrDisplayById(display);
+      setPrTitleById(titles);
     }
 
     const { data: rfqSupRows } = await supabase.from("cps_rfq_suppliers").select("rfq_id");
@@ -880,7 +885,11 @@ export default function RFQs() {
                           )}
                         </div>
                       </TableCell>
-                      <TableCell>{r.title}</TableCell>
+                      <TableCell>
+                        {prTitleById[r.pr_id]
+                          ? `RFQ for ${prTitleById[r.pr_id]}${r.target_category ? ` — ${r.target_category}` : ""}`
+                          : r.title}
+                      </TableCell>
                       <TableCell className="text-muted-foreground">{prDisplayById[r.pr_id] ?? r.pr_id}</TableCell>
                       <TableCell className="text-muted-foreground">{supplierCountByRfqId[r.id] ?? 0}</TableCell>
                       <TableCell>

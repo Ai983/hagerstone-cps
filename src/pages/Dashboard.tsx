@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import {
   FileText, Send, MessageSquare, ShoppingCart, Truck, Users,
   IndianRupee, TrendingDown, BarChart3, ClipboardList, CheckCircle2,
-  Eye, Plus, ArrowRight,
+  Eye, Plus, ArrowRight, Bell,
 } from "lucide-react";
 
 interface AuditRow {
@@ -30,8 +30,17 @@ interface PendingPO {
   supplier_name?: string;
 }
 
+interface NotifItem {
+  id: string;
+  type: "pr_raised" | "quote_uploaded" | "pending_design";
+  title: string;
+  subtitle: string;
+  ts: string;
+  path: string;
+}
+
 export default function Dashboard() {
-  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead } = useAuth();
+  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead, isDesignTeam, isEmployee } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
@@ -46,6 +55,7 @@ export default function Dashboard() {
 
   const [recentActivity, setRecentActivity] = useState<AuditRow[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingPO[]>([]);
+  const [notifications, setNotifications] = useState<NotifItem[]>([]);
   const [approvingId, setApprovingId] = useState<string | null>(null);
 
   const [legacyPOCount, setLegacyPOCount] = useState(0);
@@ -62,7 +72,7 @@ export default function Dashboard() {
     setLoading(true);
     try {
       let prQuery = supabase.from("cps_purchase_requisitions").select("id", { count: "exact", head: true });
-      if (!isProcurementHead) prQuery = prQuery.eq("requested_by", user?.id ?? "");
+      if (isEmployee || isDesignTeam) prQuery = prQuery.eq("requested_by", user?.id ?? "");
 
       const [prRes, rfqRes, quotesRes, poActiveRes, grnRes, supplierRes] = await Promise.all([
         prQuery,
@@ -135,6 +145,81 @@ export default function Dashboard() {
         }
         setPendingApprovals(poRows);
       }
+
+      // Notifications — design team sees pending_design PRs; procurement/admin sees recent PRs + quotes
+      const notifItems: NotifItem[] = [];
+      const role = user?.role;
+      if (role === "design_team") {
+        const { data: designPRs } = await supabase
+          .from("cps_purchase_requisitions")
+          .select("id, pr_number, project_code, project_site, created_at")
+          .eq("status", "pending_design")
+          .order("created_at", { ascending: true })
+          .limit(10);
+        (designPRs ?? []).forEach((p: any) => {
+          notifItems.push({
+            id: p.id,
+            type: "pending_design",
+            title: `${p.pr_number} awaiting design review`,
+            subtitle: p.project_code ?? p.project_site,
+            ts: p.created_at,
+            path: "/design",
+          });
+        });
+      } else if (isProcurementHead || role === "management") {
+        // Recent PRs (last 7 days)
+        const since = new Date();
+        since.setDate(since.getDate() - 7);
+        const { data: recentPRs } = await supabase
+          .from("cps_purchase_requisitions")
+          .select("id, pr_number, project_code, project_site, created_at, requested_by")
+          .gte("created_at", since.toISOString())
+          .order("created_at", { ascending: false })
+          .limit(5);
+
+        // Resolve requester names
+        const requesterIds = Array.from(new Set((recentPRs ?? []).map((p: any) => p.requested_by).filter(Boolean)));
+        const requesterMap: Record<string, string> = {};
+        if (requesterIds.length) {
+          const { data: uData } = await supabase.from("cps_users").select("id, name").in("id", requesterIds);
+          (uData ?? []).forEach((u: any) => { requesterMap[u.id] = u.name; });
+        }
+
+        (recentPRs ?? []).forEach((p: any) => {
+          notifItems.push({
+            id: `pr-${p.id}`,
+            type: "pr_raised",
+            title: `${p.pr_number} raised by ${requesterMap[p.requested_by] ?? "—"}`,
+            subtitle: p.project_code ?? p.project_site,
+            ts: p.created_at,
+            path: "/requisitions",
+          });
+        });
+
+        // Recent quotes (last 7 days)
+        const { data: recentQuotes } = await supabase
+          .from("cps_quotes")
+          .select("id, blind_quote_ref, created_at, rfq_id, rfq:cps_rfqs(rfq_number, pr_id)")
+          .gte("created_at", since.toISOString())
+          .order("created_at", { ascending: false })
+          .limit(5);
+
+        (recentQuotes ?? []).forEach((q: any) => {
+          const rfqNum = q.rfq?.rfq_number ?? "—";
+          notifItems.push({
+            id: `qt-${q.id}`,
+            type: "quote_uploaded",
+            title: `Quote ${q.blind_quote_ref ?? q.id} submitted`,
+            subtitle: `for ${rfqNum}`,
+            ts: q.created_at,
+            path: "/quotes",
+          });
+        });
+
+        // Sort combined notifications by timestamp descending
+        notifItems.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
+      }
+      setNotifications(notifItems.slice(0, 10));
     } catch {
       toast.error("Failed to load dashboard data");
     }
@@ -360,6 +445,54 @@ export default function Dashboard() {
                 ))}
               </TableBody>
             </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Notification Panel — design team + procurement/management */}
+      {notifications.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              <Bell className="h-4 w-4 text-primary" />
+              Notifications
+            </CardTitle>
+            <Badge variant="outline" className="text-primary border-primary/30 bg-primary/5">
+              {notifications.length}
+            </Badge>
+          </CardHeader>
+          <CardContent className="p-0 divide-y divide-border">
+            {notifications.map((n) => {
+              const colors: Record<string, string> = {
+                pending_design: "bg-violet-100 text-violet-800",
+                pr_raised: "bg-blue-100 text-blue-800",
+                quote_uploaded: "bg-green-100 text-green-800",
+              };
+              const labels: Record<string, string> = {
+                pending_design: "Design Queue",
+                pr_raised: "New PR",
+                quote_uploaded: "Quote",
+              };
+              const ts = new Date(n.ts);
+              const timeStr = ts.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+              return (
+                <div
+                  key={n.id}
+                  className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/40 transition-colors"
+                  onClick={() => navigate(n.path)}
+                >
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${colors[n.type]}`}>
+                    {labels[n.type]}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{n.title}</p>
+                    <p className="text-xs text-muted-foreground truncate">{n.subtitle}</p>
+                  </div>
+                  <span className="text-xs text-muted-foreground shrink-0">{timeStr}</span>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
       )}
