@@ -382,6 +382,18 @@ export default function PurchaseRequisitions() {
     setDetailLoading(false);
   };
 
+  const closePR = async (pr: PurchaseRequisition, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`Close PR ${pr.pr_number}? This cannot be undone.`)) return;
+    const { error } = await supabase
+      .from("cps_purchase_requisitions")
+      .update({ status: "cancelled" })
+      .eq("id", pr.id);
+    if (error) { toast.error("Failed to close PR"); return; }
+    toast.success(`${pr.pr_number} closed`);
+    await refresh();
+  };
+
   const openDoc = async (pr: PurchaseRequisition) => {
     setDocOpen(true);
     setDocPr(pr);
@@ -701,9 +713,16 @@ export default function PurchaseRequisitions() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">{formatIndianDate(pr.created_at)}</TableCell>
                       <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                        <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="View as Document">
-                          <Printer className="h-3.5 w-3.5" />
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="View as Document">
+                            <Printer className="h-3.5 w-3.5" />
+                          </Button>
+                          {pr.status !== "cancelled" && pr.status !== "rfq_created" && (
+                            <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Close PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   );

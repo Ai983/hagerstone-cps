@@ -33,6 +33,7 @@ type PurchaseRequisition = {
   pr_number: string;
   project_site: string;
   project_code: string | null;
+  status?: string | null;
 };
 
 type Rfq = {
@@ -147,6 +148,7 @@ export default function RFQs() {
   const [rfqs, setRfqs] = useState<Rfq[]>([]);
   const [prDisplayById, setPrDisplayById] = useState<Record<string, string>>({});
   const [prTitleById, setPrTitleById] = useState<Record<string, string>>({});
+  const [prCancelledById, setPrCancelledById] = useState<Record<string, boolean>>({});
   const [supplierCountByRfqId, setSupplierCountByRfqId] = useState<Record<string, number>>({});
   const [totalQuotesByRfq, setTotalQuotesByRfq] = useState<Record<string, number>>({});
   const [approvedQuotesByRfq, setApprovedQuotesByRfq] = useState<Record<string, number>>({});
@@ -219,6 +221,7 @@ export default function RFQs() {
     setLoading(true);
     setPrDisplayById({});
     setPrTitleById({});
+    setPrCancelledById({});
     setSupplierCountByRfqId({});
     setTotalQuotesByRfq({});
     setApprovedQuotesByRfq({});
@@ -258,7 +261,7 @@ export default function RFQs() {
     if (prIds.length) {
       const { data: prs } = await supabase
         .from("cps_purchase_requisitions")
-        .select("id,pr_number,project_site,project_code")
+        .select("id,pr_number,project_site,project_code,status")
         .in("id", prIds);
 
       const prRows = (prs ?? []) as PurchaseRequisition[];
@@ -273,12 +276,15 @@ export default function RFQs() {
 
       const display: Record<string, string> = {};
       const titles: Record<string, string> = {};
+      const cancelled: Record<string, boolean> = {};
       prRows.forEach((p) => {
         display[p.id] = `${p.pr_number} | ${byPr[p.id] ?? 0} items`;
         titles[p.id] = p.project_code ?? p.project_site;
+        cancelled[p.id] = p.status === "cancelled";
       });
       setPrDisplayById(display);
       setPrTitleById(titles);
+      setPrCancelledById(cancelled);
     }
 
     const { data: rfqSupRows } = await supabase.from("cps_rfq_suppliers").select("rfq_id");
@@ -409,10 +415,6 @@ export default function RFQs() {
 
     if (!minSelectedOk) {
       setSubmitError(`Select at least 5 suppliers. Selected: ${selectedSupplierIds.length}`);
-      return;
-    }
-    if (!freshOk) {
-      setSubmitError(`At least 2 fresh suppliers are required. Fresh selected: ${freshSuppliers.length}`);
       return;
     }
 
@@ -890,7 +892,14 @@ export default function RFQs() {
                           ? `RFQ for ${prTitleById[r.pr_id]}${r.target_category ? ` — ${r.target_category}` : ""}`
                           : r.title}
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{prDisplayById[r.pr_id] ?? r.pr_id}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        <div className="flex items-center gap-1.5">
+                          <span>{prDisplayById[r.pr_id] ?? r.pr_id}</span>
+                          {prCancelledById[r.pr_id] && (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-100 text-red-700 leading-none">PR Closed</span>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell className="text-muted-foreground">{supplierCountByRfqId[r.id] ?? 0}</TableCell>
                       <TableCell>
                         {total > 0 ? (

@@ -186,7 +186,9 @@ export default function PurchaseOrders() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [createStep, setCreateStep] = useState<"form" | "review">("form");
   const [createLoading, setCreateLoading] = useState(false);
+  const [createSupplierName, setCreateSupplierName] = useState<string>("");
   const [eligibleRfqIds, setEligibleRfqIds] = useState<string[]>([]);
   const [eligibleRfqs, setEligibleRfqs] = useState<Array<{ id: string; rfq_number: string; title?: string | null; pr_id: string; payment_terms: string | null }>>([]);
 
@@ -307,6 +309,7 @@ export default function PurchaseOrders() {
 
   useEffect(() => {
     if (!createOpen) return;
+    setCreateStep("form");
     setSelectedRfqId("");
     setComparisonSheetId("");
     setRecommendedSupplierId("");
@@ -317,6 +320,7 @@ export default function PurchaseOrders() {
     setCreateDeliveryDate("");
     setCreatePaymentTerms("");
     setCreatePenaltyClause("Penalty of 0.5% per week for delay beyond agreed delivery date, max 5%");
+    setCreateSupplierName("");
     setLineItems([]);
     setRejectReason("");
     setApprovalNotes("");
@@ -392,6 +396,10 @@ export default function PurchaseOrders() {
       setRecommendedSupplierId(recSupplierId);
       setCreateSupplierId(recSupplierId);
 
+      // Fetch supplier name for preview
+      const { data: supRow } = await supabase.from("cps_suppliers").select("name").eq("id", recSupplierId).maybeSingle();
+      setCreateSupplierName((supRow as any)?.name ?? "");
+
       const { data: prLineRows, error: prLinesErr } = await supabase
         .from("cps_pr_line_items")
         .select("id,pr_id,description,quantity,unit")
@@ -465,6 +473,18 @@ export default function PurchaseOrders() {
     } finally {
       setCreateLoading(false);
     }
+  };
+
+  const reviewPo = () => {
+    if (!selectedRfqId || !comparisonSheetId || !createSupplierId) {
+      toast.error("Please select an RFQ first");
+      return;
+    }
+    if (!createShipTo.trim()) { toast.error("Ship To address is required"); return; }
+    if (!createDeliveryDate) { toast.error("Delivery date is required"); return; }
+    if (!createPaymentTerms.trim()) { toast.error("Payment terms are required"); return; }
+    if (!lineItems.length) { toast.error("At least one line item is required"); return; }
+    setCreateStep("review");
   };
 
   const submitCreatePo = async () => {
@@ -1260,10 +1280,18 @@ export default function PurchaseOrders() {
         <DialogContent className="w-[calc(100vw-1rem)] max-w-5xl p-0">
           <div className="overflow-y-auto max-h-[80vh] pr-2">
           <DialogHeader className="px-6 pt-6">
-            <DialogTitle>Create Purchase Order</DialogTitle>
-            <DialogDescription>Select an RFQ, then auto-load recommended supplier and line items.</DialogDescription>
+            <DialogTitle>
+              {createStep === "form" ? "Create Purchase Order" : "Review Purchase Order"}
+            </DialogTitle>
+            <DialogDescription>
+              {createStep === "form"
+                ? "Select an RFQ, then auto-load recommended supplier and line items."
+                : "Review the PO before it is created and sent to founders for approval."}
+            </DialogDescription>
           </DialogHeader>
 
+          {/* ── STEP 1: FORM ── */}
+          {createStep === "form" && (
           <div className="px-6 pb-6 pt-2 space-y-6">
             <div className="grid grid-cols-1 gap-4">
               <div className="grid grid-cols-1 gap-3">
@@ -1285,7 +1313,7 @@ export default function PurchaseOrders() {
 
                 <div className="grid grid-cols-1 gap-3">
                   <Label>Recommended Supplier</Label>
-                  <Input value={recommendedSupplierId ? "Selected from comparison sheet" : ""} disabled />
+                  <Input value={createSupplierName || (recommendedSupplierId ? "Selected from comparison sheet" : "")} disabled />
                 </div>
               </div>
             </div>
@@ -1389,11 +1417,129 @@ export default function PurchaseOrders() {
               <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={createLoading}>
                 Cancel
               </Button>
-              <Button onClick={submitCreatePo} disabled={createLoading || !lineItems.length}>
-                {createLoading ? "Creating..." : "Create PO"}
+              <Button onClick={reviewPo} disabled={createLoading || !lineItems.length}>
+                Review PO →
               </Button>
             </DialogFooter>
           </div>
+          )}
+
+          {/* ── STEP 2: REVIEW ── */}
+          {createStep === "review" && (() => {
+            const subTotal = lineItems.reduce((acc, li) => acc + Number(li.rate ?? 0) * Number(li.quantity ?? 0), 0);
+            const gstTotal = lineItems.reduce((acc, li) => acc + Number(li.gst_amount ?? 0), 0);
+            const grandTotal = subTotal + gstTotal;
+            const rfqLabel = eligibleRfqsOptions.find((r) => r.id === selectedRfqId);
+            return (
+            <div className="px-6 pb-6 pt-2 space-y-6">
+              {/* Document header */}
+              <div className="flex items-start justify-between gap-6 border rounded-lg p-4 bg-muted/30">
+                <div className="space-y-0.5">
+                  <div className="font-semibold text-foreground">Hagerstone International (P) Ltd.</div>
+                  <div className="text-xs text-muted-foreground">GST: 09AAECH3768B1ZM</div>
+                  <div className="text-xs text-muted-foreground">D-107, 91 Springboard Hub, Red FM Road, Sector-2, Noida, UP</div>
+                  <div className="text-xs text-muted-foreground">Ph: +91 8448992353</div>
+                </div>
+                <div className="text-right space-y-1">
+                  <div className="font-bold text-base">PURCHASE ORDER</div>
+                  <div className="text-xs text-muted-foreground font-mono">{rfqLabel?.rfq_number ?? ""}</div>
+                  <Badge className="text-xs border-0 bg-amber-100 text-amber-800">Pending Founder Approval</Badge>
+                  <div className="text-xs text-muted-foreground">Date: {new Date().toLocaleDateString("en-IN")}</div>
+                </div>
+              </div>
+
+              {/* Supplier + Addresses */}
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="space-y-1 border rounded-lg p-3">
+                  <div className="font-medium text-muted-foreground text-xs uppercase tracking-wide mb-2">Supplier</div>
+                  <div className="font-semibold">{createSupplierName || "—"}</div>
+                </div>
+                <div className="space-y-2 border rounded-lg p-3">
+                  <div className="font-medium text-muted-foreground text-xs uppercase tracking-wide mb-2">Delivery</div>
+                  <div><span className="text-muted-foreground">Ship To: </span>{createShipTo || "—"}</div>
+                  <div><span className="text-muted-foreground">Date: </span>{createDeliveryDate ? new Date(createDeliveryDate).toLocaleDateString("en-IN") : "—"}</div>
+                </div>
+              </div>
+
+              {/* Terms */}
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="border rounded-lg p-3 space-y-1">
+                  <div className="font-medium text-muted-foreground text-xs uppercase tracking-wide mb-2">Payment Terms</div>
+                  <div className="whitespace-pre-wrap">{createPaymentTerms || "—"}</div>
+                </div>
+                <div className="border rounded-lg p-3 space-y-1">
+                  <div className="font-medium text-muted-foreground text-xs uppercase tracking-wide mb-2">Penalty Clause</div>
+                  <div className="whitespace-pre-wrap">{createPenaltyClause || "—"}</div>
+                </div>
+              </div>
+
+              {/* Line items */}
+              <Card>
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm">Line Items</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-8">#</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead>Brand</TableHead>
+                          <TableHead>HSN</TableHead>
+                          <TableHead className="text-right">Qty</TableHead>
+                          <TableHead>Unit</TableHead>
+                          <TableHead className="text-right">Rate</TableHead>
+                          <TableHead className="text-right">GST%</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {lineItems.map((li, idx) => (
+                          <TableRow key={idx}>
+                            <TableCell className="text-muted-foreground text-xs">{idx + 1}</TableCell>
+                            <TableCell className="text-xs">{li.description}</TableCell>
+                            <TableCell className="text-xs">{li.brand || "—"}</TableCell>
+                            <TableCell className="text-xs">{li.hsn_code || "—"}</TableCell>
+                            <TableCell className="text-right text-xs">{li.quantity}</TableCell>
+                            <TableCell className="text-xs">{li.unit || "—"}</TableCell>
+                            <TableCell className="text-right text-xs">{formatCurrency(li.rate, canViewPrices)}</TableCell>
+                            <TableCell className="text-right text-xs">{li.gst_percent}%</TableCell>
+                            <TableCell className="text-right text-xs font-medium">{formatCurrency(li.total_value, canViewPrices)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Totals */}
+              {canViewPrices && (
+                <div className="flex justify-end">
+                  <div className="w-64 space-y-1 text-sm border rounded-lg p-3">
+                    <div className="flex justify-between"><span className="text-muted-foreground">Sub Total</span><span>₹{subTotal.toLocaleString("en-IN")}</span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span>₹{gstTotal.toLocaleString("en-IN")}</span></div>
+                    <div className="flex justify-between font-semibold border-t pt-1 mt-1"><span>Grand Total</span><span>₹{grandTotal.toLocaleString("en-IN")}</span></div>
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                Once confirmed, this PO will be created and approval requests will be sent to the founders via WhatsApp. You cannot edit it after this point.
+              </div>
+
+              <DialogFooter className="pt-2">
+                <Button variant="outline" onClick={() => setCreateStep("form")} disabled={createLoading}>
+                  ← Back to Edit
+                </Button>
+                <Button onClick={submitCreatePo} disabled={createLoading}>
+                  {createLoading ? "Creating..." : "Confirm & Send to Founders"}
+                </Button>
+              </DialogFooter>
+            </div>
+            );
+          })()}
           </div>
         </DialogContent>
       </Dialog>
@@ -1836,10 +1982,26 @@ export default function PurchaseOrders() {
           </div>
           {!viewLoading && viewPo && (
             <div className="px-6 pb-4 flex justify-end gap-2 border-t border-border/60 pt-3">
-              <Button variant="outline" size="sm" onClick={downloadPDF}>
-                <PenLine className="h-3.5 w-3.5 mr-1.5" />
-                Download PDF
-              </Button>
+              {(() => {
+                const anyApproved = viewPoTokens.some(t => t.response === "approved") || viewPo.founder_approval_status === "approved";
+                const isPending = viewPo.founder_approval_status === "pending" || viewPo.founder_approval_status === "sent";
+                return anyApproved ? (
+                  <Button variant="outline" size="sm" onClick={downloadPDF}>
+                    <PenLine className="h-3.5 w-3.5 mr-1.5" />
+                    Download PDF
+                  </Button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {isPending ? "⏳ Awaiting founder approval before download" : "Requires founder approval to download"}
+                    </span>
+                    <Button variant="outline" size="sm" disabled className="opacity-40 cursor-not-allowed">
+                      <PenLine className="h-3.5 w-3.5 mr-1.5" />
+                      Download PDF
+                    </Button>
+                  </div>
+                );
+              })()}
             </div>
           )}
           </div>

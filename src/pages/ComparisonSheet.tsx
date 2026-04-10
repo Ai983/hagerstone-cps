@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
 import logoUrl from "@/assets/Companylogo.png";
 
-import { AlertTriangle, Sparkles } from "lucide-react";
+import { AlertTriangle, Sparkles, Download } from "lucide-react";
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
@@ -590,6 +590,55 @@ export default function ComparisonSheetPage() {
     }
   };
 
+  const downloadCSV = () => {
+    if (!sheet || !rfq) return;
+    const rows: string[][] = [];
+    // Header info
+    rows.push(["Comparison Sheet", rfq.rfq_number]);
+    rows.push(["RFQ Title", rfq.title ?? ""]);
+    rows.push(["Quotes Received", String(sheet.total_quotes_received ?? 0)]);
+    rows.push(["Status", sheet.manual_review_status ?? ""]);
+    rows.push(["Generated", new Date().toLocaleString("en-IN")]);
+    rows.push([]);
+
+    // Quote summary header — one column per supplier
+    const supNames = suppliers.map((s) => s.name);
+    rows.push(["Item / Field", ...supNames]);
+
+    // Per-item landed rates from cellsByPrLineIdAndSupplierId
+    prLineItems.forEach((item) => {
+      const rates = suppliers.map((s) => {
+        const cell = cellsByPrLineIdAndSupplierId[item.id]?.[s.id];
+        return cell?.total_landed_rate != null
+          ? `₹${Number(cell.total_landed_rate).toLocaleString("en-IN")}`
+          : cell?.rate != null
+          ? `₹${Number(cell.rate).toLocaleString("en-IN")}`
+          : "—";
+      });
+      rows.push([`${item.description} (${item.quantity} ${item.unit ?? ""})`, ...rates]);
+    });
+
+    rows.push([]);
+    rows.push(["Total Quoted (excl GST)", ...suppliers.map(s => { const q = quoteBySupplierId[s.id]; return q?.total_quoted_value != null ? `₹${Number(q.total_quoted_value).toLocaleString("en-IN")}` : "—"; })]);
+    rows.push(["Total Landed", ...suppliers.map(s => { const q = quoteBySupplierId[s.id]; return q?.total_landed_value != null ? `₹${Number(q.total_landed_value).toLocaleString("en-IN")}` : "—"; })]);
+    rows.push(["Payment Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.payment_terms ?? "—")]);
+    rows.push(["Delivery Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.delivery_terms ?? "—")]);
+    rows.push(["Compliance", ...suppliers.map(s => quoteBySupplierId[s.id]?.compliance_status ?? "—")]);
+    rows.push(["Commercial Score", ...suppliers.map(s => { const q = quoteBySupplierId[s.id]; return q?.commercial_score != null ? String(q.commercial_score) : "—"; })]);
+    rows.push([]);
+    rows.push(["Reviewer Recommendation", suppliers.find(s => s.id === sheet.reviewer_recommendation)?.name ?? "—"]);
+    rows.push(["Recommendation Reason", sheet.reviewer_recommendation_reason ?? "—"]);
+
+    const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Comparison_${rfq.rfq_number}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleApprove = async () => {
     if (!sheet || !user) return;
     setApproving(true);
@@ -1108,6 +1157,10 @@ Provide a JSON response with this exact structure:
                 {sheet.red_flags_count ?? 0} red flags
               </Badge>
             )}
+            <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={downloadCSV}>
+              <Download className="h-3.5 w-3.5" />
+              CSV
+            </Button>
           </div>
         </CardHeader>
       </Card>

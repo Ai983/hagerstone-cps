@@ -56,6 +56,7 @@ export default function Dashboard() {
   const [recentActivity, setRecentActivity] = useState<AuditRow[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingPO[]>([]);
   const [notifications, setNotifications] = useState<NotifItem[]>([]);
+  const [prImages, setPrImages] = useState<Array<{ pr_number: string; description: string; url: string; ts: string }>>([]);
   const [approvingId, setApprovingId] = useState<string | null>(null);
 
   const [legacyPOCount, setLegacyPOCount] = useState(0);
@@ -220,6 +221,31 @@ export default function Dashboard() {
         notifItems.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
       }
       setNotifications(notifItems.slice(0, 10));
+
+      // PR reference images — fetch recent line items with Images in specs
+      if (!isEmployee && !isDesignTeam) {
+        const imgSince = new Date();
+        imgSince.setDate(imgSince.getDate() - 14);
+        const { data: lineItems } = await supabase
+          .from("cps_pr_line_items")
+          .select("id, description, specs, pr_id, cps_purchase_requisitions(pr_number, created_at)")
+          .gte("created_at", imgSince.toISOString())
+          .not("specs", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(50);
+
+        const imageRows: Array<{ pr_number: string; description: string; url: string; ts: string }> = [];
+        (lineItems ?? []).forEach((li: any) => {
+          const specs: string = li.specs ?? "";
+          const match = specs.match(/Images:\s*(.+?)(?:\s*\||$)/);
+          if (!match) return;
+          const urls = match[1].split(",").map((u: string) => u.trim()).filter(Boolean);
+          const prNum = li.cps_purchase_requisitions?.pr_number ?? "—";
+          const ts = li.cps_purchase_requisitions?.created_at ?? "";
+          urls.forEach((url: string) => imageRows.push({ pr_number: prNum, description: li.description, url, ts }));
+        });
+        setPrImages(imageRows.slice(0, 12));
+      }
     } catch {
       toast.error("Failed to load dashboard data");
     }
@@ -493,6 +519,30 @@ export default function Dashboard() {
                 </div>
               );
             })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* PR Reference Images */}
+      {prImages.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-semibold flex items-center gap-2">
+              🖼️ Site Reference Images
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
+              {prImages.map((img, idx) => (
+                <a key={idx} href={img.url} target="_blank" rel="noopener noreferrer" className="group relative block rounded-lg overflow-hidden border border-border hover:border-primary/50 transition-colors">
+                  <img src={img.url} alt={img.description} className="w-full h-20 object-cover group-hover:opacity-90 transition-opacity" />
+                  <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <p className="text-[9px] text-white font-mono leading-tight truncate">{img.pr_number}</p>
+                    <p className="text-[9px] text-white/80 leading-tight truncate">{img.description}</p>
+                  </div>
+                </a>
+              ))}
+            </div>
           </CardContent>
         </Card>
       )}
