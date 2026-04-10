@@ -54,6 +54,7 @@ type PoRow = {
   ship_to_address: string | null;
   bill_to_address: string | null;
   payment_terms: string | null;
+  delivery_terms: string | null;
   delivery_date: string | null;
   penalty_clause: string | null;
   total_value: number | null;
@@ -250,7 +251,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url",
         )
         .order("created_at", { ascending: false });
 
@@ -638,14 +639,17 @@ export default function PurchaseOrders() {
             link: `${origin}/approve-po?token=${t.token}`,
           }));
 
-          /* fetch webhook URL */
-          const { data: cfgRow } = await supabase
+          /* fetch webhook URL + founder numbers from config */
+          const { data: cfgRows } = await supabase
             .from("cps_config")
-            .select("value")
-            .eq("key", "webhook_po_founder_approval")
-            .maybeSingle();
-          const webhookUrl = (cfgRow as any)?.value as string | undefined;
+            .select("key,value")
+            .in("key", ["webhook_po_founder_approval", "founder_whatsapp_dhruv", "founder_whatsapp_bhaskar"]);
+          const cfgMap: Record<string, string> = {};
+          (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
+          const webhookUrl = cfgMap["webhook_po_founder_approval"];
           if (!webhookUrl) return;
+          const dhruvWA = cfgMap["founder_whatsapp_dhruv"] || "919910820078";
+          const bhaskarWA = cfgMap["founder_whatsapp_bhaskar"] || "919953001048";
 
           /* mark PO as pending */
           await supabase
@@ -670,8 +674,8 @@ export default function PurchaseOrders() {
               po_pdf_url: poPdfUrl,
               dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
               bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
-              dhruv_whatsapp: "919910820078",
-              bhaskar_whatsapp: "919953001048",
+              dhruv_whatsapp: dhruvWA,
+              bhaskar_whatsapp: bhaskarWA,
             }),
           });
         } catch (_) {
@@ -702,7 +706,7 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status",
         )
         .eq("id", poId)
         .single();
