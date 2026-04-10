@@ -28,6 +28,7 @@ type Rfq = {
   title: string | null;
   deadline: string | null;
   pr_id: string | null;
+  target_category: string | null;
 };
 
 type RfqItem = {
@@ -203,6 +204,7 @@ export function LegacyQuoteUploadModal({
   const [selectedRfqId, setSelectedRfqId] = useState<string>("");
   const [rfqItems, setRfqItems] = useState<RfqItem[]>([]);
   const [rfqItemsLoading, setRfqItemsLoading] = useState(false);
+  const [rfqProjectNames, setRfqProjectNames] = useState<Record<string, string>>({});
 
   // Step 2
   const [vendorTab, setVendorTab] = useState<"existing" | "new">("existing");
@@ -258,13 +260,30 @@ export function LegacyQuoteUploadModal({
     setRfqsLoading(true);
     supabase
       .from("cps_rfqs")
-      .select("id,rfq_number,title,deadline,pr_id")
+      .select("id,rfq_number,title,deadline,pr_id,target_category")
       .in("status", ["draft", "sent", "reminder_1", "reminder_2", "reminder_3"])
       .order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (!error) setRfqs((data ?? []) as Rfq[]);
+      .then(async ({ data, error }) => {
+        if (error) { setRfqsLoading(false); return; }
+        const rfqRows = (data ?? []) as Rfq[];
+        setRfqs(rfqRows);
+
+        // Fetch project names for all linked PRs
+        const prIds = Array.from(new Set(rfqRows.map((r) => r.pr_id).filter(Boolean))) as string[];
+        if (prIds.length) {
+          const { data: prs } = await supabase
+            .from("cps_purchase_requisitions")
+            .select("id,project_code,project_site")
+            .in("id", prIds);
+          const nameMap: Record<string, string> = {};
+          (prs ?? []).forEach((p: any) => { nameMap[p.id] = p.project_code ?? p.project_site; });
+          // Map rfq.id → project name via pr_id
+          const rfqMap: Record<string, string> = {};
+          rfqRows.forEach((r) => { if (r.pr_id && nameMap[r.pr_id]) rfqMap[r.id] = nameMap[r.pr_id]; });
+          setRfqProjectNames(rfqMap);
+        }
+
         setRfqsLoading(false);
-        // Pre-select if provided
         if (preselectedRfqId) setSelectedRfqId(preselectedRfqId);
       });
   }, [open, preselectedRfqId]);
@@ -610,15 +629,26 @@ export function LegacyQuoteUploadModal({
                       <SelectValue placeholder="Select RFQ" />
                     </SelectTrigger>
                     <SelectContent>
-                      {rfqs.map((r) => (
-                        <SelectItem key={r.id} value={r.id}>
-                          {r.rfq_number}
-                          {r.title ? ` — ${r.title}` : ""}
-                          {r.deadline
-                            ? ` · Due ${new Date(r.deadline).toLocaleDateString("en-IN")}`
-                            : ""}
-                        </SelectItem>
-                      ))}
+                      {rfqs.map((r) => {
+                        const projectName = rfqProjectNames[r.id] ?? null;
+                        const category = r.target_category ?? null;
+                        const due = r.deadline
+                          ? (() => {
+                              const d = new Date(r.deadline);
+                              const dd = String(d.getDate()).padStart(2, "0");
+                              const mm = String(d.getMonth() + 1).padStart(2, "0");
+                              return `${dd}/${mm}/${d.getFullYear()}`;
+                            })()
+                          : null;
+                        return (
+                          <SelectItem key={r.id} value={r.id}>
+                            <span className="font-mono text-primary">{r.rfq_number}</span>
+                            {projectName && <span> — {projectName}</span>}
+                            {category && <span className="text-muted-foreground"> · {category}</span>}
+                            {due && <span className="text-muted-foreground"> · Due {due}</span>}
+                          </SelectItem>
+                        );
+                      })}
                     </SelectContent>
                   </Select>
                 )}
