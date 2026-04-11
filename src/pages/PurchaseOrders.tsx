@@ -1482,16 +1482,16 @@ export default function PurchaseOrders() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[70px]">Sr.No</TableHead>
-                        <TableHead>Description</TableHead>
-                        <TableHead>Brand/Make</TableHead>
-                        <TableHead>HSN</TableHead>
-                        <TableHead>Qty</TableHead>
-                        <TableHead>Unit</TableHead>
-                        <TableHead className="text-right">Rate {canViewPrices ? "(₹)" : ""}</TableHead>
-                        <TableHead>GST%</TableHead>
-                        <TableHead className="text-right">Total</TableHead>
-                        <TableHead className="w-[50px]"></TableHead>
+                        <TableHead className="w-[50px]">Sr.No</TableHead>
+                        <TableHead className="min-w-[180px]">Description</TableHead>
+                        <TableHead className="min-w-[100px]">Brand/Make</TableHead>
+                        <TableHead className="min-w-[80px]">HSN</TableHead>
+                        <TableHead className="min-w-[80px]">Qty</TableHead>
+                        <TableHead className="min-w-[70px]">Unit</TableHead>
+                        <TableHead className="min-w-[90px] text-right">Rate {canViewPrices ? "(₹)" : ""}</TableHead>
+                        <TableHead className="min-w-[70px]">GST%</TableHead>
+                        <TableHead className="min-w-[100px] text-right">Total</TableHead>
+                        <TableHead className="w-[40px]"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1505,28 +1505,30 @@ export default function PurchaseOrders() {
                         lineItems.map((li, idx) => (
                           <TableRow key={`${li.sort_order}-${idx}`}>
                             <TableCell className="text-muted-foreground">{idx + 1}</TableCell>
-                            <TableCell className="min-w-[260px]">{li.description}</TableCell>
+                            <TableCell>{li.description}</TableCell>
                             <TableCell>
-                              <Input value={li.brand} onChange={(e) => applyLineItemUpdate(idx, { brand: e.target.value })} />
+                              <Input value={li.brand} onChange={(e) => applyLineItemUpdate(idx, { brand: e.target.value })} className="h-8 text-sm min-w-[90px]" />
                             </TableCell>
                             <TableCell>
-                              <Input value={li.hsn_code} onChange={(e) => applyLineItemUpdate(idx, { hsn_code: e.target.value })} />
+                              <Input value={li.hsn_code} onChange={(e) => applyLineItemUpdate(idx, { hsn_code: e.target.value })} className="h-8 text-sm min-w-[70px]" />
                             </TableCell>
                             <TableCell>
                               <Input
                                 type="number"
                                 value={li.quantity}
                                 onChange={(e) => applyLineItemUpdate(idx, { quantity: Number(e.target.value) })}
+                                className="h-8 text-sm min-w-[70px]"
                               />
                             </TableCell>
                             <TableCell>
-                              <Input value={li.unit} onChange={(e) => applyLineItemUpdate(idx, { unit: e.target.value })} />
+                              <Input value={li.unit} onChange={(e) => applyLineItemUpdate(idx, { unit: e.target.value })} className="h-8 text-sm min-w-[60px]" />
                             </TableCell>
                             <TableCell className="text-right">
                               <Input
                                 type="number"
                                 value={li.rate}
                                 onChange={(e) => applyLineItemUpdate(idx, { rate: Number(e.target.value) })}
+                                className="h-8 text-sm min-w-[80px]"
                               />
                             </TableCell>
                             <TableCell>
@@ -1534,6 +1536,7 @@ export default function PurchaseOrders() {
                                 type="number"
                                 value={li.gst_percent}
                                 onChange={(e) => applyLineItemUpdate(idx, { gst_percent: Number(e.target.value) })}
+                                className="h-8 text-sm min-w-[60px]"
                               />
                             </TableCell>
                             <TableCell className="text-right font-medium">{formatCurrency(li.total_value, canViewPrices)}</TableCell>
