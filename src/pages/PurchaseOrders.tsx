@@ -688,11 +688,10 @@ export default function PurchaseOrders() {
           /* upload PDF to Supabase Storage */
           const poPdfUrl = await uploadPoPdf(supabase, poId, _poNumber, pdfBlob);
 
-          /* insert approval tokens */
+          /* insert approval tokens — only Bhaskar */
           const { data: insertedTokens, error: tokErr } = await supabase
             .from("cps_po_approval_tokens")
             .insert([
-              { po_id: poId, po_number: _poNumber, founder_name: "Dhruv" },
               { po_id: poId, po_number: _poNumber, founder_name: "Bhaskar" },
             ])
             .select("token,founder_name");
@@ -736,9 +735,7 @@ export default function PurchaseOrders() {
               payment_terms: _paymentTerms || null,
               delivery_date: _deliveryDate || null,
               po_pdf_url: poPdfUrl,
-              dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
               bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
-              dhruv_whatsapp: dhruvWA,
               bhaskar_whatsapp: bhaskarWA,
             }),
           });

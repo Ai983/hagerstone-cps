@@ -488,13 +488,11 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
         const { data: insertedTokens } = await supabase
           .from("cps_po_approval_tokens")
           .insert([
-            { po_id: poId, po_number: poNumber, founder_name: "Dhruv" },
             { po_id: poId, po_number: poNumber, founder_name: "Bhaskar" },
           ])
           .select("token,founder_name");
 
         const tokenList = (insertedTokens ?? []) as Array<{ token: string; founder_name: string }>;
-        const dhruvLink = tokenList.find(t => t.founder_name === "Dhruv");
         const bhaskarLink = tokenList.find(t => t.founder_name === "Bhaskar");
 
         // Fetch webhook URL + founder numbers from config
@@ -525,9 +523,7 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
               po_pdf_url: fileUrl,
               uploaded_by: user.name ?? user.email ?? "",
               uploaded_at: now,
-              dhruv_whatsapp: cfgMap["founder_whatsapp_dhruv"] || "919910820078",
               bhaskar_whatsapp: cfgMap["founder_whatsapp_bhaskar"] || "919953001048",
-              dhruv_approval_link: dhruvLink ? `${origin}/approve-po?token=${dhruvLink.token}` : "",
               bhaskar_approval_link: bhaskarLink ? `${origin}/approve-po?token=${bhaskarLink.token}` : "",
             }),
           });
