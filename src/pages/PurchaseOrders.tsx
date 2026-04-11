@@ -25,7 +25,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Info, PenLine, Plus, Search, Upload } from "lucide-react";
+import { Info, PenLine, Plus, Search, Trash2, Upload } from "lucide-react";
 
 import LegacyPOUploadModal from "@/components/pos/LegacyPOUploadModal";
 
@@ -1491,12 +1491,13 @@ export default function PurchaseOrders() {
                         <TableHead className="text-right">Rate {canViewPrices ? "(₹)" : ""}</TableHead>
                         <TableHead>GST%</TableHead>
                         <TableHead className="text-right">Total</TableHead>
+                        <TableHead className="w-[50px]"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {lineItems.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
+                          <TableCell colSpan={10} className="text-center py-10 text-muted-foreground">
                             Select an RFQ to auto-load items.
                           </TableCell>
                         </TableRow>
@@ -1536,6 +1537,18 @@ export default function PurchaseOrders() {
                               />
                             </TableCell>
                             <TableCell className="text-right font-medium">{formatCurrency(li.total_value, canViewPrices)}</TableCell>
+                            <TableCell>
+                              {lineItems.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setLineItems((prev) => prev.filter((_, i) => i !== idx))}
+                                  className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                                  title="Remove item"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              )}
+                            </TableCell>
                           </TableRow>
                         ))
                       )}
