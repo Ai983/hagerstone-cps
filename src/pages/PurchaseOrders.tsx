@@ -227,6 +227,16 @@ export default function PurchaseOrders() {
   const [standardTnCs, setStandardTnCs] = useState<Record<string, string>>({});
   const [approveSending, setApproveSending] = useState(false);
   const [legacyModalOpen, setLegacyModalOpen] = useState(false);
+
+  // Edit PO state
+  const [editMode, setEditMode] = useState(false);
+  const [editShipTo, setEditShipTo] = useState("");
+  const [editBillTo, setEditBillTo] = useState("");
+  const [editDeliveryDate, setEditDeliveryDate] = useState("");
+  const [editPaymentTerms, setEditPaymentTerms] = useState("");
+  const [editPenaltyClause, setEditPenaltyClause] = useState("");
+  const [editLineItems, setEditLineItems] = useState<PoLineItemRow[]>([]);
+  const [editSaving, setEditSaving] = useState(false);
   const [viewPaymentSchedule, setViewPaymentSchedule] = useState<PaymentScheduleRow[]>([]);
   const [markPaidOpen, setMarkPaidOpen] = useState(false);
   const [markPaidRow, setMarkPaidRow] = useState<PaymentScheduleRow | null>(null);
@@ -1108,6 +1118,81 @@ export default function PurchaseOrders() {
     }
   };
 
+  const startEditPo = () => {
+    if (!viewPo) return;
+    setEditShipTo(viewPo.ship_to_address ?? "");
+    setEditBillTo(viewPo.bill_to_address ?? "");
+    setEditDeliveryDate(viewPo.delivery_date ?? "");
+    setEditPaymentTerms(viewPo.payment_terms ?? "");
+    setEditPenaltyClause(viewPo.penalty_clause ?? "");
+    setEditLineItems(viewPoLineItems.map((li) => ({ ...li })));
+    setEditMode(true);
+  };
+
+  const cancelEditPo = () => {
+    setEditMode(false);
+  };
+
+  const updateEditLineItem = (idx: number, field: keyof PoLineItemRow, value: string | number) => {
+    setEditLineItems((prev) => {
+      const copy = [...prev];
+      const li = { ...copy[idx], [field]: value };
+      const qty = Number(li.quantity ?? 0);
+      const rate = Number(li.rate ?? 0);
+      const gst = Number(li.gst_percent ?? 0);
+      li.gst_amount = qty * rate * gst / 100;
+      li.total_value = qty * rate + (li.gst_amount ?? 0);
+      copy[idx] = li;
+      return copy;
+    });
+  };
+
+  const saveEditPo = async () => {
+    if (!viewPo || !user) return;
+    setEditSaving(true);
+    try {
+      const subTotal = editLineItems.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
+      const gstTotal = editLineItems.reduce((s, li) => s + Number(li.gst_amount ?? 0), 0);
+      const grandTotal = subTotal + gstTotal;
+
+      const { error: poErr } = await supabase.from("cps_purchase_orders").update({
+        ship_to_address: editShipTo.trim(),
+        bill_to_address: editBillTo.trim(),
+        delivery_date: editDeliveryDate,
+        payment_terms: editPaymentTerms.trim(),
+        penalty_clause: editPenaltyClause.trim(),
+        total_value: subTotal,
+        gst_amount: gstTotal,
+        grand_total: grandTotal,
+      }).eq("id", viewPo.id);
+      if (poErr) throw poErr;
+
+      for (const li of editLineItems) {
+        const { error: liErr } = await supabase.from("cps_po_line_items").update({
+          description: li.description,
+          brand: li.brand,
+          hsn_code: li.hsn_code,
+          quantity: li.quantity,
+          unit: li.unit,
+          rate: li.rate,
+          gst_percent: li.gst_percent,
+          gst_amount: li.gst_amount,
+          total_value: li.total_value,
+        }).eq("id", li.id);
+        if (liErr) throw liErr;
+      }
+
+      toast.success("PO updated successfully");
+      setEditMode(false);
+      await openView(viewPo.id);
+      await fetchPoRows();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to update PO");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   const stats = useMemo(() => {
     const total = rows.length;
     const pending = rows.filter((r) => r.status === "pending_approval").length;
@@ -1599,7 +1684,15 @@ export default function PurchaseOrders() {
         <DialogContent className="w-[calc(100vw-1rem)] max-w-4xl p-0">
           <div className="overflow-y-auto max-h-[80vh] pr-2">
           <DialogHeader className="px-6 pt-6">
-            <DialogTitle>Purchase Order</DialogTitle>
+            <div className="flex items-center justify-between">
+              <DialogTitle>{editMode ? "Edit Purchase Order" : "Purchase Order"}</DialogTitle>
+              {!viewLoading && viewPo && !editMode && ["draft", "sent", "pending_approval"].includes(viewPo.status) && isProcurementHead && (
+                <Button variant="outline" size="sm" onClick={startEditPo}>
+                  <PenLine className="h-3.5 w-3.5 mr-1.5" />
+                  Edit PO
+                </Button>
+              )}
+            </div>
           </DialogHeader>
           <div className="px-6 pb-6 pt-2 space-y-6">
             {viewLoading || !viewPo ? (
@@ -1648,19 +1741,27 @@ export default function PurchaseOrders() {
                       <div className="font-medium text-foreground">Addresses</div>
                       <div className="text-sm">
                         <div className="text-muted-foreground font-medium">Ship To</div>
-                        <div>
-                          {(viewPo.ship_to_address ?? viewPr?.project_site ?? "—").split("\n").map((line, i) => (
-                            <span key={i}>{line}<br /></span>
-                          ))}
-                        </div>
+                        {editMode ? (
+                          <Textarea rows={2} value={editShipTo} onChange={(e) => setEditShipTo(e.target.value)} className="mt-1" />
+                        ) : (
+                          <div>
+                            {(viewPo.ship_to_address ?? viewPr?.project_site ?? "—").split("\n").map((line, i) => (
+                              <span key={i}>{line}<br /></span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div className="text-sm">
                         <div className="text-muted-foreground font-medium">Bill To</div>
-                        <div>
-                          {(viewPo.bill_to_address ?? "—").split("\n").map((line, i) => (
-                            <span key={i}>{line}<br /></span>
-                          ))}
-                        </div>
+                        {editMode ? (
+                          <Textarea rows={2} value={editBillTo} onChange={(e) => setEditBillTo(e.target.value)} className="mt-1" />
+                        ) : (
+                          <div>
+                            {(viewPo.bill_to_address ?? "—").split("\n").map((line, i) => (
+                              <span key={i}>{line}<br /></span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1673,11 +1774,19 @@ export default function PurchaseOrders() {
                     </div>
                     <div className="text-sm">
                       <span className="text-muted-foreground">Delivery Date: </span>
-                      <span className="font-medium">{formatDate(viewPo.delivery_date)}</span>
+                      {editMode ? (
+                        <Input type="date" value={editDeliveryDate} onChange={(e) => setEditDeliveryDate(e.target.value)} className="mt-1 w-48 inline-block" />
+                      ) : (
+                        <span className="font-medium">{formatDate(viewPo.delivery_date)}</span>
+                      )}
                     </div>
                     <div className="text-sm">
                       <span className="text-muted-foreground">Payment Terms: </span>
-                      <span className="font-medium">{viewPo.payment_terms ?? "—"}</span>
+                      {editMode ? (
+                        <Textarea rows={2} value={editPaymentTerms} onChange={(e) => setEditPaymentTerms(e.target.value)} className="mt-1" />
+                      ) : (
+                        <span className="font-medium">{viewPo.payment_terms ?? "—"}</span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1702,16 +1811,44 @@ export default function PurchaseOrders() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {viewPoLineItems.map((li, idx) => (
+                        {(editMode ? editLineItems : viewPoLineItems).map((li, idx) => (
                           <TableRow key={li.id}>
                             <TableCell className="text-muted-foreground">{idx + 1}</TableCell>
-                            <TableCell className="min-w-[240px]">{li.description ?? "—"}</TableCell>
-                            <TableCell>{li.brand ?? "—"}</TableCell>
-                            <TableCell>{li.hsn_code ?? "—"}</TableCell>
-                            <TableCell>{li.quantity ?? 0}</TableCell>
-                            <TableCell>{li.unit ?? "—"}</TableCell>
-                            <TableCell className="text-right">{formatCurrency(li.rate, canViewPrices)}</TableCell>
-                            <TableCell>{li.gst_percent ?? "—"}</TableCell>
+                            <TableCell className="min-w-[240px]">
+                              {editMode ? (
+                                <Input value={li.description ?? ""} onChange={(e) => updateEditLineItem(idx, "description", e.target.value)} className="h-8 text-sm" />
+                              ) : (li.description ?? "—")}
+                            </TableCell>
+                            <TableCell>
+                              {editMode ? (
+                                <Input value={li.brand ?? ""} onChange={(e) => updateEditLineItem(idx, "brand", e.target.value)} className="h-8 text-sm w-24" />
+                              ) : (li.brand ?? "—")}
+                            </TableCell>
+                            <TableCell>
+                              {editMode ? (
+                                <Input value={li.hsn_code ?? ""} onChange={(e) => updateEditLineItem(idx, "hsn_code", e.target.value)} className="h-8 text-sm w-20" />
+                              ) : (li.hsn_code ?? "—")}
+                            </TableCell>
+                            <TableCell>
+                              {editMode ? (
+                                <Input type="number" value={li.quantity ?? 0} onChange={(e) => updateEditLineItem(idx, "quantity", Number(e.target.value))} className="h-8 text-sm w-16" />
+                              ) : (li.quantity ?? 0)}
+                            </TableCell>
+                            <TableCell>
+                              {editMode ? (
+                                <Input value={li.unit ?? ""} onChange={(e) => updateEditLineItem(idx, "unit", e.target.value)} className="h-8 text-sm w-16" />
+                              ) : (li.unit ?? "—")}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {editMode ? (
+                                <Input type="number" value={li.rate ?? 0} onChange={(e) => updateEditLineItem(idx, "rate", Number(e.target.value))} className="h-8 text-sm w-20 text-right" />
+                              ) : formatCurrency(li.rate, canViewPrices)}
+                            </TableCell>
+                            <TableCell>
+                              {editMode ? (
+                                <Input type="number" value={li.gst_percent ?? 0} onChange={(e) => updateEditLineItem(idx, "gst_percent", Number(e.target.value))} className="h-8 text-sm w-16" />
+                              ) : (li.gst_percent ?? "—")}
+                            </TableCell>
                             <TableCell className="text-right">{formatCurrency(li.gst_amount, canViewPrices)}</TableCell>
                             <TableCell className="text-right font-medium">{formatCurrency(li.total_value, canViewPrices)}</TableCell>
                           </TableRow>
@@ -1748,7 +1885,11 @@ export default function PurchaseOrders() {
                   </div>
                   <div className="text-sm">
                     <span className="text-muted-foreground font-medium">Penalty: </span>
-                    <span>{viewPo.penalty_clause ?? "—"}</span>
+                    {editMode ? (
+                      <Textarea rows={2} value={editPenaltyClause} onChange={(e) => setEditPenaltyClause(e.target.value)} className="mt-1" />
+                    ) : (
+                      <span>{viewPo.penalty_clause ?? "—"}</span>
+                    )}
                   </div>
                   <div className="text-sm text-muted-foreground">
                     Goods once accepted will not be returned. Quality as per specifications agreed.
@@ -2032,26 +2173,21 @@ export default function PurchaseOrders() {
           </div>
           {!viewLoading && viewPo && (
             <div className="px-6 pb-4 flex justify-end gap-2 border-t border-border/60 pt-3">
-              {(() => {
-                const anyApproved = viewPoTokens.some(t => t.response === "approved") || viewPo.founder_approval_status === "approved";
-                const isPending = viewPo.founder_approval_status === "pending" || viewPo.founder_approval_status === "sent";
-                return anyApproved ? (
-                  <Button variant="outline" size="sm" onClick={downloadPDF}>
-                    <PenLine className="h-3.5 w-3.5 mr-1.5" />
-                    Download PDF
+              {editMode ? (
+                <>
+                  <Button variant="outline" size="sm" onClick={cancelEditPo} disabled={editSaving}>
+                    Cancel
                   </Button>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">
-                      {isPending ? "⏳ Awaiting founder approval before download" : "Requires founder approval to download"}
-                    </span>
-                    <Button variant="outline" size="sm" disabled className="opacity-40 cursor-not-allowed">
-                      <PenLine className="h-3.5 w-3.5 mr-1.5" />
-                      Download PDF
-                    </Button>
-                  </div>
-                );
-              })()}
+                  <Button size="sm" onClick={saveEditPo} disabled={editSaving} className="bg-green-600 hover:bg-green-700 text-white">
+                    {editSaving ? "Saving..." : "Save Changes"}
+                  </Button>
+                </>
+              ) : (
+                <Button variant="outline" size="sm" onClick={downloadPDF}>
+                  <PenLine className="h-3.5 w-3.5 mr-1.5" />
+                  Download PDF
+                </Button>
+              )}
             </div>
           )}
           </div>
