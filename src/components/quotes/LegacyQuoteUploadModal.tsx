@@ -620,37 +620,43 @@ export function LegacyQuoteUploadModal({
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" /> Loading RFQs…
                   </div>
+                ) : rfqs.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No open RFQs found.</p>
                 ) : (
-                  <Select
-                    value={selectedRfqId}
-                    onValueChange={setSelectedRfqId}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select RFQ" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {rfqs.map((r) => {
-                        const projectName = rfqProjectNames[r.id] ?? null;
-                        const category = r.target_category ?? null;
-                        const due = r.deadline
-                          ? (() => {
-                              const d = new Date(r.deadline);
-                              const dd = String(d.getDate()).padStart(2, "0");
-                              const mm = String(d.getMonth() + 1).padStart(2, "0");
-                              return `${dd}/${mm}/${d.getFullYear()}`;
-                            })()
-                          : null;
-                        return (
-                          <SelectItem key={r.id} value={r.id}>
-                            <span className="font-mono text-primary">{r.rfq_number}</span>
-                            {projectName && <span> — {projectName}</span>}
-                            {category && <span className="text-muted-foreground"> · {category}</span>}
-                            {due && <span className="text-muted-foreground"> · Due {due}</span>}
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectContent>
-                  </Select>
+                  <div className="max-h-64 overflow-y-auto space-y-1.5 rounded-lg border border-border p-2">
+                    {rfqs.map((r) => {
+                      const projectName = rfqProjectNames[r.id] ?? null;
+                      const category = r.target_category ?? null;
+                      const due = r.deadline
+                        ? (() => {
+                            const d = new Date(r.deadline);
+                            const dd = String(d.getDate()).padStart(2, "0");
+                            const mm = String(d.getMonth() + 1).padStart(2, "0");
+                            return `${dd}/${mm}/${d.getFullYear()}`;
+                          })()
+                        : null;
+                      const isSelected = selectedRfqId === r.id;
+                      return (
+                        <button
+                          key={r.id}
+                          type="button"
+                          onClick={() => setSelectedRfqId(r.id)}
+                          className={`w-full text-left rounded-md border px-3 py-2.5 text-sm transition-colors ${
+                            isSelected
+                              ? "border-primary bg-primary/5 ring-1 ring-primary"
+                              : "border-border hover:bg-muted/40"
+                          }`}
+                        >
+                          <div className="font-mono font-medium text-primary">{r.rfq_number}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {projectName && <span>{projectName}</span>}
+                            {category && <span> · {category}</span>}
+                            {due && <span> · Due {due}</span>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
 
