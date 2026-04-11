@@ -477,23 +477,43 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
         await supabase.from("cps_po_payment_schedules").insert(scheduleRows as any);
       }
 
-      // 4. Fire founder approval webhook (non-blocking on failure)
+      // 4. Create approval tokens + Fire founder approval webhook
       let webhookSent = false;
       try {
-        const { data: webhookConfig } = await supabase
-          .from("cps_config")
-          .select("value")
-          .eq("key", "webhook_founder_approval")
-          .single();
+        const poId = (po as any).id as string;
+        const poNumber = (po as any).po_number as string;
+        const origin = window.location.origin;
 
-        if (webhookConfig?.value) {
-          await fetch(String(webhookConfig.value), {
+        // Create approval tokens for founders
+        const { data: insertedTokens } = await supabase
+          .from("cps_po_approval_tokens")
+          .insert([
+            { po_id: poId, po_number: poNumber, founder_name: "Dhruv" },
+            { po_id: poId, po_number: poNumber, founder_name: "Bhaskar" },
+          ])
+          .select("token,founder_name");
+
+        const tokenList = (insertedTokens ?? []) as Array<{ token: string; founder_name: string }>;
+        const dhruvLink = tokenList.find(t => t.founder_name === "Dhruv");
+        const bhaskarLink = tokenList.find(t => t.founder_name === "Bhaskar");
+
+        // Fetch webhook URL + founder numbers from config
+        const { data: cfgRows } = await supabase
+          .from("cps_config")
+          .select("key,value")
+          .in("key", ["webhook_po_founder_approval", "founder_whatsapp_dhruv", "founder_whatsapp_bhaskar"]);
+        const cfgMap: Record<string, string> = {};
+        (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
+        const webhookUrl = cfgMap["webhook_po_founder_approval"];
+
+        if (webhookUrl) {
+          await fetch(webhookUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               event: "legacy_po_approval_request",
-              po_id: (po as any).id,
-              po_number: (po as any).po_number,
+              po_id: poId,
+              po_number: poNumber,
               legacy_po_number: legacyPoNumber.trim(),
               supplier_name: supplierName.trim(),
               project: selectedProject?.name ?? "",
@@ -505,8 +525,10 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
               po_pdf_url: fileUrl,
               uploaded_by: user.name ?? user.email ?? "",
               uploaded_at: now,
-              dhruv_whatsapp: "919910820078",
-              bhaskar_whatsapp: "919953001048",
+              dhruv_whatsapp: cfgMap["founder_whatsapp_dhruv"] || "919910820078",
+              bhaskar_whatsapp: cfgMap["founder_whatsapp_bhaskar"] || "919953001048",
+              dhruv_approval_link: dhruvLink ? `${origin}/approve-po?token=${dhruvLink.token}` : "",
+              bhaskar_approval_link: bhaskarLink ? `${origin}/approve-po?token=${bhaskarLink.token}` : "",
             }),
           });
           webhookSent = true;
@@ -514,10 +536,10 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
           await supabase
             .from("cps_purchase_orders")
             .update({
-              founder_approval_status: "sent",
+              founder_approval_status: "pending",
               founder_approval_sent_at: now,
             } as any)
-            .eq("id", (po as any).id);
+            .eq("id", poId);
         }
       } catch {
         // Webhook failure is non-blocking — we still saved the PO
