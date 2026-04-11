@@ -510,7 +510,7 @@ export default function PurchaseOrders() {
   };
 
   const reviewPo = () => {
-    if (!selectedRfqId || !comparisonSheetId || !createSupplierId) {
+    if (!selectedRfqId || !createSupplierId) {
       toast.error("Please select an RFQ first");
       return;
     }
@@ -523,7 +523,7 @@ export default function PurchaseOrders() {
 
   const submitCreatePo = async () => {
     if (!user) return;
-    if (!selectedRfqId || !comparisonSheetId || !createSupplierId) {
+    if (!selectedRfqId || !createSupplierId) {
       toast.error("Please select an RFQ and supplier");
       return;
     }
@@ -577,7 +577,7 @@ export default function PurchaseOrders() {
             rfq_id: selectedRfqId,
             pr_id: (eligibleRfqsOptions.find((r) => r.id === selectedRfqId) as any)?.pr_id ?? null,
             supplier_id: createSupplierId,
-            comparison_sheet_id: comparisonSheetId,
+            comparison_sheet_id: comparisonSheetId || null,
             status: "draft",
             version: 1,
             project_code: prProjectCode || null,
