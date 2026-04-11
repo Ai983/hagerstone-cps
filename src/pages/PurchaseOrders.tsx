@@ -692,8 +692,8 @@ export default function PurchaseOrders() {
           const { data: insertedTokens, error: tokErr } = await supabase
             .from("cps_po_approval_tokens")
             .insert([
-              { po_id: poId, founder_name: "Dhruv" },
-              { po_id: poId, founder_name: "Bhaskar" },
+              { po_id: poId, po_number: _poNumber, founder_name: "Dhruv" },
+              { po_id: poId, po_number: _poNumber, founder_name: "Bhaskar" },
             ])
             .select("token,founder_name");
           if (tokErr || !insertedTokens) throw tokErr;
