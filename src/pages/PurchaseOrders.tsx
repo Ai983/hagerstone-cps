@@ -273,14 +273,26 @@ export default function PurchaseOrders() {
     setCreateLoading(true);
     setCreateOpen(true);
     try {
-      // RFQs whose comparison sheet is sent_for_approval
+      // Path 1: RFQs whose comparison sheet is sent_for_approval
       const { data: compRows, error: compErr } = await supabase
         .from("cps_comparison_sheets")
         .select("id,rfq_id")
         .eq("manual_review_status", "sent_for_approval");
       if (compErr) throw compErr;
 
-      const rfqIds = Array.from(new Set((compRows ?? []).map((x: any) => String(x.rfq_id)).filter(Boolean)));
+      const compRfqIds = (compRows ?? []).map((x: any) => String(x.rfq_id)).filter(Boolean);
+
+      // Path 2: RFQs that have at least 1 approved quote (even without comparison sheet)
+      const { data: approvedQuotes, error: aqErr } = await supabase
+        .from("cps_quotes")
+        .select("rfq_id")
+        .eq("parse_status", "approved");
+      if (aqErr) throw aqErr;
+
+      const quoteRfqIds = (approvedQuotes ?? []).map((q: any) => String(q.rfq_id)).filter(Boolean);
+
+      // Combine both paths, deduplicate
+      const rfqIds = Array.from(new Set([...compRfqIds, ...quoteRfqIds]));
       setEligibleRfqIds(rfqIds);
 
       if (rfqIds.length === 0) {
@@ -377,22 +389,44 @@ export default function PurchaseOrders() {
       setPrProjectCode((prRow as any).project_code ?? "");
       setCreateShipTo((prRow as any).project_site ?? "");
 
-      const { data: sheetRow, error: sheetErr } = await supabase
+      // Try to load comparison sheet (may not exist for single-quote RFQs)
+      const { data: sheetRow } = await supabase
         .from("cps_comparison_sheets")
         .select("id,recommended_supplier_id,reviewer_recommendation")
         .eq("rfq_id", rfqId)
-        .single();
-      if (sheetErr) throw sheetErr;
+        .maybeSingle();
 
-      const sheet = sheetRow as any;
-      const recSupplierId = String(sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? "");
+      let recSupplierId = "";
+
+      if (sheetRow) {
+        const sheet = sheetRow as any;
+        recSupplierId = String(sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? "");
+        if (recSupplierId) {
+          setComparisonSheetId(String(sheet.id));
+        }
+      }
+
+      // Fallback: if no comparison sheet or no recommended supplier, pick from approved quotes
       if (!recSupplierId) {
-        toast.error("No recommended supplier found for this RFQ");
+        const { data: approvedQuotes } = await supabase
+          .from("cps_quotes")
+          .select("supplier_id")
+          .eq("rfq_id", rfqId)
+          .eq("parse_status", "approved")
+          .order("received_at", { ascending: false })
+          .limit(1);
+
+        if (approvedQuotes && approvedQuotes.length > 0) {
+          recSupplierId = String((approvedQuotes[0] as any).supplier_id);
+        }
+      }
+
+      if (!recSupplierId) {
+        toast.error("No approved quotes found for this RFQ. Approve at least one quote first.");
         setCreateLoading(false);
         return;
       }
 
-      setComparisonSheetId(String(sheet.id));
       setRecommendedSupplierId(recSupplierId);
       setCreateSupplierId(recSupplierId);
 
