@@ -186,6 +186,8 @@ export default function ComparisonSheetPage() {
   const [quoteBySupplierId, setQuoteBySupplierId] = useState<Record<string, QuoteRow>>({});
   const [cellsByPrLineIdAndSupplierId, setCellsByPrLineIdAndSupplierId] = useState<Record<string, Record<string, MatchCell>>>( {});
   const [benchmarkByPrLineId, setBenchmarkByPrLineId] = useState<Record<string, number | null>>({});
+  const [allQuoteLinesBySupplierId, setAllQuoteLinesBySupplierId] = useState<Record<string, QuoteLineItem[]>>({});
+  const [extraChargesBySupplierId, setExtraChargesBySupplierId] = useState<Record<string, Array<{ name: string; amount: number; taxable: boolean }>>>({});
 
   const [usersById, setUsersById] = useState<Record<string, { id: string; name: string }>>({});
 
@@ -256,6 +258,8 @@ export default function ComparisonSheetPage() {
         setQuoteBySupplierId({});
         setCellsByPrLineIdAndSupplierId({});
         setBenchmarkByPrLineId({});
+        setAllQuoteLinesBySupplierId({});
+        setExtraChargesBySupplierId({});
         setUsersById({});
         setReviewNotes("");
         setRecommendedSupplierId("");
@@ -383,6 +387,34 @@ export default function ComparisonSheetPage() {
       }
 
       setCellsByPrLineIdAndSupplierId(cells);
+
+      // Build full quote-line breakdown by supplier (for "Detailed Quote Breakdown" card)
+      const linesBySupplier: Record<string, QuoteLineItem[]> = {};
+      for (const li of liList) {
+        const sId = quoteIdToSupplierId[String(li.quote_id)];
+        if (!sId) continue;
+        if (!linesBySupplier[sId]) linesBySupplier[sId] = [];
+        linesBySupplier[sId].push(li);
+      }
+      setAllQuoteLinesBySupplierId(linesBySupplier);
+
+      // Extra charges per supplier (read from each quote's ai_parsed_data)
+      const extraBySupplier: Record<string, Array<{ name: string; amount: number; taxable: boolean }>> = {};
+      const { data: quotesAiData } = await supabase
+        .from("cps_quotes")
+        .select("supplier_id, ai_parsed_data")
+        .in("id", quoteIds);
+      (quotesAiData ?? []).forEach((q: any) => {
+        const charges = q?.ai_parsed_data?.extra_charges;
+        if (Array.isArray(charges) && charges.length > 0) {
+          extraBySupplier[String(q.supplier_id)] = charges.map((c: any) => ({
+            name: String(c?.name ?? ""),
+            amount: Number(c?.amount) || 0,
+            taxable: !!c?.taxable,
+          })).filter((c: any) => c.name && c.amount > 0);
+        }
+      });
+      setExtraChargesBySupplierId(extraBySupplier);
 
       // Benchmarks (optional; if missing, matrix will simply show no benchmark).
       let benchByPr: Record<string, number | null> = {};
@@ -1079,11 +1111,11 @@ Provide a JSON response with this exact structure:
         .eq("id", rfq.pr_id)
         .maybeSingle();
 
-      // Fetch quote line items BEFORE PO insert so we can compute and store totals
-      const { data: quoteLineItems, error: qliErr } = await supabase
-        .from("cps_quote_line_items")
-        .select("*")
-        .eq("quote_id", quote.id);
+      // Fetch quote line items + ai_parsed_data (for extra charges) BEFORE PO insert
+      const [{ data: quoteLineItems, error: qliErr }, { data: quoteFull }] = await Promise.all([
+        supabase.from("cps_quote_line_items").select("*").eq("quote_id", quote.id),
+        supabase.from("cps_quotes").select("ai_parsed_data").eq("id", quote.id).maybeSingle(),
+      ]);
       if (qliErr) throw qliErr;
 
       // Compute totals from quote line items so they're stored on the PO and line items
@@ -1110,6 +1142,34 @@ Provide a JSON response with this exact structure:
           gst_amount:        lineGst,
         };
       });
+
+      // Append extra charges (Installation, Transportation, etc.) added during quote review
+      const extraCharges = Array.isArray((quoteFull as any)?.ai_parsed_data?.extra_charges)
+        ? (quoteFull as any).ai_parsed_data.extra_charges
+        : [];
+      extraCharges.forEach((charge: any) => {
+        const amount = Number(charge?.amount) || 0;
+        if (!charge?.name || amount <= 0) return;
+        const gstPct = charge?.taxable ? 18 : 0;
+        const gstAmt = amount * gstPct / 100;
+        poLineItemsToInsert.push({
+          pr_line_item_id:   null,
+          item_id:           null,
+          description:       String(charge.name),
+          brand:             null,
+          quantity:          1,
+          unit:              "lot",
+          rate:              amount,
+          gst_percent:       gstPct,
+          freight:           0,
+          packing:           0,
+          total_landed_rate: amount + gstAmt,
+          hsn_code:          null,
+          total_value:       amount,
+          gst_amount:        gstAmt,
+        });
+      });
+
       const poSubTotal   = poLineItemsToInsert.reduce((s, li) => s + li.total_value, 0);
       const poGstTotal   = poLineItemsToInsert.reduce((s, li) => s + li.gst_amount, 0);
       const poGrandTotal = poSubTotal + poGstTotal;
@@ -1813,6 +1873,106 @@ Provide a JSON response with this exact structure:
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             Awaiting Manual Review — please check back after the sheet is marked as reviewed.
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Detailed Quote Breakdown — shows full quote items per supplier (more than the PR may have) */}
+      {canSeeMatrix && suppliers.length > 0 && Object.values(allQuoteLinesBySupplierId).some((arr) => arr.length > 0) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Detailed Quote Breakdown</CardTitle>
+            <CardDescription className="mt-1">
+              Full line-item view of each supplier's quote — useful when vendors break down a single PR item into multiple quote items
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {suppliers.map((sup) => {
+              const lines = allQuoteLinesBySupplierId[sup.id] ?? [];
+              const charges = extraChargesBySupplierId[sup.id] ?? [];
+              if (lines.length === 0 && charges.length === 0) return null;
+              const linesSubtotal = lines.reduce((s, li) => {
+                const r = Number(li.rate ?? 0);
+                const q = Number(li.quantity ?? 0);
+                const g = Number(li.gst_percent ?? 18);
+                const f = Number(li.freight ?? 0);
+                const p = Number(li.packing ?? 0);
+                return s + q * (r * (1 + g / 100) + f + p);
+              }, 0);
+              const chargesSubtotal = charges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
+              const grand = linesSubtotal + chargesSubtotal;
+              return (
+                <div key={sup.id} className="border border-border rounded-lg overflow-hidden">
+                  <div className="px-4 py-2.5 bg-muted/30 border-b border-border flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm">{sup.name}</span>
+                      <Badge variant="outline" className="text-xs">{lines.length} item{lines.length !== 1 ? "s" : ""}</Badge>
+                      {charges.length > 0 && <Badge variant="outline" className="text-xs">+{charges.length} extra charge{charges.length !== 1 ? "s" : ""}</Badge>}
+                    </div>
+                    {canViewPrices && (
+                      <span className="text-sm font-bold text-primary">{formatCurrency(grand, canViewPrices)}</span>
+                    )}
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12">#</TableHead>
+                          <TableHead>Description</TableHead>
+                          <TableHead className="text-right w-20">Qty</TableHead>
+                          <TableHead className="w-16">Unit</TableHead>
+                          <TableHead className="text-right w-24">Rate</TableHead>
+                          <TableHead className="text-right w-16">GST%</TableHead>
+                          <TableHead className="text-right w-28">Landed Total</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {lines.map((li, idx) => {
+                          const r = Number(li.rate ?? 0);
+                          const q = Number(li.quantity ?? 0);
+                          const g = Number(li.gst_percent ?? 18);
+                          const f = Number(li.freight ?? 0);
+                          const p = Number(li.packing ?? 0);
+                          const lineTotal = q * (r * (1 + g / 100) + f + p);
+                          return (
+                            <TableRow key={li.id}>
+                              <TableCell className="text-muted-foreground text-xs">{idx + 1}</TableCell>
+                              <TableCell className="text-sm">{li.original_description ?? "—"}</TableCell>
+                              <TableCell className="text-right">{q}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{li.unit ?? "—"}</TableCell>
+                              <TableCell className="text-right">{formatCurrency(r, canViewPrices)}</TableCell>
+                              <TableCell className="text-right text-xs">{g}%</TableCell>
+                              <TableCell className="text-right font-medium">{formatCurrency(lineTotal, canViewPrices)}</TableCell>
+                            </TableRow>
+                          );
+                        })}
+                        {charges.map((c, idx) => {
+                          const total = c.amount * (c.taxable ? 1.18 : 1);
+                          return (
+                            <TableRow key={`charge-${idx}`} className="bg-amber-50/40">
+                              <TableCell className="text-muted-foreground text-xs">+</TableCell>
+                              <TableCell className="text-sm font-medium text-amber-800">
+                                {c.name}
+                                <span className="text-xs text-amber-600 ml-1">(extra charge)</span>
+                              </TableCell>
+                              <TableCell className="text-right">1</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">lot</TableCell>
+                              <TableCell className="text-right">{formatCurrency(c.amount, canViewPrices)}</TableCell>
+                              <TableCell className="text-right text-xs">{c.taxable ? "18%" : "—"}</TableCell>
+                              <TableCell className="text-right font-medium">{formatCurrency(total, canViewPrices)}</TableCell>
+                            </TableRow>
+                          );
+                        })}
+                        <TableRow className="bg-muted/30 font-semibold">
+                          <TableCell colSpan={6} className="text-right">Grand Total</TableCell>
+                          <TableCell className="text-right text-primary">{formatCurrency(grand, canViewPrices)}</TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
       )}
