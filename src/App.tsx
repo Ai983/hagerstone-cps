@@ -24,6 +24,8 @@ const VendorUploadQuote = React.lazy(() => import("@/pages/VendorUploadQuote"));
 const InvoiceUpload = React.lazy(() => import("@/pages/InvoiceUpload"));
 const ApprovePoPage = React.lazy(() => import("@/pages/ApprovePoPage"));
 const PRReview = React.lazy(() => import("@/pages/PRReview"));
+const KanbanBoard = React.lazy(() => import("@/pages/KanbanBoard"));
+const Analytics = React.lazy(() => import("@/pages/Analytics"));
 
 const Loader = () => (
   <div className="min-h-screen flex items-center justify-center">
@@ -70,6 +72,8 @@ const App = () => (
               <Route path="/audit" element={<Protected><AuditLog /></Protected>} />
               <Route path="/invoices/upload" element={<Protected><InvoiceUpload /></Protected>} />
               <Route path="/pr-review" element={<Protected><PRReview /></Protected>} />
+              <Route path="/kanban" element={<Protected><KanbanBoard /></Protected>} />
+              <Route path="/analytics" element={<Protected><Analytics /></Protected>} />
               <Route path="*" element={<Protected><div className="p-8 text-center"><h1 className="text-2xl font-bold">404 — Page not found</h1></div></Protected>} />
             </Routes>
           </React.Suspense>
