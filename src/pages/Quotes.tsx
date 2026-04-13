@@ -219,12 +219,24 @@ export default function Quotes() {
     receivedDate: "",
     paymentTerms: "",
     deliveryTerms: "",
-    gstPercent: "18",
+    freightTerms: "",
     warrantyMonths: "",
     validityDays: "",
-    totalQuotedValue: "",
-    totalLandedValue: "",
   });
+
+  type LogRfqItem = {
+    line_item_id: string;
+    item_description: string;
+    quantity: number;
+    unit: string;
+    benchmark_rate: number | null;
+    sort_order: number;
+  };
+  type LogItemEntry = { rate: string; gst_percent: string; brand: string };
+
+  const [logRfqItems, setLogRfqItems] = useState<LogRfqItem[]>([]);
+  const [logItemEntries, setLogItemEntries] = useState<Record<string, LogItemEntry>>({});
+  const [logItemsLoading, setLogItemsLoading] = useState(false);
 
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewQuoteId, setReviewQuoteId] = useState<string | null>(null);
@@ -926,11 +938,18 @@ Rules:
       return;
     }
     setSuppliers((supRes.data ?? []) as Supplier[]);
+    setLogRfqItems([]);
+    setLogItemEntries({});
     setLogForm((prev) => ({
       ...prev,
-      rfqId: (rfqRes.data?.[0]?.id as string) ?? prev.rfqId,
+      rfqId: "",
+      supplierId: "",
+      quoteNumber: "",
+      channel: "portal" as Channel,
       receivedDate: new Date().toISOString().slice(0, 10),
-      gstPercent: "18",
+      paymentTerms: "",
+      deliveryTerms: "",
+      freightTerms: "",
       warrantyMonths: "",
       validityDays: "7",
     }));
@@ -991,6 +1010,31 @@ Rules:
     }
   };
 
+  const loadLogRfqItems = async (rfqId: string) => {
+    if (!rfqId) { setLogRfqItems([]); setLogItemEntries({}); return; }
+    setLogItemsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("cps_rfq_line_items_for_dispatch")
+        .select("line_item_id,item_description,quantity,unit,benchmark_rate,sort_order")
+        .eq("rfq_id", rfqId)
+        .order("sort_order", { ascending: true });
+      if (error) throw error;
+      const items = (data ?? []) as LogRfqItem[];
+      setLogRfqItems(items);
+      // init entries with empty values
+      const init: Record<string, LogItemEntry> = {};
+      items.forEach((it) => {
+        init[it.line_item_id] = { rate: "", gst_percent: "18", brand: "" };
+      });
+      setLogItemEntries(init);
+    } catch {
+      toast.error("Failed to load RFQ items");
+    } finally {
+      setLogItemsLoading(false);
+    }
+  };
+
   const submitLogQuote = async () => {
     if (!user) {
       toast.error("Please sign in");
@@ -1031,6 +1075,21 @@ Rules:
       return;
     }
 
+    // Calculate totals from per-item entries
+    let subtotal = 0;
+    let totalGst = 0;
+    logRfqItems.forEach((it) => {
+      const entry = logItemEntries[it.line_item_id];
+      if (!entry) return;
+      const rate = parseFloat(entry.rate) || 0;
+      const gstPct = parseFloat(entry.gst_percent) || 0;
+      const amount = rate * (it.quantity ?? 1);
+      const gstAmt = amount * (gstPct / 100);
+      subtotal += amount;
+      totalGst += gstAmt;
+    });
+    const grandTotal = subtotal + totalGst;
+
     const payload: any = {
       rfq_id: rfqId,
       supplier_id: resolvedSupplierId,
@@ -1039,21 +1098,21 @@ Rules:
       received_at: logForm.receivedDate ? new Date(logForm.receivedDate).toISOString() : new Date().toISOString(),
       payment_terms: logForm.paymentTerms.trim() || null,
       delivery_terms: logForm.deliveryTerms.trim() || null,
-      gst_percent: logForm.gstPercent ? Number(logForm.gstPercent) : null,
+      freight_terms: logForm.freightTerms.trim() || null,
       warranty_months: logForm.warrantyMonths ? Number(logForm.warrantyMonths) : null,
       validity_days: logForm.validityDays ? Number(logForm.validityDays) : null,
-      total_quoted_value: logForm.totalQuotedValue ? Number(logForm.totalQuotedValue) : null,
-      total_landed_value: logForm.totalLandedValue ? Number(logForm.totalLandedValue) : null,
-      parse_status: "needs_review",
-      parse_confidence: null,
+      total_quoted_value: subtotal > 0 ? subtotal : null,
+      total_landed_value: grandTotal > 0 ? grandTotal : null,
+      parse_status: logRfqItems.length > 0 ? "parsed" : "needs_review",
+      parse_confidence: logRfqItems.length > 0 ? 100 : null,
       compliance_status: "pending",
       submitted_by_human: true,
     };
 
-    const { data, error } = await supabase
+    const { data: quoteInsert, error } = await supabase
       .from("cps_quotes")
       .insert([payload])
-      .select("blind_quote_ref")
+      .select("id,blind_quote_ref")
       .single();
 
     if (error) {
@@ -1062,7 +1121,36 @@ Rules:
       return;
     }
 
-    toast.success("Quote logged successfully");
+    // Insert line items if we have per-item data
+    const quoteId = (quoteInsert as any).id as string;
+    if (logRfqItems.length > 0) {
+      const linePayload = logRfqItems.map((it, idx) => {
+        const entry = logItemEntries[it.line_item_id] ?? { rate: "0", gst_percent: "18", brand: "" };
+        const rate = parseFloat(entry.rate) || 0;
+        const gstPct = parseFloat(entry.gst_percent) || 18;
+        const amount = rate * (it.quantity ?? 1);
+        const gstAmt = amount * (gstPct / 100);
+        return {
+          quote_id: quoteId,
+          original_description: it.item_description,
+          quantity: it.quantity ?? 1,
+          unit: it.unit ?? "",
+          rate,
+          gst_percent: gstPct,
+          freight: 0,
+          packing: 0,
+          total_landed_rate: rate + rate * (gstPct / 100),
+          brand: entry.brand.trim() || null,
+          is_compliant: true,
+          confidence_score: 100,
+          human_corrected: true,
+        };
+      });
+      const { error: liErr } = await supabase.from("cps_quote_line_items").insert(linePayload);
+      if (liErr) console.error("Line items insert error:", liErr.message);
+    }
+
+    toast.success(`Quote ${(quoteInsert as any).blind_quote_ref} logged — ${logRfqItems.length} items`);
     setLogDialogOpen(false);
     await fetchQuotes();
   };
@@ -1290,166 +1378,270 @@ Rules:
 
       {/* Log Quote Manually */}
       <Dialog open={logDialogOpen} onOpenChange={setLogDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Log Quote Manually</DialogTitle>
-            <DialogDescription>Insert a new incoming quote for review.</DialogDescription>
-          </DialogHeader>
-          <div className="overflow-y-auto max-h-[80vh] pr-2">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-5xl p-0">
+          <div className="overflow-y-auto max-h-[92vh]">
+            <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
+              <DialogTitle>Log Quote Manually</DialogTitle>
+              <DialogDescription>Select RFQ to load items, then fill rates and GST per item.</DialogDescription>
+            </DialogHeader>
 
-          {logError && <div className="text-destructive bg-destructive/10 border border-destructive/20 p-3 rounded-md text-sm">{logError}</div>}
+            <div className="px-6 py-5 space-y-5">
+              {logError && <div className="text-destructive bg-destructive/10 border border-destructive/20 p-3 rounded-md text-sm">{logError}</div>}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-            <div className="space-y-2">
-              <Label>RFQ *</Label>
-              <Select value={logForm.rfqId} onValueChange={(v) => setLogForm((p) => ({ ...p, rfqId: v }))} disabled={suppliersLoading}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select RFQ" />
-                </SelectTrigger>
-                <SelectContent>
-                  {rfqs.map((r) => (
-                    <SelectItem key={r.id} value={r.id}>
-                      {r.rfq_number} | {r.title ?? ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Supplier *</Label>
-              {!newVendorMode ? (
-                <>
-                  <Popover open={supplierPopOpen} onOpenChange={setSupplierPopOpen}>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" role="combobox" className="w-full justify-between font-normal" disabled={suppliersLoading}>
-                        {logForm.supplierId ? (suppliers.find(s => s.id === logForm.supplierId)?.name ?? "Select supplier") : "Select supplier"}
-                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-[300px] p-0 z-[300]">
-                      <Command>
-                        <CommandInput placeholder="Search supplier..." value={supplierSearch} onValueChange={setSupplierSearch} />
-                        <CommandList>
-                          <CommandEmpty>No supplier found.</CommandEmpty>
-                          <CommandGroup>
-                            {suppliers
-                              .filter(s => s.name.toLowerCase().includes(supplierSearch.toLowerCase()))
-                              .map(s => (
-                                <CommandItem key={s.id} value={s.name} onSelect={() => {
-                                  setLogForm(p => ({ ...p, supplierId: s.id }));
-                                  setSupplierPopOpen(false);
-                                }}>
-                                  {s.name}
-                                </CommandItem>
-                              ))}
-                          </CommandGroup>
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
-                  <button type="button" onClick={() => { setNewVendorMode(true); setLogForm(p => ({ ...p, supplierId: "" })); }}
-                    className="flex items-center gap-1.5 text-xs text-primary hover:underline mt-1">
-                    <UserPlus className="h-3.5 w-3.5" /> Add new vendor not in list
-                  </button>
-                </>
-              ) : (
-                <div className="border rounded-lg p-3 space-y-3 bg-muted/30">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium flex items-center gap-1.5"><UserPlus className="h-4 w-4 text-primary" /> New Vendor</span>
-                    <button type="button" onClick={() => setNewVendorMode(false)} className="text-xs text-muted-foreground hover:text-foreground">← Back to list</button>
-                  </div>
-                  {/* AI parse from file */}
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">Upload quote image to auto-fill details</Label>
-                    <div className="flex gap-2">
-                      <Input type="file" accept="image/*,.pdf" className="text-xs h-8"
-                        onChange={e => setNewVendorFile(e.target.files?.[0] ?? null)} />
-                      <Button type="button" size="sm" variant="outline" className="shrink-0 gap-1.5 h-8 text-xs"
-                        onClick={parseVendorFromFile} disabled={!newVendorFile || newVendorParsing}>
-                        {newVendorParsing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                        Parse
-                      </Button>
+              {/* ── Row 1: RFQ + Supplier ── */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>RFQ *</Label>
+                  <Select
+                    value={logForm.rfqId}
+                    onValueChange={(v) => { setLogForm((p) => ({ ...p, rfqId: v })); loadLogRfqItems(v); }}
+                    disabled={suppliersLoading}
+                  >
+                    <SelectTrigger><SelectValue placeholder="Select RFQ" /></SelectTrigger>
+                    <SelectContent>
+                      {rfqs.map((r) => (
+                        <SelectItem key={r.id} value={r.id}>{r.rfq_number} | {r.title ?? ""}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>Supplier *</Label>
+                  {!newVendorMode ? (
+                    <>
+                      <Popover open={supplierPopOpen} onOpenChange={setSupplierPopOpen}>
+                        <PopoverTrigger asChild>
+                          <Button variant="outline" role="combobox" className="w-full justify-between font-normal" disabled={suppliersLoading}>
+                            {logForm.supplierId ? (suppliers.find(s => s.id === logForm.supplierId)?.name ?? "Select supplier") : "Select supplier"}
+                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-[300px] p-0 z-[300]">
+                          <Command>
+                            <CommandInput placeholder="Search supplier..." value={supplierSearch} onValueChange={setSupplierSearch} />
+                            <CommandList>
+                              <CommandEmpty>No supplier found.</CommandEmpty>
+                              <CommandGroup>
+                                {suppliers.filter(s => s.name.toLowerCase().includes(supplierSearch.toLowerCase())).map(s => (
+                                  <CommandItem key={s.id} value={s.name} onSelect={() => { setLogForm(p => ({ ...p, supplierId: s.id })); setSupplierPopOpen(false); }}>
+                                    {s.name}
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                      <button type="button" onClick={() => { setNewVendorMode(true); setLogForm(p => ({ ...p, supplierId: "" })); }}
+                        className="flex items-center gap-1.5 text-xs text-primary hover:underline mt-1">
+                        <UserPlus className="h-3.5 w-3.5" /> Add new vendor not in list
+                      </button>
+                    </>
+                  ) : (
+                    <div className="border rounded-lg p-3 space-y-3 bg-muted/30">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium flex items-center gap-1.5"><UserPlus className="h-4 w-4 text-primary" /> New Vendor</span>
+                        <button type="button" onClick={() => setNewVendorMode(false)} className="text-xs text-muted-foreground hover:text-foreground">← Back to list</button>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Upload quote image to auto-fill</Label>
+                        <div className="flex gap-2">
+                          <Input type="file" accept="image/*,.pdf" className="text-xs h-8" onChange={e => setNewVendorFile(e.target.files?.[0] ?? null)} />
+                          <Button type="button" size="sm" variant="outline" className="shrink-0 gap-1.5 h-8 text-xs" onClick={parseVendorFromFile} disabled={!newVendorFile || newVendorParsing}>
+                            {newVendorParsing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Parse
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="col-span-2 space-y-1"><Label className="text-xs">Company Name *</Label>
+                          <Input className="h-8 text-sm" value={newVendorForm.name} onChange={e => setNewVendorForm(p => ({ ...p, name: e.target.value }))} placeholder="Vendor Pvt Ltd" /></div>
+                        <div className="space-y-1"><Label className="text-xs">Phone</Label>
+                          <Input className="h-8 text-sm" value={newVendorForm.phone} onChange={e => setNewVendorForm(p => ({ ...p, phone: e.target.value }))} /></div>
+                        <div className="space-y-1"><Label className="text-xs">Email</Label>
+                          <Input className="h-8 text-sm" value={newVendorForm.email} onChange={e => setNewVendorForm(p => ({ ...p, email: e.target.value }))} /></div>
+                        <div className="space-y-1"><Label className="text-xs">City</Label>
+                          <Input className="h-8 text-sm" value={newVendorForm.city} onChange={e => setNewVendorForm(p => ({ ...p, city: e.target.value }))} /></div>
+                        <div className="space-y-1"><Label className="text-xs">GSTIN</Label>
+                          <Input className="h-8 text-sm" value={newVendorForm.gstin} onChange={e => setNewVendorForm(p => ({ ...p, gstin: e.target.value }))} /></div>
+                      </div>
                     </div>
-                    <p className="text-[10px] text-muted-foreground">Images only for AI parsing (JPG/PNG). PDF: fill manually.</p>
+                  )}
+                </div>
+              </div>
+
+              {/* ── Row 2: Quote ref + Channel + Date ── */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Supplier's Quote Ref *</Label>
+                  <Input value={logForm.quoteNumber} onChange={(e) => setLogForm((p) => ({ ...p, quoteNumber: e.target.value }))} placeholder="e.g. 2025-26-074" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Channel</Label>
+                  <Select value={logForm.channel} onValueChange={(v) => setLogForm((p) => ({ ...p, channel: v as Channel }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="email">Email</SelectItem>
+                      <SelectItem value="portal">Portal</SelectItem>
+                      <SelectItem value="whatsapp">WhatsApp</SelectItem>
+                      <SelectItem value="phone">Phone</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Received Date</Label>
+                  <Input type="date" value={logForm.receivedDate} onChange={(e) => setLogForm((p) => ({ ...p, receivedDate: e.target.value }))} />
+                </div>
+              </div>
+
+              {/* ── Row 3: Terms ── */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Payment Terms</Label>
+                  <Input value={logForm.paymentTerms} onChange={(e) => setLogForm((p) => ({ ...p, paymentTerms: e.target.value }))} placeholder="e.g. 30 days credit" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Delivery Terms</Label>
+                  <Input value={logForm.deliveryTerms} onChange={(e) => setLogForm((p) => ({ ...p, deliveryTerms: e.target.value }))} placeholder="e.g. 2 weeks from PO" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Freight Terms</Label>
+                  <Input value={logForm.freightTerms} onChange={(e) => setLogForm((p) => ({ ...p, freightTerms: e.target.value }))} placeholder="e.g. Freight extra @actuals" />
+                </div>
+              </div>
+
+              {/* ── Row 4: Warranty + Validity ── */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Warranty (months)</Label>
+                  <Input type="number" value={logForm.warrantyMonths} onChange={(e) => setLogForm((p) => ({ ...p, warrantyMonths: e.target.value }))} placeholder="12" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Price Validity (days)</Label>
+                  <Input type="number" value={logForm.validityDays} onChange={(e) => setLogForm((p) => ({ ...p, validityDays: e.target.value }))} placeholder="7" />
+                </div>
+              </div>
+
+              {/* ── Item Table ── */}
+              {logForm.rfqId && (
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold text-foreground border-t border-border pt-4">
+                    Line Items — fill Rate &amp; GST per item
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="col-span-2 space-y-1"><Label className="text-xs">Company Name *</Label>
-                      <Input className="h-8 text-sm" value={newVendorForm.name} onChange={e => setNewVendorForm(p => ({ ...p, name: e.target.value }))} placeholder="Vendor Pvt Ltd" /></div>
-                    <div className="space-y-1"><Label className="text-xs">Phone / WhatsApp</Label>
-                      <Input className="h-8 text-sm" value={newVendorForm.phone} onChange={e => setNewVendorForm(p => ({ ...p, phone: e.target.value }))} placeholder="9XXXXXXXXX" /></div>
-                    <div className="space-y-1"><Label className="text-xs">Email</Label>
-                      <Input className="h-8 text-sm" value={newVendorForm.email} onChange={e => setNewVendorForm(p => ({ ...p, email: e.target.value }))} placeholder="vendor@co.com" /></div>
-                    <div className="space-y-1"><Label className="text-xs">City</Label>
-                      <Input className="h-8 text-sm" value={newVendorForm.city} onChange={e => setNewVendorForm(p => ({ ...p, city: e.target.value }))} placeholder="Delhi" /></div>
-                    <div className="space-y-1"><Label className="text-xs">GSTIN</Label>
-                      <Input className="h-8 text-sm" value={newVendorForm.gstin} onChange={e => setNewVendorForm(p => ({ ...p, gstin: e.target.value }))} placeholder="27XXXXX..." /></div>
-                  </div>
+                  {logItemsLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Loading items…
+                    </div>
+                  ) : logRfqItems.length === 0 ? (
+                    <div className="text-sm text-muted-foreground py-4">No line items found for this RFQ.</div>
+                  ) : (
+                    <>
+                      <div className="rounded-md border border-border overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow className="bg-muted/40">
+                              <TableHead className="w-8">#</TableHead>
+                              <TableHead className="min-w-[180px]">Description</TableHead>
+                              <TableHead className="w-16 text-right">Qty</TableHead>
+                              <TableHead className="w-14">Unit</TableHead>
+                              <TableHead className="w-28 text-right">Rate (₹) *</TableHead>
+                              <TableHead className="w-20 text-center">GST %  *</TableHead>
+                              <TableHead className="w-28 text-right">GST Amt (₹)</TableHead>
+                              <TableHead className="w-28 text-right">Total (₹)</TableHead>
+                              <TableHead className="w-32">Brand / Make</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {logRfqItems.map((it, idx) => {
+                              const entry = logItemEntries[it.line_item_id] ?? { rate: "", gst_percent: "18", brand: "" };
+                              const rate = parseFloat(entry.rate) || 0;
+                              const gstPct = parseFloat(entry.gst_percent) || 0;
+                              const amount = rate * (it.quantity ?? 1);
+                              const gstAmt = amount * (gstPct / 100);
+                              const total = amount + gstAmt;
+                              const updateEntry = (patch: Partial<LogItemEntry>) =>
+                                setLogItemEntries((prev) => ({ ...prev, [it.line_item_id]: { ...entry, ...patch } }));
+                              return (
+                                <TableRow key={it.line_item_id}>
+                                  <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
+                                  <TableCell>
+                                    <div className="text-sm font-medium">{it.item_description}</div>
+                                    {it.benchmark_rate && (
+                                      <div className="text-[10px] text-muted-foreground">Benchmark: ₹{it.benchmark_rate}</div>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-right text-sm">{it.quantity}</TableCell>
+                                  <TableCell className="text-sm text-muted-foreground">{it.unit}</TableCell>
+                                  <TableCell>
+                                    <Input
+                                      type="number" min="0" step="0.01"
+                                      className="h-8 text-sm text-right w-24"
+                                      value={entry.rate}
+                                      onChange={(e) => updateEntry({ rate: e.target.value })}
+                                      placeholder="0.00"
+                                    />
+                                  </TableCell>
+                                  <TableCell>
+                                    <Input
+                                      type="number" min="0" max="100" step="0.01"
+                                      className="h-8 text-sm text-center w-16"
+                                      value={entry.gst_percent}
+                                      onChange={(e) => updateEntry({ gst_percent: e.target.value })}
+                                    />
+                                  </TableCell>
+                                  <TableCell className="text-right text-sm text-muted-foreground">
+                                    {rate > 0 ? `₹${gstAmt.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}
+                                  </TableCell>
+                                  <TableCell className="text-right text-sm font-medium">
+                                    {rate > 0 ? `₹${total.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Input
+                                      className="h-8 text-sm w-28"
+                                      value={entry.brand}
+                                      onChange={(e) => updateEntry({ brand: e.target.value })}
+                                      placeholder="Brand name"
+                                    />
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
+
+                      {/* Totals summary */}
+                      {(() => {
+                        let subtotal = 0, totalGstAmt = 0;
+                        logRfqItems.forEach((it) => {
+                          const e = logItemEntries[it.line_item_id] ?? { rate: "0", gst_percent: "18", brand: "" };
+                          const r = parseFloat(e.rate) || 0;
+                          const g = parseFloat(e.gst_percent) || 0;
+                          const amt = r * (it.quantity ?? 1);
+                          subtotal += amt;
+                          totalGstAmt += amt * (g / 100);
+                        });
+                        const grandTotal = subtotal + totalGstAmt;
+                        return (
+                          <div className="flex justify-end">
+                            <div className="bg-muted/50 rounded-lg p-3 text-sm space-y-1 min-w-[240px]">
+                              <div className="flex justify-between gap-8"><span className="text-muted-foreground">Subtotal (excl. GST)</span><span className="font-medium">₹{subtotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span></div>
+                              <div className="flex justify-between gap-8"><span className="text-muted-foreground">Total GST</span><span className="font-medium text-amber-700">₹{totalGstAmt.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span></div>
+                              <div className="flex justify-between gap-8 border-t border-border pt-1"><span className="font-semibold">Grand Total</span><span className="font-bold text-primary">₹{grandTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span></div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </>
+                  )}
                 </div>
               )}
             </div>
 
-            <div className="space-y-2 md:col-span-2">
-              <Label>Supplier's Quote Reference *</Label>
-              <Input value={logForm.quoteNumber} onChange={(e) => setLogForm((p) => ({ ...p, quoteNumber: e.target.value }))} placeholder="e.g. 2025-26-074" />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Channel</Label>
-              <Select value={logForm.channel} onValueChange={(v) => setLogForm((p) => ({ ...p, channel: v as Channel }))}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="email">email</SelectItem>
-                  <SelectItem value="portal">portal</SelectItem>
-                  <SelectItem value="whatsapp">whatsapp</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Received Date</Label>
-              <Input type="date" value={logForm.receivedDate} onChange={(e) => setLogForm((p) => ({ ...p, receivedDate: e.target.value }))} />
-            </div>
-
-            <div className="space-y-2 md:col-span-2">
-              <Label>Payment Terms</Label>
-              <Textarea rows={3} value={logForm.paymentTerms} onChange={(e) => setLogForm((p) => ({ ...p, paymentTerms: e.target.value }))} placeholder="e.g. 100% Advance" />
-            </div>
-            <div className="space-y-2 md:col-span-2">
-              <Label>Delivery Terms</Label>
-              <Textarea rows={3} value={logForm.deliveryTerms} onChange={(e) => setLogForm((p) => ({ ...p, deliveryTerms: e.target.value }))} placeholder="e.g. 2 weeks after PO confirmation" />
-            </div>
-
-            <div className="space-y-2">
-              <Label>GST %</Label>
-              <Input type="number" value={logForm.gstPercent} onChange={(e) => setLogForm((p) => ({ ...p, gstPercent: e.target.value }))} />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Warranty (months)</Label>
-              <Input type="number" value={logForm.warrantyMonths} onChange={(e) => setLogForm((p) => ({ ...p, warrantyMonths: e.target.value }))} />
-            </div>
-            <div className="space-y-2">
-              <Label>Price Validity (days)</Label>
-              <Input type="number" value={logForm.validityDays} onChange={(e) => setLogForm((p) => ({ ...p, validityDays: e.target.value }))} />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Grand Total Quoted (₹)</Label>
-              <Input type="number" value={logForm.totalQuotedValue} onChange={(e) => setLogForm((p) => ({ ...p, totalQuotedValue: e.target.value }))} />
-            </div>
-            <div className="space-y-2">
-              <Label>Grand Total Landed (₹)</Label>
-              <Input type="number" value={logForm.totalLandedValue} onChange={(e) => setLogForm((p) => ({ ...p, totalLandedValue: e.target.value }))} />
-            </div>
-          </div>
-
-          <DialogFooter className="pt-4">
-            <Button variant="outline" onClick={() => setLogDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={submitLogQuote}>Submit Quote</Button>
-          </DialogFooter>
+            <DialogFooter className="px-6 pb-6 border-t border-border pt-4">
+              <Button variant="outline" onClick={() => setLogDialogOpen(false)}>Cancel</Button>
+              <Button onClick={submitLogQuote}>Submit Quote</Button>
+            </DialogFooter>
           </div>
         </DialogContent>
       </Dialog>
