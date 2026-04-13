@@ -649,8 +649,29 @@ export default function ComparisonSheetPage() {
     rows.push(["Commercial Score", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.commercial_score; return v != null ? String(v) : "-"; })]);
     rows.push([]);
 
-    // Recommendation
-    rows.push(["RECOMMENDATION"]);
+    // AI Recommendation (if available)
+    if (aiRecommendation) {
+      rows.push(["AI RECOMMENDATION (Advisory Only)"]);
+      rows.push(["Recommended Supplier", String(aiRecommendation.recommended_supplier ?? "-")]);
+      rows.push(["Reason", String(aiRecommendation.reason ?? "-")]);
+      if (Array.isArray(aiRecommendation.ranking)) {
+        aiRecommendation.ranking.forEach((item: any, idx: number) => {
+          rows.push([`Rank ${idx + 1}`, `${item.supplier ?? "-"}: ${item.reason ?? ""}`]);
+        });
+      }
+      if (Array.isArray(aiRecommendation.warnings) && aiRecommendation.warnings.length > 0) {
+        aiRecommendation.warnings.forEach((w: string, idx: number) => {
+          rows.push([`Warning ${idx + 1}`, String(w)]);
+        });
+      }
+      if (aiRecommendation.potential_savings != null) {
+        rows.push(["Potential Savings", fmtINR(aiRecommendation.potential_savings)]);
+      }
+      rows.push([]);
+    }
+
+    // Final Recommendation (human reviewer)
+    rows.push(["FINAL RECOMMENDATION (Human Reviewer)"]);
     rows.push(["Recommended Supplier", suppliers.find(s => s.id === sheet.reviewer_recommendation)?.name ?? "-"]);
     rows.push(["Recommendation Reason", sheet.reviewer_recommendation_reason ?? "-"]);
     rows.push(["Reviewer Notes", sheet.manual_notes ?? "-"]);
@@ -780,24 +801,113 @@ export default function ComparisonSheetPage() {
     });
     y = (doc as any).lastAutoTable.finalY + 6;
 
-    // Recommendation box
+    // AI Recommendation section (if available)
+    if (aiRecommendation) {
+      if (y > 150) { doc.addPage(); y = 15; }
+      doc.setFillColor(250, 245, 235);
+      doc.setDrawColor(180, 140, 90);
+      const aiStartY = y;
+      doc.roundedRect(10, y, pageWidth - 20, 8, 2, 2, "FD");
+      doc.setTextColor(120, 70, 20);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.text("AI RECOMMENDATION (Advisory Only)", 14, y + 5);
+      y += 12;
+
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.text(`Recommended: ${aiRecommendation.recommended_supplier ?? "-"}`, 14, y);
+      y += 5;
+
+      doc.setFont("helvetica", "normal");
+      if (aiRecommendation.reason) {
+        const aiReason = doc.splitTextToSize(String(aiRecommendation.reason), pageWidth - 28);
+        doc.text(aiReason, 14, y);
+        y += aiReason.length * 4 + 2;
+      }
+
+      // Ranking
+      if (Array.isArray(aiRecommendation.ranking) && aiRecommendation.ranking.length > 0) {
+        doc.setFont("helvetica", "bold");
+        doc.text("Ranking:", 14, y);
+        y += 4;
+        doc.setFont("helvetica", "normal");
+        aiRecommendation.ranking.forEach((item: any, idx: number) => {
+          const line = `${idx + 1}. ${item.supplier ?? "-"} — ${item.reason ?? ""}`;
+          const wrapped = doc.splitTextToSize(line, pageWidth - 32);
+          doc.text(wrapped, 18, y);
+          y += wrapped.length * 4;
+        });
+        y += 2;
+      }
+
+      // Warnings
+      if (Array.isArray(aiRecommendation.warnings) && aiRecommendation.warnings.length > 0) {
+        if (y > 175) { doc.addPage(); y = 15; }
+        doc.setFillColor(255, 250, 230);
+        doc.setDrawColor(230, 180, 60);
+        const warnStart = y;
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(150, 100, 20);
+        doc.text("Warnings:", 14, y + 4);
+        let warnY = y + 9;
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(0, 0, 0);
+        aiRecommendation.warnings.forEach((w: string) => {
+          const wrapped = doc.splitTextToSize(`• ${w}`, pageWidth - 32);
+          doc.text(wrapped, 18, warnY);
+          warnY += wrapped.length * 4 + 1;
+        });
+        doc.setDrawColor(230, 180, 60);
+        doc.roundedRect(10, warnStart, pageWidth - 20, warnY - warnStart, 2, 2, "S");
+        y = warnY + 3;
+      }
+
+      // Potential savings
+      if (aiRecommendation.potential_savings != null) {
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(27, 94, 32);
+        doc.text(`Potential Savings: ${fmtINR(aiRecommendation.potential_savings)}`, 14, y);
+        doc.setTextColor(0, 0, 0);
+        y += 5;
+      }
+
+      // Disclaimer
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(7);
+      doc.setTextColor(120, 120, 120);
+      doc.text(
+        aiRecommendation.disclaimer ?? "AI-generated recommendation for reference only. Human review and approval required.",
+        14,
+        y
+      );
+      doc.setTextColor(0, 0, 0);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      y += 6;
+      void aiStartY;
+    }
+
+    // Final Recommendation box (human reviewer)
     if (y > 170) { doc.addPage(); y = 15; }
     const recSupplier = suppliers.find(s => s.id === sheet.reviewer_recommendation)?.name ?? "-";
     doc.setFillColor(232, 245, 233);
     doc.setDrawColor(76, 175, 80);
-    doc.roundedRect(10, y, pageWidth - 20, 22, 2, 2, "FD");
+    const reason = sheet.reviewer_recommendation_reason ?? "-";
+    const reasonLines = doc.splitTextToSize(`Reason: ${reason}`, pageWidth - 28);
+    const boxHeight = 18 + reasonLines.length * 4;
+    doc.roundedRect(10, y, pageWidth - 20, boxHeight, 2, 2, "FD");
     doc.setTextColor(27, 94, 32);
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.text("RECOMMENDATION", 14, y + 6);
+    doc.text("FINAL RECOMMENDATION (Human Reviewer)", 14, y + 6);
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(0, 0, 0);
     doc.text(`Recommended Supplier: ${recSupplier}`, 14, y + 12);
-    const reason = sheet.reviewer_recommendation_reason ?? "-";
-    const reasonLines = doc.splitTextToSize(`Reason: ${reason}`, pageWidth - 28);
     doc.text(reasonLines, 14, y + 18);
-    y += 24 + reasonLines.length * 4;
+    y += boxHeight + 4;
 
     // Footer
     const pageCount = (doc as any).internal.getNumberOfPages();
