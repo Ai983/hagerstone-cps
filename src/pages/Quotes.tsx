@@ -25,7 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 
-import { Building2, CalendarDays, ChevronsUpDown, Flag, LogIn, Plus, Search, ExternalLink, Loader2, AlertTriangle, CheckCircle2, Paperclip, UserPlus, Sparkles } from "lucide-react";
+import { Building2, CalendarDays, ChevronsUpDown, Flag, LogIn, Plus, Search, ExternalLink, Loader2, AlertTriangle, CheckCircle2, Paperclip, UserPlus, Sparkles, Trash2 } from "lucide-react";
 import { LegacyQuoteUploadModal } from "@/components/quotes/LegacyQuoteUploadModal";
 
 type QuoteParseStatus = "pending" | "parsed" | "needs_review" | "reviewed" | "approved" | "failed";
@@ -259,6 +259,7 @@ export default function Quotes() {
   const [aiParsing, setAiParsing] = useState(false);
   const [aiResult, setAiResult] = useState<any>(null);
   const [editedItems, setEditedItems] = useState<any[]>([]);
+  const [extraCharges, setExtraCharges] = useState<Array<{ id: string; name: string; amount: string; taxable: boolean }>>([]);
   const [editedPaymentTerms, setEditedPaymentTerms] = useState("");
   const [editedDeliveryTerms, setEditedDeliveryTerms] = useState("");
   const [editedFreightTerms, setEditedFreightTerms] = useState("");
@@ -388,6 +389,7 @@ export default function Quotes() {
     setPrLineItems([]);
     setAiResult(null);
     setEditedItems([]);
+    setExtraCharges([]);
     setEditedPaymentTerms("");
     setEditedDeliveryTerms("");
     setEditedFreightTerms("");
@@ -455,6 +457,16 @@ export default function Quotes() {
       setEditedFreightTerms(qRow.freight_terms ?? "");
       setEditedWarranty(qRow.warranty_months ? String(qRow.warranty_months) : "");
       setEditedValidity(qRow.validity_days ? String(qRow.validity_days) : "");
+      // Restore extra charges if previously saved
+      const prevCharges = (qRow.ai_parsed_data as any)?.extra_charges;
+      if (Array.isArray(prevCharges)) {
+        setExtraCharges(prevCharges.map((c: any, i: number) => ({
+          id: String(i),
+          name: String(c.name ?? ""),
+          amount: String(c.amount ?? ""),
+          taxable: !!c.taxable,
+        })));
+      }
       // Show cached AI result if available; otherwise synthesise from existing line items
       if (qRow.ai_parsed_data) {
         setAiResult(qRow.ai_parsed_data);
@@ -723,7 +735,7 @@ Rules:
     try {
       const items = editedItems;
       const totalQuoted = items.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0), 0);
-      const totalLanded = items.reduce((s: number, li: any) => {
+      const itemsLanded = items.reduce((s: number, li: any) => {
         const r = parseFloat(li.rate) || 0;
         const q = parseFloat(li.quantity) || 0;
         const g = parseFloat(li.gst_percent) || 18;
@@ -731,6 +743,12 @@ Rules:
         const p = parseFloat(li.packing) || 0;
         return s + q * (r * (1 + g / 100) + f + p);
       }, 0);
+      // Add extra charges (taxable ones get 18% GST added)
+      const cleanCharges = extraCharges
+        .filter((c) => c.name.trim() && parseFloat(c.amount) > 0)
+        .map((c) => ({ name: c.name.trim(), amount: parseFloat(c.amount) || 0, taxable: !!c.taxable }));
+      const extraTotal = cleanCharges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
+      const totalLanded = itemsLanded + extraTotal;
 
       const hasRates = editedItems.some((item: any) => parseFloat(item.rate) > 0);
       const hasPaymentTerms = (editedPaymentTerms ?? "").trim().length > 0;
@@ -739,7 +757,7 @@ Rules:
       const complianceStatus = hasRates && hasPaymentTerms && hasDeliveryTerms && hasGST ? "compliant" : "pending";
 
       const { error: quoteErr } = await supabase.from("cps_quotes").update({
-        ai_parsed_data: aiResult,
+        ai_parsed_data: { ...aiResult, extra_charges: cleanCharges },
         missing_fields: aiResult.missing_fields || [],
         ai_parse_confidence: aiResult.confidence,
         ai_summary: aiResult.notes,
@@ -1776,16 +1794,49 @@ Rules:
 
                       {/* Editable Items */}
                       <div className="space-y-3">
-                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Line Items</div>
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Line Items ({editedItems.length})</div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => setEditedItems((prev) => [...prev, {
+                              description: "",
+                              brand: "",
+                              quantity: 1,
+                              unit: "nos",
+                              rate: 0,
+                              gst_percent: 18,
+                              freight: 0,
+                              packing: 0,
+                              lead_time_days: null,
+                              hsn_code: null,
+                              matched_pr_item_index: null,
+                            }])}
+                          >
+                            <Plus className="h-3 w-3 mr-1" /> Add Item
+                          </Button>
+                        </div>
                         {editedItems.map((item: any, idx: number) => (
                           <Card key={idx} className="p-3 space-y-2 border-border/60">
                             <div className="flex items-start justify-between gap-1">
                               <span className="text-xs font-mono text-muted-foreground">{idx + 1}</span>
-                              {prLineItems[item.matched_pr_item_index] && (
-                                <Badge className="text-[10px] bg-primary/10 text-primary border-0">
-                                  → {prLineItems[item.matched_pr_item_index]?.description?.slice(0, 20)}
-                                </Badge>
-                              )}
+                              <div className="flex items-center gap-1.5">
+                                {prLineItems[item.matched_pr_item_index] && (
+                                  <Badge className="text-[10px] bg-primary/10 text-primary border-0">
+                                    → {prLineItems[item.matched_pr_item_index]?.description?.slice(0, 20)}
+                                  </Badge>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setEditedItems((prev) => prev.filter((_, i) => i !== idx))}
+                                  className="text-muted-foreground hover:text-destructive transition-colors"
+                                  title="Remove item"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
                             </div>
                             <div className="grid grid-cols-2 gap-2">
                               <div className="col-span-2 space-y-0.5">
@@ -1825,6 +1876,87 @@ Rules:
                             </div>
                           </Card>
                         ))}
+                      </div>
+
+                      {/* Extra Charges (manual entry for things AI couldn't parse) */}
+                      <div className="space-y-3 border-t border-border/60 pt-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Extra Charges</div>
+                            <div className="text-[10px] text-muted-foreground mt-0.5">e.g. Installation, Transportation, Lodging, Labour, Site charges</div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => setExtraCharges((prev) => [...prev, { id: String(Date.now()), name: "", amount: "", taxable: false }])}
+                          >
+                            <Plus className="h-3 w-3 mr-1" /> Add Charge
+                          </Button>
+                        </div>
+
+                        {extraCharges.length === 0 ? (
+                          <p className="text-xs text-muted-foreground italic">No extra charges added</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {extraCharges.map((charge) => (
+                              <Card key={charge.id} className="p-2.5 border-border/60">
+                                <div className="flex items-end gap-2">
+                                  <div className="flex-1 space-y-0.5">
+                                    <Label className="text-[10px] text-muted-foreground">Charge Name *</Label>
+                                    <Input
+                                      className="h-7 text-xs"
+                                      placeholder="e.g. Installation"
+                                      value={charge.name}
+                                      onChange={(e) => setExtraCharges((prev) => prev.map((c) => c.id === charge.id ? { ...c, name: e.target.value } : c))}
+                                    />
+                                  </div>
+                                  <div className="w-28 space-y-0.5">
+                                    <Label className="text-[10px] text-muted-foreground">Amount ₹ *</Label>
+                                    <Input
+                                      className="h-7 text-xs"
+                                      type="number"
+                                      placeholder="0"
+                                      value={charge.amount}
+                                      onChange={(e) => setExtraCharges((prev) => prev.map((c) => c.id === charge.id ? { ...c, amount: e.target.value } : c))}
+                                    />
+                                  </div>
+                                  <label className="flex items-center gap-1 pb-1.5 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      className="h-3.5 w-3.5"
+                                      checked={charge.taxable}
+                                      onChange={(e) => setExtraCharges((prev) => prev.map((c) => c.id === charge.id ? { ...c, taxable: e.target.checked } : c))}
+                                    />
+                                    <span className="text-[10px] text-muted-foreground">+18% GST</span>
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => setExtraCharges((prev) => prev.filter((c) => c.id !== charge.id))}
+                                    className="text-muted-foreground hover:text-destructive transition-colors pb-1.5"
+                                    title="Remove"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              </Card>
+                            ))}
+
+                            {/* Subtotal */}
+                            {extraCharges.some((c) => parseFloat(c.amount) > 0) && (
+                              <div className="flex justify-between items-center pt-1 text-xs">
+                                <span className="text-muted-foreground">Extra Charges Total</span>
+                                <span className="font-semibold text-primary">
+                                  ₹{extraCharges.reduce((s, c) => {
+                                    const amt = parseFloat(c.amount) || 0;
+                                    return s + amt * (c.taxable ? 1.18 : 1);
+                                  }, 0).toFixed(2)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Overall Terms */}

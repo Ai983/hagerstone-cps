@@ -20,6 +20,8 @@ import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight 
 // DB CHECK constraint allows: pending, pending_design, validated, duplicate_flagged, rfq_created, po_issued, delivered, cancelled
 type PRStatus = "pending" | "pending_design" | "validated" | "duplicate_flagged" | "rfq_created" | "po_issued" | "delivered" | "cancelled";
 
+type PRPriority = "low" | "normal" | "high" | "urgent";
+
 type PurchaseRequisition = {
   id: string;
   pr_number: string;
@@ -32,6 +34,16 @@ type PurchaseRequisition = {
   notes: string | null;
   created_at: string;
   items_count: number;
+  priority?: PRPriority | null;
+  duplicate_of_pr_id?: string | null;
+  duplicate_score?: number | null;
+};
+
+const priorityConfig: Record<PRPriority, { label: string; className: string }> = {
+  urgent: { label: "🔥 Urgent", className: "bg-red-100 text-red-800 border-red-300" },
+  high: { label: "↑ High", className: "bg-orange-100 text-orange-800 border-orange-300" },
+  normal: { label: "Normal", className: "bg-muted text-muted-foreground border-border" },
+  low: { label: "↓ Low", className: "bg-blue-50 text-blue-700 border-blue-200" },
 };
 
 type ItemMasterRow = {
@@ -186,9 +198,12 @@ export default function PurchaseRequisitions() {
   const [wizProjectName, setWizProjectName] = useState("");
   const [wizProjectSite, setWizProjectSite] = useState("");
   const [wizRequiredBy, setWizRequiredBy] = useState("");
+  const [wizPriority, setWizPriority] = useState<PRPriority>("normal");
   const [wizLineItems, setWizLineItems] = useState<LineItem[]>([]);
   const [wizNotes, setWizNotes] = useState("");
   const [wizSubmitting, setWizSubmitting] = useState(false);
+  const [wizDuplicates, setWizDuplicates] = useState<Array<{ id: string; pr_number: string; created_at: string; score: number }>>([]);
+  const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [wizSuccess, setWizSuccess] = useState<{ prNumber: string; itemsCount: number } | null>(null);
   const [wizItemSearch, setWizItemSearch] = useState<Record<string, string>>({});
   const [wizDropdownOpen, setWizDropdownOpen] = useState<Record<string, boolean>>({});
@@ -230,7 +245,7 @@ export default function PurchaseRequisitions() {
     setLoading(true);
     let prQuery = supabase
       .from("cps_purchase_requisitions")
-      .select("id, pr_number, project_site, project_code, requested_by, status, required_by, notes, created_at")
+      .select("id, pr_number, project_site, project_code, requested_by, status, required_by, notes, created_at, priority, duplicate_of_pr_id, duplicate_score")
       .order("created_at", { ascending: false });
     const isRestrictedRole = user?.role === "requestor" || user?.role === "site_receiver";
     if (isRestrictedRole) prQuery = prQuery.eq("requested_by", user?.id ?? "");
@@ -343,21 +358,29 @@ export default function PurchaseRequisitions() {
     const q = search.trim().toLowerCase();
     const list = prList.filter((p) => {
       const matchesStatus = statusFilter === "all" ? true : p.status === statusFilter;
+      const matchesPriority = priorityFilter === "all" ? true : (p.priority ?? "normal") === priorityFilter;
       const matchesQ =
         !q ||
         p.pr_number.toLowerCase().includes(q) ||
         p.project_site.toLowerCase().includes(q) ||
         (p.project_code ?? "").toLowerCase().includes(q) ||
         p.requested_by_name.toLowerCase().includes(q);
-      return matchesStatus && matchesQ;
+      return matchesStatus && matchesPriority && matchesQ;
     });
+    // Sort: urgent first when sorting by priority; otherwise default sort
+    const priorityRank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
     return [...list].sort((a, b) => {
+      if (sortField === "priority") {
+        const ra = priorityRank[(a.priority ?? "normal") as string] ?? 2;
+        const rb = priorityRank[(b.priority ?? "normal") as string] ?? 2;
+        return sortDir === "asc" ? ra - rb : rb - ra;
+      }
       const av = (a as any)[sortField] ?? "";
       const bv = (b as any)[sortField] ?? "";
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [prList, search, statusFilter, sortField, sortDir]);
+  }, [prList, search, statusFilter, priorityFilter, sortField, sortDir]);
 
   const openWizard = () => {
     setWizardStep(1);
@@ -365,9 +388,11 @@ export default function PurchaseRequisitions() {
     setWizProjectName("");
     setWizProjectSite("");
     setWizRequiredBy(twoWeeksFromNow());
+    setWizPriority("normal");
     setWizLineItems([emptyLine()]);
     setWizNotes("");
     setWizSuccess(null);
+    setWizDuplicates([]);
     setWizItemSearch({});
     setWizDropdownOpen({});
     setWizNewItemFormOpen({});
@@ -488,6 +513,66 @@ export default function PurchaseRequisitions() {
     }
   };
 
+  // Duplicate PR detection: find PRs in the last 14 days for the same project
+  // that share >= 70% of their line item descriptions (token overlap)
+  const detectDuplicates = async (projectKey: string, items: LineItem[]) => {
+    if (!projectKey || items.length === 0) return [] as Array<{ id: string; pr_number: string; created_at: string; score: number }>;
+    const fourteenDaysAgo = new Date();
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+
+    const { data: recentPrs } = await supabase
+      .from("cps_purchase_requisitions")
+      .select("id, pr_number, created_at, project_code, project_site")
+      .or(`project_code.eq.${projectKey},project_site.eq.${projectKey}`)
+      .gte("created_at", fourteenDaysAgo.toISOString())
+      .neq("status", "cancelled")
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (!recentPrs || recentPrs.length === 0) return [];
+
+    const prIds = (recentPrs as any[]).map((p) => p.id);
+    const { data: lineRows } = await supabase
+      .from("cps_pr_line_items")
+      .select("pr_id, description")
+      .in("pr_id", prIds);
+
+    const byPr: Record<string, string[]> = {};
+    (lineRows ?? []).forEach((l: any) => {
+      if (!byPr[l.pr_id]) byPr[l.pr_id] = [];
+      byPr[l.pr_id].push(String(l.description ?? "").toLowerCase().trim());
+    });
+
+    const tokenize = (s: string) => new Set(s.toLowerCase().split(/[\s,/.\-()]+/).filter((t) => t.length > 2));
+    const newTokens = items.map((i) => tokenize(i.description));
+
+    const matches: Array<{ id: string; pr_number: string; created_at: string; score: number }> = [];
+    (recentPrs as any[]).forEach((pr) => {
+      const existingDescs = byPr[pr.id] ?? [];
+      if (existingDescs.length === 0) return;
+      const existingTokens = existingDescs.map((d) => tokenize(d));
+
+      let matchedItems = 0;
+      newTokens.forEach((nt) => {
+        let bestOverlap = 0;
+        existingTokens.forEach((et) => {
+          const intersect = Array.from(nt).filter((t) => et.has(t)).length;
+          const union = new Set([...nt, ...et]).size;
+          const jaccard = union === 0 ? 0 : intersect / union;
+          if (jaccard > bestOverlap) bestOverlap = jaccard;
+        });
+        if (bestOverlap >= 0.5) matchedItems += 1;
+      });
+
+      const score = items.length > 0 ? matchedItems / items.length : 0;
+      if (score >= 0.7) {
+        matches.push({ id: pr.id, pr_number: pr.pr_number, created_at: pr.created_at, score });
+      }
+    });
+
+    return matches.sort((a, b) => b.score - a.score);
+  };
+
   const submitWizard = async () => {
     if (!user) { toast.error("Please sign in"); return; }
     const validLines = wizLineItems.filter((li) => li.description.trim().length > 0);
@@ -495,10 +580,17 @@ export default function PurchaseRequisitions() {
 
     setWizSubmitting(true);
     try {
+      // Step 0 — Detect duplicates before creating the PR
+      const projectKey = wizProjectName.trim() || wizProjectSite.trim();
+      const duplicates = await detectDuplicates(projectKey, validLines);
+
       const { data: rpcData, error: rpcError } = await supabase.rpc("cps_next_pr_number");
       if (rpcError) throw new Error("Failed to generate PR number");
       const prNumber = rpcResultToString(rpcData);
       if (!prNumber) throw new Error("Failed to generate PR number");
+
+      const isDuplicate = duplicates.length > 0;
+      const topDup = duplicates[0];
 
       const { data: prInsert, error: prInsertError } = await supabase
         .from("cps_purchase_requisitions")
@@ -507,13 +599,20 @@ export default function PurchaseRequisitions() {
           project_site: wizProjectSite.trim(),
           project_code: wizProjectName.trim() || null,
           requested_by: user.id,
-          status: "pending" as const,
+          status: (isDuplicate ? "duplicate_flagged" : "pending") as PRStatus,
           required_by: wizRequiredBy,
           notes: wizNotes.trim() || null,
+          priority: wizPriority,
+          duplicate_of_pr_id: topDup?.id ?? null,
+          duplicate_score: topDup?.score ?? null,
         }])
         .select("id")
         .single();
       if (prInsertError || !prInsert) throw new Error("Failed to create PR: " + prInsertError?.message);
+
+      if (isDuplicate) {
+        setWizDuplicates(duplicates);
+      }
 
       const prId = (prInsert as any).id as string;
 
@@ -660,6 +759,18 @@ export default function PurchaseRequisitions() {
             <SelectItem value="cancelled">Cancelled</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+          <SelectTrigger className="w-40">
+            <SelectValue placeholder="All Priority" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Priority</SelectItem>
+            <SelectItem value="urgent">🔥 Urgent</SelectItem>
+            <SelectItem value="high">↑ High</SelectItem>
+            <SelectItem value="normal">Normal</SelectItem>
+            <SelectItem value="low">↓ Low</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Table — desktop */}
@@ -678,6 +789,7 @@ export default function PurchaseRequisitions() {
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("requested_by_name")}>Created By {sortField==="requested_by_name"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Items</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("required_by")}>Required By {sortField==="required_by"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("priority")}>Priority {sortField==="priority"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("status")}>Status {sortField==="status"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("created_at")}>Raised On {sortField==="created_at"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="text-right"></TableHead>
@@ -687,7 +799,7 @@ export default function PurchaseRequisitions() {
               {loading ? (
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 9 }).map((__, j) => (
+                    {Array.from({ length: 10 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-28" />
                       </TableCell>
@@ -696,7 +808,7 @@ export default function PurchaseRequisitions() {
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-10">
+                  <TableCell colSpan={10} className="text-center py-10">
                     <div className="mx-auto max-w-md space-y-3">
                       <div className="flex justify-center">
                         <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center">
@@ -721,6 +833,13 @@ export default function PurchaseRequisitions() {
                       <TableCell className="text-muted-foreground">{pr.requested_by_name}</TableCell>
                       <TableCell>{pr.items_count}</TableCell>
                       <TableCell className="text-muted-foreground">{formatRequiredByDate(pr.required_by)}</TableCell>
+                      <TableCell>
+                        {(() => {
+                          const p = (pr.priority ?? "normal") as PRPriority;
+                          const cfg = priorityConfig[p];
+                          return <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>;
+                        })()}
+                      </TableCell>
                       <TableCell>
                         <Badge className={`text-xs border-0 ${badge.className}`}>{badge.label}</Badge>
                       </TableCell>
@@ -916,6 +1035,30 @@ export default function PurchaseRequisitions() {
                     onChange={(e) => setWizRequiredBy(e.target.value)}
                     className="h-14 text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0 w-48"
                   />
+
+                  <div className="space-y-3 pt-2">
+                    <p className="text-sm font-medium text-foreground">Priority / प्राथमिकता</p>
+                    <div className="flex flex-wrap gap-2">
+                      {(["urgent", "high", "normal", "low"] as PRPriority[]).map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setWizPriority(p)}
+                          className={`px-4 py-2 rounded-lg border text-sm font-medium transition-all ${
+                            wizPriority === p
+                              ? `${priorityConfig[p].className} ring-2 ring-primary/30`
+                              : "bg-background border-border text-muted-foreground hover:border-primary/50"
+                          }`}
+                        >
+                          {priorityConfig[p].label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Use "Urgent" only when work is blocked / केवल अति-आवश्यक होने पर
+                    </p>
+                  </div>
+
                   <div className="flex items-center gap-3">
                     <Button variant="ghost" className="h-12 px-6 rounded-lg" onClick={() => setWizardStep(2)}>
                       ← Back
@@ -1310,18 +1453,48 @@ export default function PurchaseRequisitions() {
               {wizardStep === 6 && wizSuccess && (
                 <div className="space-y-6 text-center py-8">
                   <div className="flex justify-center">
-                    <CheckCircle2 className="h-16 w-16 text-green-500" />
+                    {wizDuplicates.length > 0 ? (
+                      <div className="h-16 w-16 rounded-full bg-amber-100 flex items-center justify-center">
+                        <span className="text-3xl">⚠️</span>
+                      </div>
+                    ) : (
+                      <CheckCircle2 className="h-16 w-16 text-green-500" />
+                    )}
                   </div>
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      {lang === 'hi' ? 'PR सफलतापूर्वक जमा हुई!' : 'PR Submitted Successfully!'}
+                      {wizDuplicates.length > 0
+                        ? "PR Submitted — but flagged as possible duplicate"
+                        : (lang === 'hi' ? 'PR सफलतापूर्वक जमा हुई!' : 'PR Submitted Successfully!')}
                     </p>
                     <p className="text-muted-foreground">
                       <span className="font-mono text-primary font-semibold">{wizSuccess.prNumber}</span>
                       {" · "}
                       {wizSuccess.itemsCount} material{wizSuccess.itemsCount !== 1 ? "s" : ""} requested
                     </p>
-                    <p className="text-sm text-muted-foreground">RFQ will be auto-created and sent to suppliers.</p>
+                    {wizDuplicates.length > 0 ? (
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-left mt-4 max-w-xl mx-auto">
+                        <p className="text-sm font-semibold text-amber-900 mb-2">
+                          This PR looks similar to {wizDuplicates.length} recent PR{wizDuplicates.length > 1 ? "s" : ""} for the same project:
+                        </p>
+                        <ul className="space-y-1 text-sm text-amber-800">
+                          {wizDuplicates.slice(0, 3).map((d) => (
+                            <li key={d.id}>
+                              <span className="font-mono font-semibold">{d.pr_number}</span>
+                              {" — "}
+                              {Math.round(d.score * 100)}% item match
+                              {" · "}
+                              {new Date(d.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="text-xs text-amber-700 mt-3">
+                          Procurement will review and either consolidate with the existing PR or proceed with this one.
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">RFQ will be auto-created and sent to suppliers.</p>
+                    )}
                   </div>
                   <div className="flex items-center justify-center gap-3 pt-4">
                     <Button variant="outline" className="h-11" onClick={() => setWizardOpen(false)}>
@@ -1347,15 +1520,31 @@ export default function PurchaseRequisitions() {
             {detailPr && (
               <>
                 <DialogHeader>
-                  <DialogTitle className="flex items-center gap-3">
+                  <DialogTitle className="flex items-center gap-3 flex-wrap">
                     <span className="font-mono text-primary">{detailPr.pr_number}</span>
                     {(() => {
                       const badge = statusBadge(detailPr.status);
                       return <Badge className={`text-xs border-0 ${badge.className}`}>{badge.label}</Badge>;
                     })()}
+                    {(() => {
+                      const p = (detailPr.priority ?? "normal") as PRPriority;
+                      const cfg = priorityConfig[p];
+                      return <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>;
+                    })()}
                   </DialogTitle>
                   <DialogDescription>PR details — view only</DialogDescription>
                 </DialogHeader>
+
+                {detailPr.duplicate_of_pr_id && (
+                  <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 flex items-start gap-2">
+                    <span className="text-base leading-none">⚠️</span>
+                    <div className="text-xs text-amber-900">
+                      <strong>Possible duplicate.</strong> This PR was flagged as similar to an earlier PR for the same project
+                      {detailPr.duplicate_score != null && ` (${Math.round((detailPr.duplicate_score) * 100)}% item match)`}.
+                      Procurement should review before processing.
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-1">

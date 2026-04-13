@@ -31,6 +31,8 @@ type StageKey =
   | "delivered"
   | "closed";
 
+type Priority = "low" | "normal" | "high" | "urgent";
+
 type PRCard = {
   pr_id: string;
   pr_number: string;
@@ -41,6 +43,8 @@ type PRCard = {
   created_at: string;
   items_count: number;
   stage: StageKey;
+  priority: Priority;
+  is_duplicate: boolean;
   rfq_number?: string;
   rfq_status?: string;
   quotes_count?: number;
@@ -51,6 +55,20 @@ type PRCard = {
   supplier_name?: string;
   has_grn?: boolean;
   age_days: number;
+};
+
+const priorityCardStyle: Record<Priority, string> = {
+  urgent: "bg-red-100 text-red-700 border border-red-300",
+  high: "bg-orange-100 text-orange-700 border border-orange-300",
+  normal: "bg-muted text-muted-foreground border border-border/60",
+  low: "bg-blue-50 text-blue-600 border border-blue-200",
+};
+
+const priorityLabel: Record<Priority, string> = {
+  urgent: "🔥",
+  high: "↑",
+  normal: "·",
+  low: "↓",
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -142,7 +160,7 @@ export default function KanbanBoard() {
       // 1. PRs (exclude cancelled)
       const { data: prs } = await supabase
         .from("cps_purchase_requisitions")
-        .select("id, pr_number, project_code, project_site, requested_by, status, required_by, created_at")
+        .select("id, pr_number, project_code, project_site, requested_by, status, required_by, created_at, priority, duplicate_of_pr_id")
         .neq("status", "cancelled")
         .order("created_at", { ascending: false });
 
@@ -229,6 +247,8 @@ export default function KanbanBoard() {
           created_at: pr.created_at,
           items_count: itemCountByPr[pr.id] ?? 0,
           stage,
+          priority: ((pr.priority as Priority) ?? "normal") as Priority,
+          is_duplicate: !!pr.duplicate_of_pr_id,
           rfq_number: rfq?.rfq_number,
           rfq_status: rfq?.status,
           quotes_count: qCount,
@@ -282,7 +302,15 @@ export default function KanbanBoard() {
       pr_raised: [], rfq_sent: [], quotes_in: [], review: [], approval: [],
       po_sent: [], delivery: [], delivered: [], closed: [],
     };
+    const rank: Record<Priority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
     filtered.forEach((c) => { g[c.stage].push(c); });
+    (Object.keys(g) as StageKey[]).forEach((k) => {
+      g[k].sort((a, b) => {
+        const r = rank[a.priority] - rank[b.priority];
+        if (r !== 0) return r;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+    });
     return g;
   }, [filtered]);
 
@@ -408,7 +436,27 @@ export default function KanbanBoard() {
                         className="w-full text-left rounded-md border border-border bg-white hover:shadow-md hover:border-primary/50 transition-all p-3 space-y-1.5"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-xs font-bold text-primary truncate">{c.pr_number}</span>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="font-mono text-xs font-bold text-primary truncate">{c.pr_number}</span>
+                            {c.priority !== "normal" && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className={`text-[10px] px-1 py-0 rounded leading-none ${priorityCardStyle[c.priority]}`}>
+                                    {priorityLabel[c.priority]}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>Priority: {c.priority}</TooltipContent>
+                              </Tooltip>
+                            )}
+                            {c.is_duplicate && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="text-[10px] px-1 py-0 rounded leading-none bg-amber-100 text-amber-700 border border-amber-200">⚠</span>
+                                </TooltipTrigger>
+                                <TooltipContent>Possible duplicate PR</TooltipContent>
+                              </Tooltip>
+                            )}
+                          </div>
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <span className={`text-[10px] inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded leading-none ${
