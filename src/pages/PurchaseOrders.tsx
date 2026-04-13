@@ -489,13 +489,14 @@ export default function PurchaseOrders() {
       // Take the latest quote for this supplier+rfq.
       const { data: quoteRows, error: qErr } = await supabase
         .from("cps_quotes")
-        .select("id,received_at")
+        .select("id,received_at,ai_parsed_data")
         .eq("rfq_id", rfqId)
         .eq("supplier_id", recSupplierId)
         .order("received_at", { ascending: false });
       if (qErr) throw qErr;
 
-      const chosenQuoteId = quoteRows?.[0]?.id as string | undefined;
+      const chosenQuote = quoteRows?.[0] as any | undefined;
+      const chosenQuoteId = chosenQuote?.id as string | undefined;
       if (!chosenQuoteId) {
         toast.error("No quote line items found for the recommended supplier");
         setCreateLoading(false);
@@ -538,6 +539,27 @@ export default function PurchaseOrders() {
         };
         const totals = computeLineTotals(baseLine);
         return totals as CreateLine;
+      });
+
+      // Append extra charges (Installation, Transportation, etc.) added during quote review
+      const extraCharges = Array.isArray(chosenQuote?.ai_parsed_data?.extra_charges)
+        ? chosenQuote.ai_parsed_data.extra_charges
+        : [];
+      extraCharges.forEach((charge: any, i: number) => {
+        const amount = Number(charge?.amount) || 0;
+        if (!charge?.name || amount <= 0) return;
+        const baseLine: Omit<CreateLine, "gst_amount" | "total_value"> = {
+          sort_order: prLines.length + i,
+          pr_line_item_id: null,
+          description: String(charge.name),
+          brand: "",
+          hsn_code: "",
+          quantity: 1,
+          unit: "lot",
+          rate: amount,
+          gst_percent: charge?.taxable ? 18 : 0,
+        };
+        newLines.push(computeLineTotals(baseLine) as CreateLine);
       });
 
       setLineItems(newLines);
