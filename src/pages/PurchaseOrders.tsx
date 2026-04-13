@@ -1066,97 +1066,50 @@ export default function PurchaseOrders() {
 
   const downloadPDF = () => {
     if (!viewPo || !viewSupplier) return;
-    const lineItemsHtml = viewPoLineItems.map((li, idx) => `
-      <tr>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${idx + 1}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${li.description ?? ""}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${li.brand ?? ""}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${li.hsn_code ?? ""}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${li.quantity ?? 0}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${li.unit ?? ""}</td>
-        <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;">₹${Number(li.rate ?? 0).toLocaleString("en-IN")}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${li.gst_percent ?? 0}%</td>
-        <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;">₹${Number(li.gst_amount ?? 0).toLocaleString("en-IN")}</td>
-        <td style="text-align:right;padding:6px 8px;border:1px solid #ddd;font-weight:600;">₹${Number(li.total_value ?? 0).toLocaleString("en-IN")}</td>
-      </tr>
-    `).join("");
+    try {
+      const subTotal = Number(viewPo.total_value ?? 0);
+      const gstAmount = Number(viewPo.gst_amount ?? 0);
+      const grandTotal = Number(viewPo.grand_total ?? (subTotal + gstAmount));
 
-    const tncsHtml = Object.entries(standardTnCs).map(([key, val]) => val ? `<li style="margin-bottom:4px;">${val}</li>` : "").join("");
+      const blob = buildPoPdf({
+        poNumber: viewPo.po_number,
+        poDate: viewPo.created_at,
+        supplierName: viewSupplier.name ?? "",
+        supplierGstin: viewSupplier.gstin,
+        supplierState: viewSupplier.state,
+        supplierAddress: viewSupplier.address_text,
+        supplierPhone: viewSupplier.phone,
+        supplierEmail: viewSupplier.email,
+        shipToAddress: viewPo.ship_to_address ?? viewPr?.project_site ?? null,
+        inspAt: viewPr?.project_site ?? null,
+        paymentTerms: viewPo.payment_terms,
+        deliveryDate: viewPo.delivery_date,
+        projectCode: viewPo.project_code ?? viewPr?.project_code ?? null,
+        subTotal,
+        gstAmount,
+        grandTotal,
+        lineItems: viewPoLineItems.map((li) => ({
+          description: li.description ?? "",
+          quantity: Number(li.quantity ?? 0),
+          unit: li.unit,
+          rate: Number(li.rate ?? 0),
+          gst_percent: Number(li.gst_percent ?? 0),
+          gst_amount: li.gst_amount,
+          total_value: Number(li.total_value ?? 0),
+          hsn_code: li.hsn_code,
+        })),
+      });
 
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>PO ${viewPo.po_number}</title>
-    <style>body{font-family:Arial,sans-serif;font-size:12px;color:#222;margin:0;padding:24px;}
-    h1{font-size:18px;margin:0;}table{width:100%;border-collapse:collapse;}
-    th{background:#6b3a2a;color:#fff;padding:6px 8px;text-align:left;border:1px solid #6b3a2a;}
-    .header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:16px;border-bottom:2px solid #6b3a2a;}
-    .section{margin:16px 0;}.label{color:#666;font-size:11px;}</style></head>
-    <body>
-    <div class="header">
-      <div>
-        <h1>Hagerstone International (P) Ltd</h1>
-        <div class="label">GST: 09AAECH3768B1ZM</div>
-        <div class="label">D-107, 91 Springboard Hub, Red FM Road, Sector-2, Noida, UP</div>
-        <div class="label">+91 8448992353 | procurement@hagerstone.com</div>
-      </div>
-      <div style="text-align:right;">
-        <div style="font-size:20px;font-weight:bold;color:#6b3a2a;">PURCHASE ORDER</div>
-        <div style="font-size:16px;font-weight:600;">${viewPo.po_number}</div>
-        <div class="label">Date: ${formatDate(viewPo.created_at)}</div>
-        <div class="label">RFQ: ${viewRfq?.rfq_number ?? "—"}</div>
-      </div>
-    </div>
-    <hr style="border:1px solid #6b3a2a;margin:12px 0;">
-
-    <div style="display:flex;gap:32px;margin:12px 0;">
-      <div style="flex:1;">
-        <div style="font-weight:600;margin-bottom:4px;">Supplier</div>
-        <div>${viewSupplier.name}</div>
-        <div class="label">GSTIN: ${viewSupplier.gstin ?? "—"}</div>
-        <div class="label">${viewSupplier.address_text ?? ""} ${viewSupplier.city ? ", " + viewSupplier.city : ""}</div>
-        <div class="label">Ph: ${viewSupplier.phone ?? "—"} | Email: ${viewSupplier.email ?? "—"}</div>
-      </div>
-      <div style="flex:1;">
-        <div style="font-weight:600;margin-bottom:4px;">Delivery Details</div>
-        <div class="label">Ship To: ${viewPo.ship_to_address ?? viewPr?.project_site ?? "—"}</div>
-        <div class="label">Delivery Date: ${formatDate(viewPo.delivery_date)}</div>
-        <div class="label">Payment: ${viewPo.payment_terms ?? "—"}</div>
-      </div>
-    </div>
-    <hr style="border:1px solid #ddd;margin:12px 0;">
-
-    <table>
-      <thead><tr>
-        <th>Sr.</th><th>Description</th><th>Brand</th><th>HSN</th><th>Qty</th><th>Unit</th>
-        <th style="text-align:right;">Rate (₹)</th><th>GST%</th><th style="text-align:right;">GST Amt</th><th style="text-align:right;">Total (₹)</th>
-      </tr></thead>
-      <tbody>${lineItemsHtml}</tbody>
-    </table>
-
-    <div style="margin-top:12px;text-align:right;">
-      <table style="width:280px;margin-left:auto;">
-        <tr><td>Sub Total:</td><td style="text-align:right;">₹${Number(viewPo.total_value ?? 0).toLocaleString("en-IN")}</td></tr>
-        <tr><td>GST Amount:</td><td style="text-align:right;">₹${Number(viewPo.gst_amount ?? 0).toLocaleString("en-IN")}</td></tr>
-        <tr><td style="font-weight:bold;">Grand Total:</td><td style="text-align:right;font-weight:bold;">₹${Number(viewPo.grand_total ?? 0).toLocaleString("en-IN")}</td></tr>
-      </table>
-    </div>
-
-    ${tncsHtml ? `<hr style="margin:16px 0;border:1px solid #ddd;"><div style="font-weight:600;margin-bottom:8px;">Standard Terms & Conditions</div><ul style="margin:0;padding-left:20px;">${tncsHtml}</ul>` : ""}
-
-    <hr style="margin:16px 0;border:1px solid #ddd;">
-    <div style="margin-top:8px;">
-      <div>Penalty Clause: ${viewPo.penalty_clause ?? "—"}</div>
-    </div>
-    <div style="margin-top:32px;display:flex;justify-content:space-between;">
-      <div style="text-align:center;"><div style="border-top:1px solid #222;width:180px;padding-top:4px;">Authorised Signatory</div><div style="font-size:10px;">Hagerstone International</div></div>
-      <div style="text-align:center;"><div style="border-top:1px solid #222;width:180px;padding-top:4px;">Supplier Acceptance</div><div style="font-size:10px;">Stamp &amp; Signature</div></div>
-    </div>
-    </body></html>`;
-
-    const win = window.open("", "_blank");
-    if (win) {
-      win.document.write(html);
-      win.document.close();
-      win.focus();
-      setTimeout(() => win.print(), 500);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `PO_${viewPo.po_number}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to generate PO PDF");
     }
   };
 
