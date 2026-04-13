@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
+import logoUrl from "@/assets/Companylogo.png";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -705,6 +706,22 @@ export default function PurchaseOrders() {
             supplierPhone = (sup as any)?.phone ?? null;
           }
 
+          /* fetch logo as base64 */
+          let _logoBase64: string | null = null;
+          try {
+            const logoResp = await fetch(logoUrl);
+            const logoBlob = await logoResp.blob();
+            _logoBase64 = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                const result = reader.result as string;
+                resolve(result.split(",")[1] ?? result);
+              };
+              reader.onerror = reject;
+              reader.readAsDataURL(logoBlob);
+            });
+          } catch (_) { /* logo optional */ }
+
           /* generate PDF */
           const pdfBlob = buildPoPdf({
             poNumber: _poNumber,
@@ -717,6 +734,7 @@ export default function PurchaseOrders() {
             subTotal: _subTotal,
             gstAmount: _gstTotal,
             grandTotal: _grandTotal,
+            logoBase64: _logoBase64,
             lineItems: _lineItemsForPdf.map((li) => ({
               description: li.description,
               brand: li.brand,
@@ -1064,12 +1082,28 @@ export default function PurchaseOrders() {
     }
   };
 
-  const downloadPDF = () => {
+  const downloadPDF = async () => {
     if (!viewPo || !viewSupplier) return;
     try {
       const subTotal = Number(viewPo.total_value ?? 0);
       const gstAmount = Number(viewPo.gst_amount ?? 0);
       const grandTotal = Number(viewPo.grand_total ?? (subTotal + gstAmount));
+
+      // Fetch logo as base64
+      let logoBase64: string | null = null;
+      try {
+        const logoResp = await fetch(logoUrl);
+        const logoBlob = await logoResp.blob();
+        logoBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = reader.result as string;
+            resolve(result.split(",")[1] ?? result);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(logoBlob);
+        });
+      } catch (_) { /* logo optional */ }
 
       const blob = buildPoPdf({
         poNumber: viewPo.po_number,
@@ -1088,6 +1122,7 @@ export default function PurchaseOrders() {
         subTotal,
         gstAmount,
         grandTotal,
+        logoBase64,
         lineItems: viewPoLineItems.map((li) => ({
           description: li.description ?? "",
           quantity: Number(li.quantity ?? 0),
