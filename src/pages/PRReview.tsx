@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 
-import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search, CheckCircle2 } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search, CheckCircle2, SendHorizonal } from "lucide-react";
 
 // ---------- types ----------
 
@@ -99,6 +99,11 @@ export default function PRReview() {
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
 
+  // RFQ creation
+  const [rfqTitle, setRfqTitle] = useState("");
+  const [rfqDeadline, setRfqDeadline] = useState("");
+  const [creatingRfq, setCreatingRfq] = useState(false);
+
   // ---------- fetch PRs ----------
 
   const fetchPRs = async () => {
@@ -176,6 +181,10 @@ export default function PRReview() {
     setEditPr(pr);
     setEditOpen(true);
     setLoadingItems(true);
+    // Pre-fill RFQ defaults
+    setRfqTitle(`${pr.pr_number} — ${pr.project_site}`);
+    const d = new Date(); d.setDate(d.getDate() + 3);
+    setRfqDeadline(d.toISOString().slice(0, 16));
     try {
       const { data, error } = await supabase
         .from("cps_pr_line_items")
@@ -354,6 +363,86 @@ export default function PRReview() {
       toast.error(e.message || "Approval failed");
     } finally {
       setApproving(false);
+    }
+  };
+
+  const handleCreateRfq = async () => {
+    if (!editPr || !user) return;
+    if (!rfqTitle.trim()) { toast.error("RFQ title is required"); return; }
+    if (!rfqDeadline) { toast.error("Deadline is required"); return; }
+    const visibleCount = lineItems.filter((li) => !li._deleted).length;
+    if (visibleCount === 0) { toast.error("PR must have at least one line item"); return; }
+
+    setCreatingRfq(true);
+    try {
+      // 1. Save any pending line item edits first
+      const toDelete = lineItems.filter((li) => li._deleted && li.id);
+      const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
+      if (toDelete.length) {
+        await supabase.from("cps_pr_line_items").delete().in("id", toDelete.map((li) => li.id!));
+      }
+      if (toUpsert.length) {
+        const payload = toUpsert.map((li, idx) => ({
+          ...(li.id ? { id: li.id } : {}),
+          pr_id: li.pr_id,
+          item_id: li.item_id,
+          description: li.description.trim(),
+          quantity: parseFloat(li.quantity) || 1,
+          unit: li.unit.trim() || "Nos",
+          specs: li.specs.trim() || null,
+          preferred_brands: li.preferred_brands ? li.preferred_brands.split(",").map((b) => b.trim()).filter(Boolean) : null,
+          brand_make: li.brand_make.trim() || null,
+          colour_code: li.colour_code.trim() || null,
+          design_notes: li.design_notes.trim() || null,
+          sort_order: li.sort_order ?? idx,
+        }));
+        const { error } = await supabase.from("cps_pr_line_items").upsert(payload);
+        if (error) throw error;
+      }
+
+      // 2. Generate RFQ number
+      const { data: rpcData, error: rpcErr } = await supabase.rpc("cps_next_rfq_number");
+      if (rpcErr) throw new Error("Failed to generate RFQ number");
+      const rfqNumber = typeof rpcData === "string" ? rpcData : String(rpcData ?? "");
+      if (!rfqNumber) throw new Error("Failed to generate RFQ number");
+
+      // 3. Insert RFQ as draft
+      const { data: rfqInsert, error: rfqErr } = await supabase
+        .from("cps_rfqs")
+        .insert([{
+          rfq_number: rfqNumber,
+          pr_id: editPr.id,
+          title: rfqTitle.trim(),
+          status: "draft",
+          deadline: new Date(rfqDeadline).toISOString(),
+          created_by: user.id,
+        }])
+        .select("id")
+        .single();
+      if (rfqErr || !rfqInsert) throw new Error("Failed to create RFQ: " + rfqErr?.message);
+
+      // 4. Update PR status to rfq_created
+      await supabase.from("cps_purchase_requisitions").update({ status: "rfq_created" }).eq("id", editPr.id);
+
+      // 5. Audit log
+      await supabase.from("cps_audit_log").insert([{
+        user_id: user.id, user_name: user.name, user_role: user.role,
+        action_type: "RFQ_CREATED",
+        entity_type: "rfq",
+        entity_id: (rfqInsert as any).id,
+        entity_number: rfqNumber,
+        description: `${rfqNumber} created as draft from ${editPr.pr_number} by ${user.name ?? user.email}`,
+        severity: "info",
+        logged_at: new Date().toISOString(),
+      }]);
+
+      toast.success(`${rfqNumber} created as draft — go to RFQ page to add suppliers and send`);
+      setEditOpen(false);
+      fetchPRs();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to create RFQ");
+    } finally {
+      setCreatingRfq(false);
     }
   };
 
@@ -639,34 +728,63 @@ export default function PRReview() {
                   <p className="text-xs text-muted-foreground mt-3">
                     Note: Requestor details, project code, required-by date and PR status are read-only.
                   </p>
+
+                  {/* ── Create RFQ panel ── */}
+                  {(editPr?.status === "pending" || editPr?.status === "validated") && (
+                    <div className="mt-5 rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
+                      <div className="text-sm font-semibold text-primary">Create RFQ from this PR</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <Label className="text-xs">RFQ Title</Label>
+                          <Input
+                            value={rfqTitle}
+                            onChange={(e) => setRfqTitle(e.target.value)}
+                            placeholder="e.g. PR-2026-0030 — Site A Materials"
+                            className="h-9 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Quote Deadline</Label>
+                          <Input
+                            type="datetime-local"
+                            value={rfqDeadline}
+                            onChange={(e) => setRfqDeadline(e.target.value)}
+                            className="h-9 text-sm"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        This will create a <strong>draft RFQ</strong> with all {lineItems.filter(li => !li._deleted).length} items. Go to the RFQ page to add suppliers and send.
+                      </p>
+                      <Button
+                        className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                        onClick={handleCreateRfq}
+                        disabled={creatingRfq || loadingItems}
+                      >
+                        {creatingRfq ? (
+                          <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Creating RFQ…</>
+                        ) : (
+                          <><SendHorizonal className="h-4 w-4 mr-2" /> Create RFQ Draft</>
+                        )}
+                      </Button>
+                    </div>
+                  )}
+
                 </>
               )}
             </div>
 
             <DialogFooter className="px-6 pb-6 border-t border-border pt-4 flex items-center gap-2 flex-wrap">
-              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={saving || approving}>
-                Cancel
+              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={saving || creatingRfq}>
+                Close
               </Button>
-              <Button variant="outline" onClick={handleSave} disabled={saving || approving || loadingItems}>
+              <Button variant="outline" onClick={handleSave} disabled={saving || creatingRfq || loadingItems}>
                 {saving ? (
                   <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</>
                 ) : (
-                  <><Save className="h-4 w-4 mr-2" /> Save Draft</>
+                  <><Save className="h-4 w-4 mr-2" /> Save Changes</>
                 )}
               </Button>
-              {editPr?.status === "pending" && (
-                <Button
-                  className="bg-green-600 hover:bg-green-700 text-white"
-                  onClick={handleApprove}
-                  disabled={saving || approving || loadingItems}
-                >
-                  {approving ? (
-                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Approving…</>
-                  ) : (
-                    <><CheckCircle2 className="h-4 w-4 mr-2" /> Approve for RFQ</>
-                  )}
-                </Button>
-              )}
             </DialogFooter>
           </div>
         </DialogContent>
