@@ -7,7 +7,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
 import logoUrl from "@/assets/Companylogo.png";
 
-import { AlertTriangle, Sparkles, Download } from "lucide-react";
+import { AlertTriangle, Sparkles, Download, FileText } from "lucide-react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
@@ -590,53 +592,228 @@ export default function ComparisonSheetPage() {
     }
   };
 
+  const fmtINR = (n: number | null | undefined) => {
+    if (n == null) return "-";
+    const v = Number(n);
+    if (Number.isNaN(v)) return "-";
+    return "Rs. " + v.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  };
+
   const downloadCSV = () => {
     if (!sheet || !rfq) return;
     const rows: string[][] = [];
-    // Header info
-    rows.push(["Comparison Sheet", rfq.rfq_number]);
-    rows.push(["RFQ Title", rfq.title ?? ""]);
+
+    // Header block
+    rows.push(["HAGERSTONE INTERNATIONAL - QUOTE COMPARISON SHEET"]);
+    rows.push([]);
+    rows.push(["RFQ Number", rfq.rfq_number]);
+    rows.push(["RFQ Title", rfq.title ?? "-"]);
     rows.push(["Quotes Received", String(sheet.total_quotes_received ?? 0)]);
-    rows.push(["Status", sheet.manual_review_status ?? ""]);
-    rows.push(["Generated", new Date().toLocaleString("en-IN")]);
+    rows.push(["Compliant Quotes", String(sheet.compliant_quotes_count ?? 0)]);
+    rows.push(["Review Status", String(sheet.manual_review_status ?? "-")]);
+    rows.push(["Generated On", new Date().toLocaleString("en-IN")]);
     rows.push([]);
 
-    // Quote summary header — one column per supplier
-    const supNames = suppliers.map((s) => s.name);
-    rows.push(["Item / Field", ...supNames]);
-
-    // Per-item landed rates from cellsByPrLineIdAndSupplierId
-    prLineItems.forEach((item) => {
+    // Line items section
+    rows.push(["LINE ITEMS - LANDED RATES PER SUPPLIER"]);
+    rows.push(["Sr.No", "Description", "Qty", "Unit", ...suppliers.map(s => s.name)]);
+    prLineItems.forEach((item, idx) => {
       const rates = suppliers.map((s) => {
         const cell = cellsByPrLineIdAndSupplierId[item.id]?.[s.id];
         return cell?.total_landed_rate != null
-          ? `₹${Number(cell.total_landed_rate).toLocaleString("en-IN")}`
+          ? fmtINR(cell.total_landed_rate)
           : cell?.rate != null
-          ? `₹${Number(cell.rate).toLocaleString("en-IN")}`
-          : "—";
+          ? fmtINR(cell.rate)
+          : "-";
       });
-      rows.push([`${item.description} (${item.quantity} ${item.unit ?? ""})`, ...rates]);
+      rows.push([
+        String(idx + 1),
+        item.description,
+        String(item.quantity ?? ""),
+        item.unit ?? "",
+        ...rates,
+      ]);
     });
-
     rows.push([]);
-    rows.push(["Total Quoted (excl GST)", ...suppliers.map(s => { const q = quoteBySupplierId[s.id]; return q?.total_quoted_value != null ? `₹${Number(q.total_quoted_value).toLocaleString("en-IN")}` : "—"; })]);
-    rows.push(["Total Landed", ...suppliers.map(s => { const q = quoteBySupplierId[s.id]; return q?.total_landed_value != null ? `₹${Number(q.total_landed_value).toLocaleString("en-IN")}` : "—"; })]);
-    rows.push(["Payment Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.payment_terms ?? "—")]);
-    rows.push(["Delivery Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.delivery_terms ?? "—")]);
-    rows.push(["Compliance", ...suppliers.map(s => quoteBySupplierId[s.id]?.compliance_status ?? "—")]);
-    rows.push(["Commercial Score", ...suppliers.map(s => { const q = quoteBySupplierId[s.id]; return q?.commercial_score != null ? String(q.commercial_score) : "—"; })]);
-    rows.push([]);
-    rows.push(["Reviewer Recommendation", suppliers.find(s => s.id === sheet.reviewer_recommendation)?.name ?? "—"]);
-    rows.push(["Recommendation Reason", sheet.reviewer_recommendation_reason ?? "—"]);
 
-    const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    // Totals section
+    rows.push(["COMMERCIAL SUMMARY"]);
+    rows.push(["Field", ...suppliers.map(s => s.name)]);
+    rows.push(["Total Quoted (excl GST)", ...suppliers.map(s => fmtINR(quoteBySupplierId[s.id]?.total_quoted_value))]);
+    rows.push(["Total Landed (incl GST)", ...suppliers.map(s => fmtINR(quoteBySupplierId[s.id]?.total_landed_value))]);
+    rows.push(["Payment Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.payment_terms ?? "-")]);
+    rows.push(["Delivery Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.delivery_terms ?? "-")]);
+    rows.push(["Warranty (months)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.warranty_months; return v != null ? String(v) : "-"; })]);
+    rows.push(["Validity (days)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.validity_days; return v != null ? String(v) : "-"; })]);
+    rows.push(["Compliance Status", ...suppliers.map(s => quoteBySupplierId[s.id]?.compliance_status ?? "-")]);
+    rows.push(["Commercial Score", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.commercial_score; return v != null ? String(v) : "-"; })]);
+    rows.push([]);
+
+    // Recommendation
+    rows.push(["RECOMMENDATION"]);
+    rows.push(["Recommended Supplier", suppliers.find(s => s.id === sheet.reviewer_recommendation)?.name ?? "-"]);
+    rows.push(["Recommendation Reason", sheet.reviewer_recommendation_reason ?? "-"]);
+    rows.push(["Reviewer Notes", sheet.manual_notes ?? "-"]);
+
+    const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+    // BOM for Excel compatibility with UTF-8
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `Comparison_${rfq.rfq_number}_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const downloadPDF = () => {
+    if (!sheet || !rfq) return;
+
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    let y = 12;
+
+    // Header — company branding
+    doc.setFillColor(107, 58, 42); // brown
+    doc.rect(0, 0, pageWidth, 18, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("HAGERSTONE INTERNATIONAL", 10, 8);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Quote Comparison Sheet", 10, 14);
+    doc.setTextColor(0, 0, 0);
+    y = 24;
+
+    // RFQ meta box
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text(`RFQ: ${rfq.rfq_number}`, 10, y);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    if (rfq.title) {
+      const title = doc.splitTextToSize(rfq.title, pageWidth - 80);
+      doc.text(title, 10, y + 5);
+      y += 5 + title.length * 4;
+    }
+
+    const metaRight = [
+      `Quotes Received: ${sheet.total_quotes_received ?? 0}`,
+      `Compliant: ${sheet.compliant_quotes_count ?? 0}`,
+      `Status: ${sheet.manual_review_status ?? "-"}`,
+      `Generated: ${new Date().toLocaleDateString("en-IN")}`,
+    ];
+    metaRight.forEach((line, i) => {
+      doc.text(line, pageWidth - 70, 24 + i * 4);
+    });
+    y = Math.max(y, 24 + metaRight.length * 4) + 4;
+
+    // Section: Line Items
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.setFillColor(240, 235, 230);
+    doc.rect(10, y - 4, pageWidth - 20, 6, "F");
+    doc.text("Line Items - Landed Rates per Supplier", 12, y);
+    y += 4;
+
+    const lineHead = ["Sr", "Description", "Qty", "Unit", ...suppliers.map(s => s.name)];
+    const lineBody = prLineItems.map((item, idx) => {
+      const rates = suppliers.map((s) => {
+        const cell = cellsByPrLineIdAndSupplierId[item.id]?.[s.id];
+        return cell?.total_landed_rate != null
+          ? fmtINR(cell.total_landed_rate)
+          : cell?.rate != null
+          ? fmtINR(cell.rate)
+          : "-";
+      });
+      return [
+        String(idx + 1),
+        item.description,
+        String(item.quantity ?? ""),
+        item.unit ?? "",
+        ...rates,
+      ];
+    });
+
+    autoTable(doc, {
+      head: [lineHead],
+      body: lineBody,
+      startY: y + 2,
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [107, 58, 42], textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [250, 248, 245] },
+      columnStyles: { 0: { cellWidth: 10 }, 1: { cellWidth: 60 }, 2: { cellWidth: 14 }, 3: { cellWidth: 14 } },
+      margin: { left: 10, right: 10 },
+    });
+    y = (doc as any).lastAutoTable.finalY + 6;
+
+    // Section: Commercial Summary
+    if (y > 160) { doc.addPage(); y = 15; }
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.setFillColor(240, 235, 230);
+    doc.rect(10, y - 4, pageWidth - 20, 6, "F");
+    doc.text("Commercial Summary", 12, y);
+    y += 4;
+
+    const summaryHead = ["Field", ...suppliers.map(s => s.name)];
+    const summaryBody = [
+      ["Total Quoted (excl GST)", ...suppliers.map(s => fmtINR(quoteBySupplierId[s.id]?.total_quoted_value))],
+      ["Total Landed (incl GST)", ...suppliers.map(s => fmtINR(quoteBySupplierId[s.id]?.total_landed_value))],
+      ["Payment Terms", ...suppliers.map(s => String(quoteBySupplierId[s.id]?.payment_terms ?? "-"))],
+      ["Delivery Terms", ...suppliers.map(s => String(quoteBySupplierId[s.id]?.delivery_terms ?? "-"))],
+      ["Warranty (months)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.warranty_months; return v != null ? String(v) : "-"; })],
+      ["Validity (days)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.validity_days; return v != null ? String(v) : "-"; })],
+      ["Compliance", ...suppliers.map(s => String(quoteBySupplierId[s.id]?.compliance_status ?? "-"))],
+    ];
+
+    autoTable(doc, {
+      head: [summaryHead],
+      body: summaryBody,
+      startY: y + 2,
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [107, 58, 42], textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [250, 248, 245] },
+      columnStyles: { 0: { cellWidth: 45, fontStyle: "bold" } },
+      margin: { left: 10, right: 10 },
+    });
+    y = (doc as any).lastAutoTable.finalY + 6;
+
+    // Recommendation box
+    if (y > 170) { doc.addPage(); y = 15; }
+    const recSupplier = suppliers.find(s => s.id === sheet.reviewer_recommendation)?.name ?? "-";
+    doc.setFillColor(232, 245, 233);
+    doc.setDrawColor(76, 175, 80);
+    doc.roundedRect(10, y, pageWidth - 20, 22, 2, 2, "FD");
+    doc.setTextColor(27, 94, 32);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("RECOMMENDATION", 14, y + 6);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(0, 0, 0);
+    doc.text(`Recommended Supplier: ${recSupplier}`, 14, y + 12);
+    const reason = sheet.reviewer_recommendation_reason ?? "-";
+    const reasonLines = doc.splitTextToSize(`Reason: ${reason}`, pageWidth - 28);
+    doc.text(reasonLines, 14, y + 18);
+    y += 24 + reasonLines.length * 4;
+
+    // Footer
+    const pageCount = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text(
+        `Hagerstone International Pvt. Ltd. | GST: 09AAECH3768B1ZM | Page ${i} of ${pageCount}`,
+        pageWidth / 2,
+        doc.internal.pageSize.getHeight() - 6,
+        { align: "center" }
+      );
+    }
+
+    doc.save(`Comparison_${rfq.rfq_number}_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   const handleApprove = async () => {
@@ -1160,6 +1337,10 @@ Provide a JSON response with this exact structure:
             <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={downloadCSV}>
               <Download className="h-3.5 w-3.5" />
               CSV
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={downloadPDF}>
+              <FileText className="h-3.5 w-3.5" />
+              PDF
             </Button>
           </div>
         </CardHeader>
