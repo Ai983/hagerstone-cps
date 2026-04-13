@@ -507,7 +507,7 @@ export default function PurchaseRequisitions() {
           project_site: wizProjectSite.trim(),
           project_code: wizProjectName.trim() || null,
           requested_by: user.id,
-          status: "pending_design" as const,
+          status: "pending" as const,
           required_by: wizRequiredBy,
           notes: wizNotes.trim() || null,
         }])
@@ -600,8 +600,7 @@ export default function PurchaseRequisitions() {
         }]);
       } catch { /* audit failure non-blocking */ }
 
-      // Design team will add specs before RFQ is created — no auto-RFQ here
-      toast.success(`PR ${prNumber} submitted — design team will add material specs before RFQ dispatch`);
+      toast.success(`PR ${prNumber} submitted — procurement team will review before RFQ dispatch`);
 
       setWizSuccess({ prNumber, itemsCount: validLines.length });
       setWizardStep(6);

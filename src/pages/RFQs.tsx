@@ -304,7 +304,7 @@ export default function RFQs() {
     const { data: prs, error } = await supabase
       .from("cps_purchase_requisitions")
       .select("id,pr_number,project_site,project_code")
-      .in("status", ["pending", "validated", "pending_design"])
+      .eq("status", "validated")
       .order("created_at", { ascending: false });
 
     if (error) {

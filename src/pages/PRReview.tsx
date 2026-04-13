@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 
-import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search, CheckCircle2 } from "lucide-react";
 
 // ---------- types ----------
 
@@ -97,6 +97,7 @@ export default function PRReview() {
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   // ---------- fetch PRs ----------
 
@@ -295,6 +296,64 @@ export default function PRReview() {
       toast.error(e.message || "Save failed");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!editPr) return;
+    setApproving(true);
+    try {
+      // Save any pending line item changes first
+      const toDelete = lineItems.filter((li) => li._deleted && li.id);
+      const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
+      if (toDelete.length) {
+        await supabase.from("cps_pr_line_items").delete().in("id", toDelete.map((li) => li.id!));
+      }
+      if (toUpsert.length) {
+        const payload = toUpsert.map((li, idx) => ({
+          ...(li.id ? { id: li.id } : {}),
+          pr_id: li.pr_id,
+          item_id: li.item_id,
+          description: li.description.trim(),
+          quantity: parseFloat(li.quantity) || 1,
+          unit: li.unit.trim() || "Nos",
+          specs: li.specs.trim() || null,
+          preferred_brands: li.preferred_brands ? li.preferred_brands.split(",").map((b) => b.trim()).filter(Boolean) : null,
+          brand_make: li.brand_make.trim() || null,
+          colour_code: li.colour_code.trim() || null,
+          design_notes: li.design_notes.trim() || null,
+          sort_order: li.sort_order ?? idx,
+        }));
+        const { error } = await supabase.from("cps_pr_line_items").upsert(payload);
+        if (error) throw error;
+      }
+
+      // Update PR status to validated
+      const { error: updateErr } = await supabase
+        .from("cps_purchase_requisitions")
+        .update({ status: "validated" })
+        .eq("id", editPr.id);
+      if (updateErr) throw updateErr;
+
+      // Audit log
+      await supabase.from("cps_audit_log").insert([{
+        user_id: user?.id, user_name: user?.name, user_role: user?.role,
+        action_type: "PR_APPROVED",
+        entity_type: "purchase_requisition",
+        entity_id: editPr.id,
+        entity_number: editPr.pr_number,
+        description: `PR ${editPr.pr_number} approved for RFQ by ${user?.name ?? user?.email}`,
+        severity: "info",
+        logged_at: new Date().toISOString(),
+      }]);
+
+      toast.success(`${editPr.pr_number} approved — now visible in RFQ page`);
+      setEditOpen(false);
+      fetchPRs();
+    } catch (e: any) {
+      toast.error(e.message || "Approval failed");
+    } finally {
+      setApproving(false);
     }
   };
 
@@ -584,17 +643,30 @@ export default function PRReview() {
               )}
             </div>
 
-            <DialogFooter className="px-6 pb-6 border-t border-border pt-4">
-              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={saving}>
+            <DialogFooter className="px-6 pb-6 border-t border-border pt-4 flex items-center gap-2 flex-wrap">
+              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={saving || approving}>
                 Cancel
               </Button>
-              <Button onClick={handleSave} disabled={saving || loadingItems}>
+              <Button variant="outline" onClick={handleSave} disabled={saving || approving || loadingItems}>
                 {saving ? (
                   <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</>
                 ) : (
-                  <><Save className="h-4 w-4 mr-2" /> Save Changes</>
+                  <><Save className="h-4 w-4 mr-2" /> Save Draft</>
                 )}
               </Button>
+              {editPr?.status === "pending" && (
+                <Button
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                  onClick={handleApprove}
+                  disabled={saving || approving || loadingItems}
+                >
+                  {approving ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Approving…</>
+                  ) : (
+                    <><CheckCircle2 className="h-4 w-4 mr-2" /> Approve for RFQ</>
+                  )}
+                </Button>
+              )}
             </DialogFooter>
           </div>
         </DialogContent>
