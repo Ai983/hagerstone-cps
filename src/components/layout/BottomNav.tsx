@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FileText, Send, ShoppingCart, Truck, MessageSquare,
-  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, Palette,
+  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, ClipboardCheck,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ const ADMIN_PRIMARY = [
 ];
 
 const ADMIN_MORE = [
+  { title: "PR Review", url: "/pr-review", icon: ClipboardCheck },
   { title: "Quotes", url: "/quotes", icon: MessageSquare },
   { title: "Comparison", url: "/comparison", icon: BarChart3 },
   { title: "Delivery", url: "/delivery", icon: Truck },
@@ -31,16 +32,10 @@ const EMPLOYEE_NAV = [
   { title: "Delivery", url: "/delivery", icon: Truck },
 ];
 
-const DESIGN_NAV_MOBILE = [
-  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Design", url: "/design", icon: Palette },
-];
-
 const ROLE_LABELS: Record<string, string> = {
   requestor: "Requestor", procurement_executive: "Proc. Executive",
   procurement_head: "Proc. Head", it_head: "IT Head", management: "Management",
   finance: "Finance", site_receiver: "Site Receiver", auditor: "Auditor",
-  design_team: "Design Team",
 };
 
 export function BottomNav() {
@@ -51,30 +46,6 @@ export function BottomNav() {
   if (!user) return null;
 
   const isEmployee = user.role === 'requestor' || user.role === 'site_receiver';
-  const isDesign = user.role === 'design_team';
-
-  if (isDesign) {
-    return (
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 h-16 bg-sidebar text-sidebar-foreground border-t border-sidebar-border flex items-center">
-        {DESIGN_NAV_MOBILE.map(item => (
-          <NavLink key={item.url} to={item.url}
-            className={({ isActive }) => cn(
-              "flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] min-h-[44px] transition-colors",
-              isActive ? "text-sidebar-primary" : "text-sidebar-foreground/60"
-            )}
-          >
-            <item.icon className="h-5 w-5" />
-            <span>{item.title}</span>
-          </NavLink>
-        ))}
-        <button onClick={async () => { await signOut(); navigate("/login"); }}
-          className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] min-h-[44px] text-sidebar-foreground/60">
-          <UserCircle className="h-5 w-5" />
-          <span>Sign Out</span>
-        </button>
-      </nav>
-    );
-  }
 
   if (isEmployee) {
     return (

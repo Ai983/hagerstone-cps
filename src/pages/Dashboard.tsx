@@ -32,7 +32,7 @@ interface PendingPO {
 
 interface NotifItem {
   id: string;
-  type: "pr_raised" | "quote_uploaded" | "pending_design";
+  type: "pr_raised" | "quote_uploaded";
   title: string;
   subtitle: string;
   ts: string;
@@ -40,7 +40,7 @@ interface NotifItem {
 }
 
 export default function Dashboard() {
-  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead, isDesignTeam, isEmployee } = useAuth();
+  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead, isEmployee } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
@@ -73,7 +73,7 @@ export default function Dashboard() {
     setLoading(true);
     try {
       let prQuery = supabase.from("cps_purchase_requisitions").select("id", { count: "exact", head: true });
-      if (isEmployee || isDesignTeam) prQuery = prQuery.eq("requested_by", user?.id ?? "");
+      if (isEmployee) prQuery = prQuery.eq("requested_by", user?.id ?? "");
 
       const [prRes, rfqRes, quotesRes, poActiveRes, grnRes, supplierRes] = await Promise.all([
         prQuery,
@@ -147,27 +147,10 @@ export default function Dashboard() {
         setPendingApprovals(poRows);
       }
 
-      // Notifications — design team sees pending_design PRs; procurement/admin sees recent PRs + quotes
+      // Notifications — procurement/admin sees recent PRs + quotes
       const notifItems: NotifItem[] = [];
       const role = user?.role;
-      if (role === "design_team") {
-        const { data: designPRs } = await supabase
-          .from("cps_purchase_requisitions")
-          .select("id, pr_number, project_code, project_site, created_at")
-          .eq("status", "pending_design")
-          .order("created_at", { ascending: true })
-          .limit(10);
-        (designPRs ?? []).forEach((p: any) => {
-          notifItems.push({
-            id: p.id,
-            type: "pending_design",
-            title: `${p.pr_number} awaiting design review`,
-            subtitle: p.project_code ?? p.project_site,
-            ts: p.created_at,
-            path: "/design",
-          });
-        });
-      } else if (isProcurementHead || role === "management") {
+      if (isProcurementHead || role === "management") {
         // Recent PRs (last 7 days)
         const since = new Date();
         since.setDate(since.getDate() - 7);
@@ -223,7 +206,7 @@ export default function Dashboard() {
       setNotifications(notifItems.slice(0, 10));
 
       // PR reference images — fetch recent line items with Images in specs
-      if (!isEmployee && !isDesignTeam) {
+      if (!isEmployee) {
         const imgSince = new Date();
         imgSince.setDate(imgSince.getDate() - 14);
         const { data: lineItems } = await supabase
@@ -490,12 +473,10 @@ export default function Dashboard() {
           <CardContent className="p-0 divide-y divide-border">
             {notifications.map((n) => {
               const colors: Record<string, string> = {
-                pending_design: "bg-violet-100 text-violet-800",
                 pr_raised: "bg-blue-100 text-blue-800",
                 quote_uploaded: "bg-green-100 text-green-800",
               };
               const labels: Record<string, string> = {
-                pending_design: "Design Queue",
                 pr_raised: "New PR",
                 quote_uploaded: "Quote",
               };

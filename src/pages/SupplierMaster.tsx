@@ -107,6 +107,8 @@ export default function SupplierMaster() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<SupplierStatus | "all">("all");
+  const [sortFieldSup, setSortFieldSup] = useState("name");
+  const [sortDirSup, setSortDirSup] = useState<"asc" | "desc">("asc");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -269,9 +271,14 @@ export default function SupplierMaster() {
     return Array.from(set).sort();
   }, [allSuppliers]);
 
+  const toggleSortSup = (field: string) => {
+    if (sortFieldSup === field) setSortDirSup((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortFieldSup(field); setSortDirSup("asc"); }
+  };
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return allSuppliers.filter((s) => {
+    const list = allSuppliers.filter((s) => {
       const matchesStatus = statusFilter === "all" ? true : s.status === statusFilter;
       const matchesSearch = !q
         ? true
@@ -281,7 +288,13 @@ export default function SupplierMaster() {
       const matchesCategory = categoryFilter === "all" ? true : (s.categories ?? []).includes(categoryFilter);
       return matchesStatus && matchesSearch && matchesCategory;
     });
-  }, [allSuppliers, search, statusFilter, categoryFilter]);
+    return [...list].sort((a, b) => {
+      const av = (a as any)[sortFieldSup] ?? "";
+      const bv = (b as any)[sortFieldSup] ?? "";
+      const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+      return sortDirSup === "asc" ? cmp : -cmp;
+    });
+  }, [allSuppliers, search, statusFilter, categoryFilter, sortFieldSup, sortDirSup]);
 
   const openAdd = () => {
     setEditingId(null);
@@ -441,13 +454,13 @@ export default function SupplierMaster() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Supplier Name</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortSup("name")}>Supplier Name {sortFieldSup==="name"?(sortDirSup==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>GSTIN</TableHead>
-                <TableHead>Location</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortSup("city")}>Location {sortFieldSup==="city"?(sortDirSup==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Contact</TableHead>
-                <TableHead>Performance</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortSup("performance_score")}>Performance {sortFieldSup==="performance_score"?(sortDirSup==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Win Rate</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortSup("status")}>Status {sortFieldSup==="status"?(sortDirSup==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 {canManageSuppliers && <TableHead className="text-right">Edit</TableHead>}
               </TableRow>
             </TableHeader>

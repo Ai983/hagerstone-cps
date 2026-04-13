@@ -170,6 +170,8 @@ export default function DeliveryTracker() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [sortFieldDel, setSortFieldDel] = useState("created_at");
+  const [sortDirDel, setSortDirDel] = useState<"asc" | "desc">("desc");
 
   // Add Update dialog
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -324,7 +326,7 @@ export default function DeliveryTracker() {
 
   const filteredCards = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return poCards.filter((po) => {
+    const list = poCards.filter((po) => {
       if (statusFilter === "dispatched" && po.status !== "dispatched") return false;
       if (statusFilter === "in_transit" && po.status !== "in_transit") return false;
       if (statusFilter === "delivered" && po.status !== "delivered") return false;
@@ -338,7 +340,13 @@ export default function DeliveryTracker() {
       if (!q) return true;
       return po.po_number.toLowerCase().includes(q) || po.supplier_name.toLowerCase().includes(q);
     });
-  }, [poCards, search, statusFilter]);
+    return [...list].sort((a, b) => {
+      const av = (a as any)[sortFieldDel] ?? "";
+      const bv = (b as any)[sortFieldDel] ?? "";
+      const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+      return sortDirDel === "asc" ? cmp : -cmp;
+    });
+  }, [poCards, search, statusFilter, sortFieldDel, sortDirDel]);
 
   // ── Timeline helpers ───────────────────────────────────────────────────────
 
@@ -708,6 +716,19 @@ export default function DeliveryTracker() {
             <SelectItem value="delivered">Delivered</SelectItem>
             <SelectItem value="delayed">Delayed</SelectItem>
             <SelectItem value="pending_grn">Pending GRN</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={`${sortFieldDel}:${sortDirDel}`} onValueChange={(v) => { const [f, d] = v.split(":"); setSortFieldDel(f); setSortDirDel(d as "asc" | "desc"); }}>
+          <SelectTrigger className="w-48">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="created_at:desc">Newest First</SelectItem>
+            <SelectItem value="created_at:asc">Oldest First</SelectItem>
+            <SelectItem value="delivery_date:asc">Delivery: Soonest</SelectItem>
+            <SelectItem value="delivery_date:desc">Delivery: Latest</SelectItem>
+            <SelectItem value="po_number:asc">PO Number ↑</SelectItem>
+            <SelectItem value="supplier_name:asc">Supplier A→Z</SelectItem>
           </SelectContent>
         </Select>
       </div>

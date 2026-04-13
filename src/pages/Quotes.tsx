@@ -185,6 +185,13 @@ export default function Quotes() {
   const [search, setSearch] = useState("");
   const [rfqFilter, setRfqFilter] = useState<string>("all");
   const [parseStatusFilter, setParseStatusFilter] = useState<QuoteParseStatus | "all">("all");
+  const [sortFieldQ, setSortFieldQ] = useState("received_at");
+  const [sortDirQ, setSortDirQ] = useState<"asc" | "desc">("desc");
+
+  const toggleSortQ = (field: string) => {
+    if (sortFieldQ === field) setSortDirQ((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortFieldQ(field); setSortDirQ("asc"); }
+  };
 
   const [rfqById, setRfqById] = useState<Record<string, Rfq>>({});
 
@@ -323,7 +330,7 @@ export default function Quotes() {
 
   const filteredQuotes = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return quotes.filter((row) => {
+    const list = quotes.filter((row) => {
       const matchesSearch = !q
         ? true
         : row.blind_quote_ref.toLowerCase().includes(q) || row.quote_number.toLowerCase().includes(q);
@@ -331,7 +338,13 @@ export default function Quotes() {
       const matchesParseStatus = parseStatusFilter === "all" ? true : row.parse_status === parseStatusFilter;
       return matchesSearch && matchesRfq && matchesParseStatus;
     });
-  }, [quotes, search, rfqFilter, parseStatusFilter]);
+    return [...list].sort((a, b) => {
+      const av = (a as any)[sortFieldQ] ?? "";
+      const bv = (b as any)[sortFieldQ] ?? "";
+      const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+      return sortDirQ === "asc" ? cmp : -cmp;
+    });
+  }, [quotes, search, rfqFilter, parseStatusFilter, sortFieldQ, sortDirQ]);
 
   const stats = useMemo(() => {
     const total = quotes.length;
@@ -1156,15 +1169,15 @@ Rules:
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Blind Ref</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("blind_quote_ref")}>Blind Ref {sortFieldQ==="blind_quote_ref"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>RFQ</TableHead>
-                <TableHead>Channel</TableHead>
-                <TableHead>Total Landed</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("channel")}>Channel {sortFieldQ==="channel"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("total_landed_value")}>Total Landed {sortFieldQ==="total_landed_value"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Payment Terms</TableHead>
                 <TableHead>Warranty</TableHead>
-                <TableHead>Parse Status</TableHead>
-                <TableHead>Compliance</TableHead>
-                <TableHead>Received</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("parse_status")}>Parse Status {sortFieldQ==="parse_status"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("compliance_status")}>Compliance {sortFieldQ==="compliance_status"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("received_at")}>Received {sortFieldQ==="received_at"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="text-right">Review</TableHead>
               </TableRow>
             </TableHeader>

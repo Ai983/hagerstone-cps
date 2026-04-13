@@ -103,6 +103,8 @@ export default function ItemMaster() {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [activeOnly, setActiveOnly] = useState(true);
+  const [sortFieldItem, setSortFieldItem] = useState("name");
+  const [sortDirItem, setSortDirItem] = useState<"asc" | "desc">("asc");
 
   const [activeTab, setActiveTab] = useState("items");
 
@@ -257,9 +259,14 @@ export default function ItemMaster() {
     return Array.from(set).sort();
   }, [items]);
 
+  const toggleSortItem = (field: string) => {
+    if (sortFieldItem === field) setSortDirItem((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortFieldItem(field); setSortDirItem("asc"); }
+  };
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return items.filter((i) => {
+    const list = items.filter((i) => {
       const matchesSearch = !q
         ? true
         : (i.name ?? "").toLowerCase().includes(q) ||
@@ -269,7 +276,13 @@ export default function ItemMaster() {
       const matchesActive = activeOnly ? i.active : true;
       return matchesSearch && matchesCategory && matchesActive;
     });
-  }, [items, search, categoryFilter, activeOnly]);
+    return [...list].sort((a, b) => {
+      const av = (a as any)[sortFieldItem] ?? "";
+      const bv = (b as any)[sortFieldItem] ?? "";
+      const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+      return sortDirItem === "asc" ? cmp : -cmp;
+    });
+  }, [items, search, categoryFilter, activeOnly, sortFieldItem, sortDirItem]);
 
   const stats = useMemo(() => {
     const total = items.length;
@@ -492,11 +505,11 @@ export default function ItemMaster() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Item</TableHead>
-                <TableHead>Category / Sub</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortItem("name")}>Item {sortFieldItem==="name"?(sortDirItem==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortItem("category")}>Category / Sub {sortFieldItem==="category"?(sortDirItem==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Unit</TableHead>
                 <TableHead>HSN</TableHead>
-                <TableHead>Last Purchase</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortItem("last_purchase_rate")}>Last Purchase {sortFieldItem==="last_purchase_rate"?(sortDirItem==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Benchmark</TableHead>
                 <TableHead>Lead Time</TableHead>
                 <TableHead>Status</TableHead>

@@ -184,6 +184,13 @@ export default function PurchaseOrders() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [sortFieldPO, setSortFieldPO] = useState("created_at");
+  const [sortDirPO, setSortDirPO] = useState<"asc" | "desc">("desc");
+
+  const toggleSortPO = (field: string) => {
+    if (sortFieldPO === field) setSortDirPO((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortFieldPO(field); setSortDirPO("asc"); }
+  };
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createStep, setCreateStep] = useState<"form" | "review">("form");
@@ -227,6 +234,8 @@ export default function PurchaseOrders() {
   const [standardTnCs, setStandardTnCs] = useState<Record<string, string>>({});
   const [approveSending, setApproveSending] = useState(false);
   const [legacyModalOpen, setLegacyModalOpen] = useState(false);
+  const [isSingleVendor, setIsSingleVendor] = useState(false);
+  const [singleVendorReason, setSingleVendorReason] = useState("");
 
   // Edit PO state
   const [editMode, setEditMode] = useState(false);
@@ -249,13 +258,22 @@ export default function PurchaseOrders() {
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rows.filter((r) => {
+    const list = rows.filter((r) => {
       const matchesStatus = statusFilter === "all" ? true : String(r.status) === statusFilter;
       if (!matchesStatus) return false;
       if (!q) return true;
-      return String(r.po_number ?? "").toLowerCase().includes(q);
+      return (
+        String(r.po_number ?? "").toLowerCase().includes(q) ||
+        String(r.supplier_name_text ?? "").toLowerCase().includes(q)
+      );
     });
-  }, [rows, search, statusFilter]);
+    return [...list].sort((a, b) => {
+      const av = (a as any)[sortFieldPO] ?? "";
+      const bv = (b as any)[sortFieldPO] ?? "";
+      const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+      return sortDirPO === "asc" ? cmp : -cmp;
+    });
+  }, [rows, search, statusFilter, sortFieldPO, sortDirPO]);
 
   const fetchPoRows = async () => {
     setLoading(true);
@@ -346,6 +364,8 @@ export default function PurchaseOrders() {
     setLineItems([]);
     setRejectReason("");
     setApprovalNotes("");
+    setIsSingleVendor(false);
+    setSingleVendorReason("");
   }, [createOpen]);
 
   const computeLineTotals = (li: Omit<CreateLine, "gst_amount" | "total_value">): Omit<CreateLine, "gst_amount" | "total_value"> & { gst_amount: number; total_value: number } => {
@@ -436,6 +456,14 @@ export default function PurchaseOrders() {
         setCreateLoading(false);
         return;
       }
+
+      // Detect single-vendor: count distinct suppliers who quoted for this RFQ
+      const { data: allQuotes } = await supabase
+        .from("cps_quotes")
+        .select("supplier_id")
+        .eq("rfq_id", rfqId);
+      const uniqueSupplierCount = new Set((allQuotes ?? []).map((q: any) => q.supplier_id)).size;
+      setIsSingleVendor(!sheetRow || uniqueSupplierCount < 2);
 
       setRecommendedSupplierId(recSupplierId);
       setCreateSupplierId(recSupplierId);
@@ -528,6 +556,10 @@ export default function PurchaseOrders() {
     if (!createDeliveryDate) { toast.error("Delivery date is required"); return; }
     if (!createPaymentTerms.trim()) { toast.error("Payment terms are required"); return; }
     if (!lineItems.length) { toast.error("At least one line item is required"); return; }
+    if (isSingleVendor && !singleVendorReason.trim()) {
+      toast.error("Please provide a reason for proceeding with a single vendor");
+      return;
+    }
     setCreateStep("review");
   };
 
@@ -626,6 +658,19 @@ export default function PurchaseOrders() {
 
       const { error: insLinesErr } = await supabase.from("cps_po_line_items").insert(poLinesPayload);
       if (insLinesErr) throw insLinesErr;
+
+      // Audit log for single-vendor justification
+      if (isSingleVendor && singleVendorReason.trim()) {
+        await supabase.from("cps_audit_log").insert([{
+          action_type: "SINGLE_VENDOR_JUSTIFICATION",
+          entity_type: "cps_purchase_orders",
+          entity_id: poId,
+          entity_number: String(poNumber),
+          performed_by: user.id,
+          description: `Single-vendor PO justification: ${singleVendorReason.trim()}`,
+          severity: "warning",
+        }]);
+      }
 
       toast.success(`PO ${String(poNumber)} created — sending to founders for approval`);
       setCreateOpen(false);
@@ -1291,13 +1336,13 @@ export default function PurchaseOrders() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[170px]">PO Number</TableHead>
-                <TableHead>Supplier Name</TableHead>
+                <TableHead className="w-[170px] cursor-pointer select-none" onClick={() => toggleSortPO("po_number")}>PO Number {sortFieldPO==="po_number"?(sortDirPO==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPO("supplier_name_text")}>Supplier Name {sortFieldPO==="supplier_name_text"?(sortDirPO==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>RFQ Number</TableHead>
                 <TableHead>Project Site</TableHead>
-                <TableHead className="text-right">Grand Total {canViewPrices ? "(₹)" : ""}</TableHead>
-                <TableHead>Delivery Date</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead className="text-right cursor-pointer select-none" onClick={() => toggleSortPO("grand_total")}>Grand Total {canViewPrices ? "(₹)" : ""} {sortFieldPO==="grand_total"?(sortDirPO==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPO("delivery_date")}>Delivery Date {sortFieldPO==="delivery_date"?(sortDirPO==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPO("status")}>Status {sortFieldPO==="status"?(sortDirPO==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Approved By</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -1471,6 +1516,21 @@ export default function PurchaseOrders() {
                 <Label>Penalty Clause</Label>
                 <Textarea rows={3} value={createPenaltyClause} onChange={(e) => setCreatePenaltyClause(e.target.value)} />
               </div>
+              {isSingleVendor && (
+                <div className="grid grid-cols-1 gap-3 rounded-lg border-2 border-amber-400 bg-amber-50 p-4">
+                  <Label className="text-amber-800 font-semibold flex items-center gap-2">
+                    ⚠ Single-Vendor Justification <span className="text-red-600">*</span>
+                  </Label>
+                  <p className="text-xs text-amber-700">Only 1 vendor quoted for this RFQ. Provide a documented reason for proceeding without competitive comparison.</p>
+                  <Textarea
+                    rows={3}
+                    placeholder="e.g. Only authorised dealer for this brand in region, emergency procurement, proprietary item, rate contract…"
+                    value={singleVendorReason}
+                    onChange={(e) => setSingleVendorReason(e.target.value)}
+                    className="border-amber-300 focus:border-amber-500"
+                  />
+                </div>
+              )}
             </div>
 
             <Card>
@@ -1619,6 +1679,12 @@ export default function PurchaseOrders() {
                   <div className="font-medium text-muted-foreground text-xs uppercase tracking-wide mb-2">Penalty Clause</div>
                   <div className="whitespace-pre-wrap">{createPenaltyClause || "—"}</div>
                 </div>
+                {isSingleVendor && singleVendorReason && (
+                  <div className="border-2 border-amber-400 rounded-lg p-3 space-y-1 bg-amber-50">
+                    <div className="font-medium text-amber-800 text-xs uppercase tracking-wide mb-2">⚠ Single-Vendor Justification</div>
+                    <div className="text-sm text-amber-900 whitespace-pre-wrap">{singleVendorReason}</div>
+                  </div>
+                )}
               </div>
 
               {/* Line items */}

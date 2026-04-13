@@ -155,6 +155,8 @@ export default function RFQs() {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<RfqStatus | "all">("all");
+  const [sortFieldRfq, setSortFieldRfq] = useState("created_at");
+  const [sortDirRfq, setSortDirRfq] = useState<"asc" | "desc">("desc");
 
   const [submittedPRs, setSubmittedPRs] = useState<Array<PurchaseRequisition & { itemsCount: number }>>([]);
   const [submittedPRLoading, setSubmittedPRLoading] = useState(false);
@@ -354,9 +356,14 @@ export default function RFQs() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const toggleSortRfq = (field: string) => {
+    if (sortFieldRfq === field) setSortDirRfq((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortFieldRfq(field); setSortDirRfq("asc"); }
+  };
+
   const rfqTable = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return rfqs.filter((r) => {
+    const list = rfqs.filter((r) => {
       const matchesStatus = statusFilter === "all" ? true : r.status === statusFilter;
       if (!matchesStatus) return false;
       if (!q) return true;
@@ -364,7 +371,13 @@ export default function RFQs() {
       const fieldsMatch = r.rfq_number.toLowerCase().includes(q) || r.title.toLowerCase().includes(q);
       return fieldsMatch || prDisplay.includes(q);
     });
-  }, [rfqs, search, statusFilter, prDisplayById]);
+    return [...list].sort((a, b) => {
+      const av = (a as any)[sortFieldRfq] ?? "";
+      const bv = (b as any)[sortFieldRfq] ?? "";
+      const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+      return sortDirRfq === "asc" ? cmp : -cmp;
+    });
+  }, [rfqs, search, statusFilter, prDisplayById, sortFieldRfq, sortDirRfq]);
 
   const openDialog = async () => {
     setDialogOpen(true);
@@ -841,14 +854,14 @@ export default function RFQs() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>RFQ Number</TableHead>
-                <TableHead>Title</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortRfq("rfq_number")}>RFQ Number {sortFieldRfq==="rfq_number"?(sortDirRfq==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortRfq("title")}>Title {sortFieldRfq==="title"?(sortDirRfq==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Linked PR</TableHead>
                 <TableHead>Suppliers</TableHead>
                 <TableHead>Quotes Reviewed</TableHead>
-                <TableHead>Deadline</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortRfq("deadline")}>Deadline {sortFieldRfq==="deadline"?(sortDirRfq==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortRfq("status")}>Status {sortFieldRfq==="status"?(sortDirRfq==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortRfq("created_at")}>Created {sortFieldRfq==="created_at"?(sortDirRfq==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>

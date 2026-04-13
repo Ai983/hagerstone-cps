@@ -175,6 +175,8 @@ export default function PurchaseRequisitions() {
   const [prList, setPrList] = useState<PurchaseRequisition[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [sortField, setSortFieldPR] = useState("created_at");
+  const [sortDir, setSortDirPR] = useState<"asc" | "desc">("desc");
 
   // Wizard state
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -230,7 +232,7 @@ export default function PurchaseRequisitions() {
       .from("cps_purchase_requisitions")
       .select("id, pr_number, project_site, project_code, requested_by, status, required_by, notes, created_at")
       .order("created_at", { ascending: false });
-    const isRestrictedRole = user?.role === "requestor" || user?.role === "site_receiver" || user?.role === "design_team";
+    const isRestrictedRole = user?.role === "requestor" || user?.role === "site_receiver";
     if (isRestrictedRole) prQuery = prQuery.eq("requested_by", user?.id ?? "");
     const { data: prs, error } = await prQuery;
 
@@ -332,18 +334,30 @@ export default function PurchaseRequisitions() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wizardOpen, wizardStep, wizProjectId, wizProjectName, wizProjectSite, wizRequiredBy, wizLineItems]);
 
+  const toggleSortPR = (field: string) => {
+    if (sortField === field) setSortDirPR((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortFieldPR(field); setSortDirPR("asc"); }
+  };
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return prList.filter((p) => {
+    const list = prList.filter((p) => {
       const matchesStatus = statusFilter === "all" ? true : p.status === statusFilter;
       const matchesQ =
         !q ||
         p.pr_number.toLowerCase().includes(q) ||
         p.project_site.toLowerCase().includes(q) ||
-        (p.project_code ?? "").toLowerCase().includes(q);
+        (p.project_code ?? "").toLowerCase().includes(q) ||
+        p.requested_by_name.toLowerCase().includes(q);
       return matchesStatus && matchesQ;
     });
-  }, [prList, search, statusFilter]);
+    return [...list].sort((a, b) => {
+      const av = (a as any)[sortField] ?? "";
+      const bv = (b as any)[sortField] ?? "";
+      const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [prList, search, statusFilter, sortField, sortDir]);
 
   const openWizard = () => {
     setWizardStep(1);
@@ -659,14 +673,14 @@ export default function PurchaseRequisitions() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>PR Number</TableHead>
-                <TableHead>Project Name</TableHead>
-                <TableHead>Project Site</TableHead>
-                <TableHead>Created By</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("pr_number")}>PR Number {sortField==="pr_number"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("project_code")}>Project Name {sortField==="project_code"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("project_site")}>Project Site {sortField==="project_site"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("requested_by_name")}>Created By {sortField==="requested_by_name"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Items</TableHead>
-                <TableHead>Required By</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Raised On</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("required_by")}>Required By {sortField==="required_by"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("status")}>Status {sortField==="status"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("created_at")}>Raised On {sortField==="created_at"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="text-right"></TableHead>
               </TableRow>
             </TableHeader>

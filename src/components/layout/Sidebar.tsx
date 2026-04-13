@@ -1,12 +1,13 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, Upload, Palette } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, Upload, ClipboardCheck } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
 const NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, roles: ["all"] },
   { title: "Purchase Requests", url: "/requisitions", icon: FileText, roles: ["all"] },
+  { title: "PR Review", url: "/pr-review", icon: ClipboardCheck, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "RFQs", url: "/rfqs", icon: Send, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management"] },
@@ -26,22 +27,14 @@ const EMPLOYEE_NAV = [
   { title: "Item Master", url: "/items", icon: Package },
 ];
 
-const DESIGN_NAV = [
-  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Design Review", url: "/design", icon: Palette },
-];
-
 export function AppSidebar() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
 
   const isEmployee = user?.role === 'requestor' || user?.role === 'site_receiver';
-  const isDesign = user?.role === 'design_team';
   const visible = isEmployee
     ? EMPLOYEE_NAV
-    : isDesign
-    ? DESIGN_NAV
     : NAV.filter(n => n.roles.includes("all") || n.roles.includes(user?.role ?? ""));
 
   return (

@@ -103,6 +103,13 @@ export default function AuditLog() {
   const [actionFilter, setActionFilter] = useState("all");
   const [severityFilter, setSeverityFilter] = useState("all");
   const [entityFilter, setEntityFilter] = useState("all");
+  const [sortFieldAudit, setSortFieldAudit] = useState("logged_at");
+  const [sortDirAudit, setSortDirAudit] = useState<"asc" | "desc">("desc");
+
+  const toggleSortAudit = (field: string) => {
+    if (sortFieldAudit === field) setSortDirAudit((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortFieldAudit(field); setSortDirAudit("asc"); }
+  };
 
   const [actionTypes, setActionTypes] = useState<string[]>([]);
   const [entityTypes, setEntityTypes] = useState<string[]>([]);
@@ -130,7 +137,7 @@ export default function AuditLog() {
       let query = supabase
         .from("cps_audit_log")
         .select("*", { count: "exact" })
-        .order("logged_at", { ascending: false })
+        .order(sortFieldAudit, { ascending: sortDirAudit === "asc" })
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
       if (actionFilter !== "all") query = query.eq("action_type", actionFilter);
@@ -176,11 +183,11 @@ export default function AuditLog() {
     if (!canViewAudit) return;
     fetchRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, actionFilter, severityFilter, entityFilter, dateFrom, dateTo, canViewAudit]);
+  }, [page, actionFilter, severityFilter, entityFilter, dateFrom, dateTo, canViewAudit, sortFieldAudit, sortDirAudit]);
 
   useEffect(() => {
     setPage(0);
-  }, [actionFilter, severityFilter, entityFilter, dateFrom, dateTo, search]);
+  }, [actionFilter, severityFilter, entityFilter, dateFrom, dateTo, search, sortFieldAudit, sortDirAudit]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
@@ -249,12 +256,12 @@ export default function AuditLog() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Timestamp</TableHead>
-                <TableHead>User</TableHead>
-                <TableHead>Action</TableHead>
-                <TableHead>Entity</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortAudit("logged_at")}>Timestamp {sortFieldAudit==="logged_at"?(sortDirAudit==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortAudit("user_name")}>User {sortFieldAudit==="user_name"?(sortDirAudit==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortAudit("action_type")}>Action {sortFieldAudit==="action_type"?(sortDirAudit==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortAudit("entity_type")}>Entity {sortFieldAudit==="entity_type"?(sortDirAudit==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Description</TableHead>
-                <TableHead>Severity</TableHead>
+                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortAudit("severity")}>Severity {sortFieldAudit==="severity"?(sortDirAudit==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Override</TableHead>
                 <TableHead className="text-right">Details</TableHead>
               </TableRow>

@@ -7,7 +7,6 @@ import { Bell } from "lucide-react";
 const ROLE_COLORS: Record<string, string> = {
   procurement_head: "bg-primary/10 text-primary",
   it_head: "bg-primary/10 text-primary",
-  design_team: "bg-violet-100 text-violet-800",
   management: "bg-purple-100 text-purple-800",
   auditor: "bg-red-100 text-red-800",
   procurement_executive: "bg-blue-100 text-blue-800",
@@ -19,7 +18,6 @@ const ROLE_COLORS: Record<string, string> = {
 const ROLE_LABELS: Record<string, string> = {
   requestor: "Requestor", procurement_executive: "Procurement Executive",
   procurement_head: "Procurement Head", it_head: "IT Head", management: "Management",
-  design_team: "Design Team",
   finance: "Finance", site_receiver: "Site Receiver", auditor: "Auditor",
 };
 
@@ -34,7 +32,7 @@ type NotifPR = {
 };
 
 export function TopBar() {
-  const { user, isEmployee, isDesignTeam } = useAuth();
+  const { user, isEmployee } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [notifs, setNotifs] = useState<NotifPR[]>([]);
@@ -48,15 +46,12 @@ export function TopBar() {
     const since = new Date();
     since.setDate(since.getDate() - 7);
 
-    let query = supabase
+    const query = supabase
       .from("cps_purchase_requisitions")
       .select("id,pr_number,project_code,project_site,status,created_at,requested_by")
       .gte("created_at", since.toISOString())
       .order("created_at", { ascending: false })
       .limit(10);
-
-    // Design team only sees pending_design
-    if (isDesignTeam) query = query.eq("status", "pending_design");
 
     const { data } = await query;
     const rows = (data ?? []) as any[];
@@ -104,8 +99,8 @@ export function TopBar() {
   };
 
   const statusColor: Record<string, string> = {
-    pending_design: "bg-violet-100 text-violet-700",
     pending: "bg-blue-100 text-blue-700",
+    validated: "bg-cyan-100 text-cyan-700",
     rfq_created: "bg-green-100 text-green-700",
     cancelled: "bg-red-100 text-red-700",
   };
