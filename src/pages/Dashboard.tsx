@@ -288,12 +288,12 @@ export default function Dashboard() {
       { label: "Review Quotes", path: "/quotes", icon: Eye },
     ];
     if (role === "procurement_head" || role === "it_head") return [
-      { label: "Pending Approvals", path: "/purchase-orders", icon: CheckCircle2 },
+      { label: "Pending Approvals", path: "/purchase-orders?status=pending_approval", icon: CheckCircle2 },
       { label: "Create PO", path: "/purchase-orders", icon: ShoppingCart },
     ];
     if (role === "management") return [
       { label: "View Reports", path: "/audit", icon: BarChart3 },
-      { label: "Pending Approvals", path: "/purchase-orders", icon: CheckCircle2 },
+      { label: "Pending Approvals", path: "/purchase-orders?status=pending_approval", icon: CheckCircle2 },
     ];
     return [{ label: "View Dashboard", path: "/dashboard", icon: ClipboardList }];
   }, [user?.role]);
