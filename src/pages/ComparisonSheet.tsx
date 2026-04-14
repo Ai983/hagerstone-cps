@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
 import logoUrl from "@/assets/Companylogo.png";
 
-import { AlertTriangle, Sparkles, Download, FileText } from "lucide-react";
+import { AlertTriangle, Sparkles, Download, FileText, CheckCircle2 } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -71,6 +72,11 @@ type QuoteRow = {
   delivery_terms: string | null;
   warranty_months: number | null;
   validity_days: number | null;
+  raw_file_path?: string | null;
+  raw_file_type?: string | null;
+  legacy_file_url?: string | null;
+  channel?: string | null;
+  is_legacy?: boolean | null;
 };
 
 type QuoteLineItem = {
@@ -158,6 +164,12 @@ const formatDateTime = (d: string | null | undefined) => {
 };
 
 const normalize = (s: string) => s.trim().toLowerCase();
+
+const complianceBadgeCls = (s: string | null | undefined) => {
+  if (s === "compliant") return "bg-green-100 text-green-800 border-green-200";
+  if (s === "non_compliant") return "bg-red-100 text-red-800 border-red-200";
+  return "bg-muted text-muted-foreground border-border";
+};
 
 // "Closest description text match" (simple heuristic, deterministic).
 const matchScore = (a: string, b: string) => {
@@ -288,7 +300,7 @@ export default function ComparisonSheetPage() {
       // Load quotes + suppliers.
       const { data: quotesRows, error: quotesErr } = await supabase
         .from("cps_quotes")
-        .select("id,rfq_id,supplier_id,parse_status,total_quoted_value,total_landed_value,commercial_score,compliance_status,payment_terms,delivery_terms,warranty_months,validity_days")
+        .select("id,rfq_id,supplier_id,parse_status,total_quoted_value,total_landed_value,commercial_score,compliance_status,payment_terms,delivery_terms,warranty_months,validity_days,raw_file_path,raw_file_type,legacy_file_url,channel,is_legacy")
         .eq("rfq_id", rfqId);
       if (quotesErr) throw quotesErr;
 
@@ -323,7 +335,7 @@ export default function ComparisonSheetPage() {
       const { data: quoteLineItemsRows, error: liErr } = quoteIds.length
         ? await supabase
             .from("cps_quote_line_items")
-            .select("id,quote_id,pr_line_item_id,item_id,original_description,brand,rate,gst_percent,freight,packing,total_landed_rate,lead_time_days,hsn_code,confidence_score,human_corrected,correction_log")
+            .select("id,quote_id,pr_line_item_id,item_id,original_description,brand,quantity,unit,rate,gst_percent,freight,packing,total_landed_rate,lead_time_days,hsn_code,confidence_score,human_corrected,correction_log")
             .in("quote_id", quoteIds)
         : { data: [], error: null };
       if (liErr) throw liErr;
@@ -499,6 +511,21 @@ export default function ComparisonSheetPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rfqId]);
 
+  // Auto-generate AI analysis when sheet loads and none exists yet
+  // (also re-generate when old schema is detected — missing comparison_approach)
+  const [autoAITried, setAutoAITried] = useState(false);
+  useEffect(() => {
+    if (autoAITried || aiLoading || loading) return;
+    if (!sheet || suppliers.length === 0) return;
+    const existing = aiRecommendation as any;
+    const isOldSchema = existing && !existing.comparison_approach;
+    if (!existing || isOldSchema) {
+      setAutoAITried(true);
+      getAIRecommendation();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheet, suppliers, aiRecommendation, loading]);
+
   const canSeeMatrix = useMemo(() => {
     if (!sheet) return false;
     if (canCreateRFQ) return true;
@@ -659,67 +686,193 @@ export default function ComparisonSheetPage() {
     rows.push(["Generated On", new Date().toLocaleString("en-IN")]);
     rows.push([]);
 
-    // Line items section
-    rows.push(["LINE ITEMS - LANDED RATES PER SUPPLIER"]);
-    rows.push(["Sr.No", "Description", "Qty", "Unit", ...suppliers.map(s => s.name)]);
-    prLineItems.forEach((item, idx) => {
-      const rates = suppliers.map((s) => {
-        const cell = cellsByPrLineIdAndSupplierId[item.id]?.[s.id];
-        return cell?.total_landed_rate != null
-          ? fmtINR(cell.total_landed_rate)
-          : cell?.rate != null
-          ? fmtINR(cell.rate)
-          : "-";
-      });
-      rows.push([
-        String(idx + 1),
-        item.description,
-        String(item.quantity ?? ""),
-        item.unit ?? "",
-        ...rates,
-      ]);
-    });
+    // Decision block at top
+    rows.push(["DECISION SUMMARY"]);
+    const aiPickTop = aiRecommendation?.recommended_supplier ?? "Not generated";
+    const headPickIdTop = sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? null;
+    const headPickNameTop = headPickIdTop ? (suppliers.find(s => s.id === headPickIdTop)?.name ?? "—") : "Awaiting review";
+    const decisionMatchTop = aiRecommendation?.recommended_supplier && headPickIdTop && aiPickTop === headPickNameTop;
+    rows.push(["AI Recommends", aiPickTop]);
+    rows.push(["AI Reason", String(aiRecommendation?.reason ?? aiRecommendation?.executive_summary ?? "-")]);
+    rows.push(["Head's Decision", headPickNameTop]);
+    rows.push(["Head's Reason", sheet.reviewer_recommendation_reason ?? "-"]);
+    rows.push(["Decision Status", decisionMatchTop ? "Matches AI" : (headPickIdTop && aiPickTop !== "Not generated" ? "Override AI" : "—")]);
+    if (sheet.approved_by) rows.push(["Final Approval", `Approved by ${usersById[sheet.approved_by]?.name ?? "—"}`]);
     rows.push([]);
 
-    // Totals section
-    rows.push(["COMMERCIAL SUMMARY"]);
-    rows.push(["Field", ...suppliers.map(s => s.name)]);
-    rows.push(["Total Quoted (excl GST)", ...suppliers.map(s => fmtINR(quoteBySupplierId[s.id]?.total_quoted_value))]);
-    rows.push(["Total Landed (incl GST)", ...suppliers.map(s => fmtINR(quoteBySupplierId[s.id]?.total_landed_value))]);
+    // Compute per-supplier totals for the clean summary
+    const supplierTotals = suppliers.map((s) => {
+      const lines = allQuoteLinesBySupplierId[s.id] ?? [];
+      const charges = extraChargesBySupplierId[s.id] ?? [];
+      const subtotal = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
+      const gst = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
+      const freight = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
+      const extras = charges.reduce((acc, c) => acc + c.amount * (c.taxable ? 1.18 : 1), 0);
+      const landed = subtotal + gst + freight + extras;
+      return { supplier: s, lines, charges, subtotal, gst, freight, extras, landed };
+    });
+
+    // Bid totals comparison
+    rows.push(["BID TOTALS COMPARISON"]);
+    rows.push(["Metric", ...suppliers.map(s => s.name)]);
+    rows.push(["Items Quoted", ...supplierTotals.map(t => `${t.lines.length}${t.charges.length ? ` (+${t.charges.length} extra)` : ""}`)]);
+    rows.push(["Subtotal (excl GST & freight)", ...supplierTotals.map(t => fmtINR(t.subtotal))]);
+    rows.push(["GST Amount", ...supplierTotals.map(t => fmtINR(t.gst))]);
+    rows.push(["Freight", ...supplierTotals.map(t => t.freight > 0 ? fmtINR(t.freight) : "-")]);
+    rows.push(["Extra Charges", ...supplierTotals.map(t => t.extras > 0 ? fmtINR(t.extras) : "-")]);
+    rows.push(["LANDED TOTAL", ...supplierTotals.map(t => fmtINR(t.landed))]);
     rows.push(["Payment Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.payment_terms ?? "-")]);
     rows.push(["Delivery Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.delivery_terms ?? "-")]);
     rows.push(["Warranty (months)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.warranty_months; return v != null ? String(v) : "-"; })]);
     rows.push(["Validity (days)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.validity_days; return v != null ? String(v) : "-"; })]);
     rows.push(["Compliance Status", ...suppliers.map(s => quoteBySupplierId[s.id]?.compliance_status ?? "-")]);
-    rows.push(["Commercial Score", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.commercial_score; return v != null ? String(v) : "-"; })]);
     rows.push([]);
 
-    // AI Recommendation (if available)
+    // Full quote breakdown per supplier
+    rows.push(["FULL QUOTE BREAKDOWN"]);
+    supplierTotals.forEach((t) => {
+      if (t.lines.length === 0 && t.charges.length === 0) return;
+      rows.push([]);
+      rows.push([`>> ${t.supplier.name} <<`]);
+      rows.push(["Sr", "Description", "Qty", "Unit", "Rate", "GST%", "Freight", "Line Total"]);
+      t.lines.forEach((li, idx) => {
+        const q = Number(li.quantity ?? 0);
+        const r = Number(li.rate ?? 0);
+        const f = Number(li.freight ?? 0);
+        const g = Number(li.gst_percent ?? 0);
+        const lineTotal = q * r * (1 + g / 100) + q * f;
+        rows.push([
+          String(idx + 1),
+          li.original_description ?? "",
+          String(q),
+          li.unit ?? "",
+          fmtINR(r),
+          g ? `${g}%` : "-",
+          f ? fmtINR(f) : "-",
+          fmtINR(lineTotal),
+        ]);
+      });
+      t.charges.forEach((c, idx) => {
+        const total = c.amount * (c.taxable ? 1.18 : 1);
+        rows.push([
+          `+${idx + 1}`,
+          `${c.name} (extra charge)`,
+          "1", "lot",
+          fmtINR(c.amount),
+          c.taxable ? "18%" : "-",
+          "-",
+          fmtINR(total),
+        ]);
+      });
+      rows.push(["", "", "", "", "", "", "Landed Total", fmtINR(t.landed)]);
+    });
+    rows.push([]);
+
+    // AI Comparison Analysis (if available)
     if (aiRecommendation) {
-      rows.push(["AI RECOMMENDATION (Advisory Only)"]);
+      rows.push(["AI COMPARISON ANALYSIS"]);
+      if (aiRecommendation.comparison_approach) {
+        rows.push(["Approach", String(aiRecommendation.comparison_approach)]);
+        if (aiRecommendation.approach_reason) rows.push(["Approach Reason", String(aiRecommendation.approach_reason)]);
+      }
+      if (aiRecommendation.executive_summary) {
+        rows.push(["Executive Summary", String(aiRecommendation.executive_summary)]);
+      }
+      rows.push([]);
+      rows.push(["RECOMMENDATION"]);
       rows.push(["Recommended Supplier", String(aiRecommendation.recommended_supplier ?? "-")]);
       rows.push(["Reason", String(aiRecommendation.reason ?? "-")]);
-      if (Array.isArray(aiRecommendation.ranking)) {
-        aiRecommendation.ranking.forEach((item: any, idx: number) => {
-          rows.push([`Rank ${idx + 1}`, `${item.supplier ?? "-"}: ${item.reason ?? ""}`]);
-        });
-      }
-      if (Array.isArray(aiRecommendation.warnings) && aiRecommendation.warnings.length > 0) {
-        aiRecommendation.warnings.forEach((w: string, idx: number) => {
-          rows.push([`Warning ${idx + 1}`, String(w)]);
-        });
-      }
       if (aiRecommendation.potential_savings != null) {
         rows.push(["Potential Savings", fmtINR(aiRecommendation.potential_savings)]);
       }
-      rows.push([]);
+      if (Array.isArray(aiRecommendation.ranking)) {
+        aiRecommendation.ranking.forEach((item: any) => {
+          rows.push([`Rank ${item.rank ?? "-"}`, `${item.supplier ?? "-"}: ${item.rationale ?? ""}`]);
+        });
+      }
+
+      // Commercial analysis
+      if (aiRecommendation.commercial_analysis) {
+        rows.push([]);
+        rows.push(["COMMERCIAL ANALYSIS"]);
+        const ca = aiRecommendation.commercial_analysis;
+        if (ca.lowest_landed) rows.push(["Lowest Landed", `${ca.lowest_landed.supplier} — ${fmtINR(Number(ca.lowest_landed.amount))}`]);
+        if (ca.highest_landed) rows.push(["Highest Landed", `${ca.highest_landed.supplier} — ${fmtINR(Number(ca.highest_landed.amount))}`]);
+        if (ca.price_spread_pct != null) rows.push(["Price Spread", `${Number(ca.price_spread_pct).toFixed(1)}%`]);
+        if (ca.spread_interpretation) rows.push(["Spread Reason", String(ca.spread_interpretation)]);
+      }
+
+      // Supplier profiles
+      if (Array.isArray(aiRecommendation.supplier_profiles) && aiRecommendation.supplier_profiles.length > 0) {
+        rows.push([]);
+        rows.push(["SUPPLIER PROFILES"]);
+        aiRecommendation.supplier_profiles.forEach((sp: any) => {
+          rows.push([sp.name, `Items: ${sp.items_quoted ?? "-"}`, `Landed: ${fmtINR(Number(sp.landed_total ?? 0))}`]);
+          if (Array.isArray(sp.strengths)) sp.strengths.forEach((s: string) => rows.push(["", "Strength", s]));
+          if (Array.isArray(sp.weaknesses)) sp.weaknesses.forEach((w: string) => rows.push(["", "Weakness", w]));
+          if (Array.isArray(sp.risk_flags)) sp.risk_flags.forEach((r: string) => rows.push(["", "Risk", r]));
+        });
+      }
+
+      // Item comparison groups
+      if (Array.isArray(aiRecommendation.item_comparison) && aiRecommendation.item_comparison.length > 0) {
+        rows.push([]);
+        rows.push(["ITEM-BY-ITEM COMPARISON"]);
+        aiRecommendation.item_comparison.forEach((grp: any) => {
+          rows.push([`>> ${grp.category ?? ""}`]);
+          if (grp.description) rows.push(["Description", String(grp.description)]);
+          rows.push(["Supplier", "Item", "Qty", "Unit", "Rate", "Landed/unit"]);
+          (grp.vendor_items ?? []).forEach((vi: any) => {
+            rows.push([
+              String(vi.supplier ?? ""),
+              String(vi.item_description ?? ""),
+              String(vi.quantity ?? ""),
+              String(vi.unit ?? ""),
+              vi.rate_per_unit != null ? fmtINR(Number(vi.rate_per_unit)) : "-",
+              vi.landed_per_unit != null ? fmtINR(Number(vi.landed_per_unit)) : "-",
+            ]);
+          });
+          if (grp.alignment_note) rows.push(["Note", String(grp.alignment_note)]);
+          rows.push([]);
+        });
+      }
+
+      // Unmatched items
+      if (Array.isArray(aiRecommendation.unmatched_items) && aiRecommendation.unmatched_items.length > 0) {
+        rows.push(["UNMATCHED ITEMS"]);
+        aiRecommendation.unmatched_items.forEach((um: any) => {
+          rows.push([String(um.supplier ?? ""), String(um.item_description ?? ""), String(um.note ?? "")]);
+        });
+        rows.push([]);
+      }
+
+      // Warnings
+      if (Array.isArray(aiRecommendation.warnings) && aiRecommendation.warnings.length > 0) {
+        rows.push(["WARNINGS"]);
+        aiRecommendation.warnings.forEach((w: string) => rows.push(["", String(w)]));
+        rows.push([]);
+      }
+
+      // Data quality issues
+      if (Array.isArray(aiRecommendation.data_quality_issues) && aiRecommendation.data_quality_issues.length > 0) {
+        rows.push(["DATA QUALITY ISSUES"]);
+        aiRecommendation.data_quality_issues.forEach((d: string) => rows.push(["", String(d)]));
+        rows.push([]);
+      }
+
+      // Next steps
+      if (Array.isArray(aiRecommendation.next_steps_for_procurement) && aiRecommendation.next_steps_for_procurement.length > 0) {
+        rows.push(["NEXT STEPS FOR PROCUREMENT"]);
+        aiRecommendation.next_steps_for_procurement.forEach((n: string) => rows.push(["", String(n)]));
+        rows.push([]);
+      }
     }
 
-    // Final Recommendation (human reviewer)
-    rows.push(["FINAL RECOMMENDATION (Human Reviewer)"]);
-    rows.push(["Recommended Supplier", suppliers.find(s => s.id === sheet.reviewer_recommendation)?.name ?? "-"]);
-    rows.push(["Recommendation Reason", sheet.reviewer_recommendation_reason ?? "-"]);
-    rows.push(["Reviewer Notes", sheet.manual_notes ?? "-"]);
+    // Reviewer notes (additional details; Head's Decision already at top)
+    if (sheet.manual_notes) {
+      rows.push(["REVIEWER NOTES"]);
+      rows.push(["", sheet.manual_notes]);
+    }
 
     const csv = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\r\n");
     // BOM for Excel compatibility with UTF-8
@@ -775,58 +928,86 @@ export default function ComparisonSheetPage() {
     });
     y = Math.max(y, 24 + metaRight.length * 4) + 4;
 
-    // Section: Line Items
+    // === Decision Block: AI Recommendation + Head's Decision side-by-side ===
+    const aiPickName: string | null = aiRecommendation?.recommended_supplier ?? null;
+    const aiReason: string = String(aiRecommendation?.reason ?? aiRecommendation?.executive_summary ?? "—");
+    const headPickId = sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? null;
+    const headPickName: string | null = headPickId ? (suppliers.find(s => s.id === headPickId)?.name ?? "—") : null;
+    const headReason: string = sheet.reviewer_recommendation_reason ?? "—";
+    const decisionMatch = aiPickName && headPickName && aiPickName === headPickName;
+
+    const colWidth = (pageWidth - 30) / 2;
+    const leftX = 10;
+    const rightX = 10 + colWidth + 10;
+    const aiBoxY = y;
+    const aiReasonLines = doc.splitTextToSize(aiReason, colWidth - 6);
+    const headReasonLines = doc.splitTextToSize(headReason, colWidth - 6);
+    const boxH = Math.max(26 + aiReasonLines.length * 4, 26 + headReasonLines.length * 4, 32);
+
+    // AI Recommendation (amber)
+    doc.setFillColor(252, 246, 230);
+    doc.setDrawColor(180, 140, 90);
+    doc.roundedRect(leftX, aiBoxY, colWidth, boxH, 2, 2, "FD");
+    doc.setTextColor(120, 70, 20);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+    doc.text("AI RECOMMENDATION", leftX + 3, aiBoxY + 5);
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(10);
+    doc.text(`Supplier: ${aiPickName ?? "Not yet generated"}`, leftX + 3, aiBoxY + 11);
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+    doc.text(aiReasonLines, leftX + 3, aiBoxY + 16);
+
+    // Head's Decision (blue/green)
+    const approved = Boolean(sheet.approved_by && sheet.approved_at);
+    doc.setFillColor(approved ? 232 : 230, approved ? 245 : 242, approved ? 233 : 252);
+    doc.setDrawColor(approved ? 76 : 80, approved ? 175 : 130, approved ? 80 : 210);
+    doc.roundedRect(rightX, aiBoxY, colWidth, boxH, 2, 2, "FD");
+    doc.setTextColor(approved ? 27 : 30, approved ? 94 : 70, approved ? 32 : 140);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+    doc.text(approved ? "APPROVED BY PROCUREMENT" : "PROCUREMENT HEAD'S DECISION", rightX + 3, aiBoxY + 5);
+    doc.setTextColor(0, 0, 0);
+    doc.setFontSize(10);
+    if (headPickName) {
+      let statusTag = "";
+      if (decisionMatch) statusTag = "  [matches AI]";
+      else if (aiPickName) statusTag = "  [override]";
+      doc.text(`Supplier: ${headPickName}${statusTag}`, rightX + 3, aiBoxY + 11);
+    } else {
+      doc.text("Awaiting review", rightX + 3, aiBoxY + 11);
+    }
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+    doc.text(headReasonLines, rightX + 3, aiBoxY + 16);
+
+    y = aiBoxY + boxH + 4;
+
+    // Compute per-supplier totals
+    const supplierTotals = suppliers.map((s) => {
+      const lines = allQuoteLinesBySupplierId[s.id] ?? [];
+      const charges = extraChargesBySupplierId[s.id] ?? [];
+      const subtotal = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
+      const gst = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
+      const freight = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
+      const extras = charges.reduce((acc, c) => acc + c.amount * (c.taxable ? 1.18 : 1), 0);
+      const landed = subtotal + gst + freight + extras;
+      return { supplier: s, lines, charges, subtotal, gst, freight, extras, landed };
+    });
+
+    // Section: Bid Totals Comparison (primary)
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
     doc.setFillColor(240, 235, 230);
     doc.rect(10, y - 4, pageWidth - 20, 6, "F");
-    doc.text("Line Items - Landed Rates per Supplier", 12, y);
+    doc.text("Bid Totals Comparison", 12, y);
     y += 4;
 
-    const lineHead = ["Sr", "Description", "Qty", "Unit", ...suppliers.map(s => s.name)];
-    const lineBody = prLineItems.map((item, idx) => {
-      const rates = suppliers.map((s) => {
-        const cell = cellsByPrLineIdAndSupplierId[item.id]?.[s.id];
-        return cell?.total_landed_rate != null
-          ? fmtINR(cell.total_landed_rate)
-          : cell?.rate != null
-          ? fmtINR(cell.rate)
-          : "-";
-      });
-      return [
-        String(idx + 1),
-        item.description,
-        String(item.quantity ?? ""),
-        item.unit ?? "",
-        ...rates,
-      ];
-    });
-
-    autoTable(doc, {
-      head: [lineHead],
-      body: lineBody,
-      startY: y + 2,
-      styles: { fontSize: 8, cellPadding: 2 },
-      headStyles: { fillColor: [107, 58, 42], textColor: 255, fontStyle: "bold" },
-      alternateRowStyles: { fillColor: [250, 248, 245] },
-      columnStyles: { 0: { cellWidth: 10 }, 1: { cellWidth: 60 }, 2: { cellWidth: 14 }, 3: { cellWidth: 14 } },
-      margin: { left: 10, right: 10 },
-    });
-    y = (doc as any).lastAutoTable.finalY + 6;
-
-    // Section: Commercial Summary
-    if (y > 160) { doc.addPage(); y = 15; }
-    doc.setFontSize(11);
-    doc.setFont("helvetica", "bold");
-    doc.setFillColor(240, 235, 230);
-    doc.rect(10, y - 4, pageWidth - 20, 6, "F");
-    doc.text("Commercial Summary", 12, y);
-    y += 4;
-
-    const summaryHead = ["Field", ...suppliers.map(s => s.name)];
+    const summaryHead = ["Metric", ...suppliers.map(s => s.name)];
     const summaryBody = [
-      ["Total Quoted (excl GST)", ...suppliers.map(s => fmtINR(quoteBySupplierId[s.id]?.total_quoted_value))],
-      ["Total Landed (incl GST)", ...suppliers.map(s => fmtINR(quoteBySupplierId[s.id]?.total_landed_value))],
+      ["Items Quoted", ...supplierTotals.map(t => `${t.lines.length}${t.charges.length ? ` (+${t.charges.length} extra)` : ""}`)],
+      ["Subtotal (excl GST & freight)", ...supplierTotals.map(t => fmtINR(t.subtotal))],
+      ["GST Amount", ...supplierTotals.map(t => fmtINR(t.gst))],
+      ["Freight", ...supplierTotals.map(t => t.freight > 0 ? fmtINR(t.freight) : "-")],
+      ["Extra Charges", ...supplierTotals.map(t => t.extras > 0 ? fmtINR(t.extras) : "-")],
+      ["LANDED TOTAL", ...supplierTotals.map(t => fmtINR(t.landed))],
       ["Payment Terms", ...suppliers.map(s => String(quoteBySupplierId[s.id]?.payment_terms ?? "-"))],
       ["Delivery Terms", ...suppliers.map(s => String(quoteBySupplierId[s.id]?.delivery_terms ?? "-"))],
       ["Warranty (months)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.warranty_months; return v != null ? String(v) : "-"; })],
@@ -841,118 +1022,285 @@ export default function ComparisonSheetPage() {
       styles: { fontSize: 8, cellPadding: 2 },
       headStyles: { fillColor: [107, 58, 42], textColor: 255, fontStyle: "bold" },
       alternateRowStyles: { fillColor: [250, 248, 245] },
-      columnStyles: { 0: { cellWidth: 45, fontStyle: "bold" } },
+      columnStyles: { 0: { cellWidth: 55, fontStyle: "bold" } },
       margin: { left: 10, right: 10 },
+      didParseCell: (data) => {
+        if (data.section === "body" && data.row.index === 5) {
+          data.cell.styles.fillColor = [107, 58, 42];
+          data.cell.styles.textColor = 255;
+          data.cell.styles.fontStyle = "bold";
+        }
+      },
     });
     y = (doc as any).lastAutoTable.finalY + 6;
 
-    // AI Recommendation section (if available)
-    if (aiRecommendation) {
-      if (y > 150) { doc.addPage(); y = 15; }
-      doc.setFillColor(250, 245, 235);
-      doc.setDrawColor(180, 140, 90);
-      const aiStartY = y;
-      doc.roundedRect(10, y, pageWidth - 20, 8, 2, 2, "FD");
-      doc.setTextColor(120, 70, 20);
+    // Section: Full Quote Breakdown per supplier
+    supplierTotals.forEach((t) => {
+      if (t.lines.length === 0 && t.charges.length === 0) return;
+      if (y > 170) { doc.addPage(); y = 15; }
+
       doc.setFontSize(10);
       doc.setFont("helvetica", "bold");
-      doc.text("AI RECOMMENDATION (Advisory Only)", 14, y + 5);
-      y += 12;
+      doc.setFillColor(240, 235, 230);
+      doc.rect(10, y - 4, pageWidth - 20, 6, "F");
+      doc.text(`${t.supplier.name} — ${t.lines.length} items${t.charges.length ? ` + ${t.charges.length} extra` : ""} | Landed: ${fmtINR(t.landed)}`, 12, y);
+      y += 4;
 
-      doc.setTextColor(0, 0, 0);
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "bold");
-      doc.text(`Recommended: ${aiRecommendation.recommended_supplier ?? "-"}`, 14, y);
-      y += 5;
+      const breakHead = ["Sr", "Description", "Qty", "Unit", "Rate", "GST%", "Freight", "Line Total"];
+      const breakBody = t.lines.map((li, idx) => {
+        const q = Number(li.quantity ?? 0);
+        const r = Number(li.rate ?? 0);
+        const f = Number(li.freight ?? 0);
+        const g = Number(li.gst_percent ?? 0);
+        const lineTotal = q * r * (1 + g / 100) + q * f;
+        return [
+          String(idx + 1),
+          li.original_description ?? "",
+          String(q),
+          li.unit ?? "",
+          fmtINR(r),
+          g ? `${g}%` : "-",
+          f ? fmtINR(f) : "-",
+          fmtINR(lineTotal),
+        ];
+      });
+      t.charges.forEach((c, idx) => {
+        const total = c.amount * (c.taxable ? 1.18 : 1);
+        breakBody.push([
+          `+${idx + 1}`,
+          `${c.name} (extra charge)`,
+          "1", "lot",
+          fmtINR(c.amount),
+          c.taxable ? "18%" : "-",
+          "-",
+          fmtINR(total),
+        ]);
+      });
 
-      doc.setFont("helvetica", "normal");
-      if (aiRecommendation.reason) {
-        const aiReason = doc.splitTextToSize(String(aiRecommendation.reason), pageWidth - 28);
-        doc.text(aiReason, 14, y);
-        y += aiReason.length * 4 + 2;
+      autoTable(doc, {
+        head: [breakHead],
+        body: breakBody,
+        startY: y + 2,
+        styles: { fontSize: 7, cellPadding: 1.5 },
+        headStyles: { fillColor: [180, 140, 90], textColor: 255, fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [250, 248, 245] },
+        columnStyles: {
+          0: { cellWidth: 10 },
+          1: { cellWidth: 100 },
+          2: { cellWidth: 12 },
+          3: { cellWidth: 14 },
+          4: { cellWidth: 22 },
+          5: { cellWidth: 14 },
+          6: { cellWidth: 18 },
+          7: { cellWidth: 25 },
+        },
+        margin: { left: 10, right: 10 },
+      });
+      y = (doc as any).lastAutoTable.finalY + 4;
+    });
+
+    // AI Comparison Analysis (if available)
+    if (aiRecommendation) {
+      const sectionHeader = (title: string) => {
+        if (y > 175) { doc.addPage(); y = 15; }
+        doc.setFillColor(107, 58, 42);
+        doc.rect(10, y - 4, pageWidth - 20, 7, "F");
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "bold");
+        doc.text(title, 12, y + 1);
+        doc.setTextColor(0, 0, 0);
+        y += 8;
+      };
+      const writeLines = (text: string, indent = 14, fontSize = 9) => {
+        doc.setFontSize(fontSize);
+        doc.setFont("helvetica", "normal");
+        const wrapped = doc.splitTextToSize(String(text), pageWidth - 20 - (indent - 10));
+        wrapped.forEach((line: string) => {
+          if (y > 195) { doc.addPage(); y = 15; }
+          doc.text(line, indent, y);
+          y += fontSize * 0.45 + 1;
+        });
+      };
+      const label = (k: string, v: string) => {
+        if (y > 195) { doc.addPage(); y = 15; }
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(9);
+        doc.text(`${k}:`, 14, y);
+        doc.setFont("helvetica", "normal");
+        const wrapped = doc.splitTextToSize(v, pageWidth - 50);
+        doc.text(wrapped, 40, y);
+        y += wrapped.length * 4 + 1;
+      };
+
+      // Section: AI Analysis Header
+      sectionHeader("AI COMPARISON ANALYSIS");
+      if (aiRecommendation.comparison_approach) {
+        label("Approach", `${aiRecommendation.comparison_approach}${aiRecommendation.approach_reason ? " — " + aiRecommendation.approach_reason : ""}`);
+      }
+      if (aiRecommendation.executive_summary) {
+        y += 1;
+        doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+        doc.text("Executive Summary", 14, y); y += 4;
+        writeLines(aiRecommendation.executive_summary);
+        y += 2;
+      }
+
+      // Recommendation
+      if (aiRecommendation.recommended_supplier) {
+        if (y > 180) { doc.addPage(); y = 15; }
+        doc.setFillColor(232, 245, 233);
+        doc.setDrawColor(76, 175, 80);
+        const reason = aiRecommendation.reason ?? "";
+        const reasonLines = doc.splitTextToSize(reason, pageWidth - 28);
+        const boxH = 14 + reasonLines.length * 4;
+        doc.roundedRect(10, y, pageWidth - 20, boxH, 2, 2, "FD");
+        doc.setTextColor(27, 94, 32);
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "bold");
+        doc.text(`Recommended: ${aiRecommendation.recommended_supplier}`, 14, y + 6);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(0, 0, 0);
+        doc.text(reasonLines, 14, y + 11);
+        y += boxH + 3;
+        if (aiRecommendation.potential_savings != null && Number(aiRecommendation.potential_savings) > 0) {
+          label("Potential Savings", fmtINR(Number(aiRecommendation.potential_savings)));
+        }
+      }
+
+      // Commercial Analysis
+      if (aiRecommendation.commercial_analysis) {
+        sectionHeader("COMMERCIAL ANALYSIS");
+        const ca = aiRecommendation.commercial_analysis;
+        if (ca.lowest_landed) label("Lowest Landed", `${ca.lowest_landed.supplier} — ${fmtINR(Number(ca.lowest_landed.amount))}`);
+        if (ca.highest_landed) label("Highest Landed", `${ca.highest_landed.supplier} — ${fmtINR(Number(ca.highest_landed.amount))}`);
+        if (ca.price_spread_pct != null) label("Spread", `${Number(ca.price_spread_pct).toFixed(1)}%`);
+        if (ca.spread_interpretation) { writeLines(ca.spread_interpretation, 14, 8); }
+        y += 2;
+      }
+
+      // Supplier Profiles as table
+      if (Array.isArray(aiRecommendation.supplier_profiles) && aiRecommendation.supplier_profiles.length > 0) {
+        sectionHeader("SUPPLIER PROFILES");
+        aiRecommendation.supplier_profiles.forEach((sp: any) => {
+          if (y > 170) { doc.addPage(); y = 15; }
+          doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+          doc.text(`${sp.name}${sp.landed_total != null ? `  |  Landed: ${fmtINR(Number(sp.landed_total))}` : ""}`, 14, y);
+          y += 5;
+          doc.setFont("helvetica", "normal");
+          if (Array.isArray(sp.strengths) && sp.strengths.length > 0) {
+            doc.setFontSize(8); doc.setTextColor(20, 90, 50);
+            doc.text("Strengths:", 16, y); doc.setTextColor(0, 0, 0); y += 3.5;
+            sp.strengths.forEach((s: string) => { writeLines(`• ${s}`, 20, 8); });
+          }
+          if (Array.isArray(sp.weaknesses) && sp.weaknesses.length > 0) {
+            doc.setFontSize(8); doc.setTextColor(150, 100, 20);
+            doc.text("Weaknesses:", 16, y); doc.setTextColor(0, 0, 0); y += 3.5;
+            sp.weaknesses.forEach((s: string) => { writeLines(`• ${s}`, 20, 8); });
+          }
+          if (Array.isArray(sp.risk_flags) && sp.risk_flags.length > 0) {
+            doc.setFontSize(8); doc.setTextColor(180, 40, 40);
+            doc.text("Risks:", 16, y); doc.setTextColor(0, 0, 0); y += 3.5;
+            sp.risk_flags.forEach((s: string) => { writeLines(`• ${s}`, 20, 8); });
+          }
+          y += 2;
+        });
+      }
+
+      // Item comparison
+      if (Array.isArray(aiRecommendation.item_comparison) && aiRecommendation.item_comparison.length > 0) {
+        sectionHeader("ITEM-BY-ITEM COMPARISON");
+        aiRecommendation.item_comparison.forEach((grp: any) => {
+          if (y > 170) { doc.addPage(); y = 15; }
+          doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+          doc.text(grp.category ?? "—", 14, y); y += 4;
+          doc.setFont("helvetica", "normal");
+          if (grp.description) { writeLines(grp.description, 14, 8); }
+          const headRow = ["Supplier", "Item", "Qty", "Unit", "Rate", "Landed/unit"];
+          const bodyRows = (grp.vendor_items ?? []).map((vi: any) => [
+            String(vi.supplier ?? ""),
+            String(vi.item_description ?? ""),
+            String(vi.quantity ?? ""),
+            String(vi.unit ?? ""),
+            vi.rate_per_unit != null ? fmtINR(Number(vi.rate_per_unit)) : "-",
+            vi.landed_per_unit != null ? fmtINR(Number(vi.landed_per_unit)) : "-",
+          ]);
+          if (bodyRows.length > 0) {
+            autoTable(doc, {
+              head: [headRow],
+              body: bodyRows,
+              startY: y + 1,
+              styles: { fontSize: 7, cellPadding: 1.5 },
+              headStyles: { fillColor: [180, 140, 90], textColor: 255, fontStyle: "bold" },
+              alternateRowStyles: { fillColor: [250, 248, 245] },
+              columnStyles: { 0: { cellWidth: 40 }, 1: { cellWidth: 90 }, 2: { cellWidth: 14 }, 3: { cellWidth: 14 }, 4: { cellWidth: 22 }, 5: { cellWidth: 26 } },
+              margin: { left: 10, right: 10 },
+            });
+            y = (doc as any).lastAutoTable.finalY + 2;
+          }
+          if (grp.alignment_note) {
+            doc.setFont("helvetica", "italic"); doc.setFontSize(7); doc.setTextColor(150, 100, 20);
+            const note = doc.splitTextToSize(`Note: ${grp.alignment_note}`, pageWidth - 28);
+            doc.text(note, 14, y); y += note.length * 3 + 2;
+            doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal");
+          }
+        });
+      }
+
+      // Unmatched items
+      if (Array.isArray(aiRecommendation.unmatched_items) && aiRecommendation.unmatched_items.length > 0) {
+        sectionHeader("UNMATCHED ITEMS");
+        aiRecommendation.unmatched_items.forEach((um: any) => {
+          const line = `• ${um.supplier ?? ""}: ${um.item_description ?? ""}${um.note ? ` — ${um.note}` : ""}`;
+          writeLines(line, 14, 8);
+        });
+        y += 2;
       }
 
       // Ranking
       if (Array.isArray(aiRecommendation.ranking) && aiRecommendation.ranking.length > 0) {
-        doc.setFont("helvetica", "bold");
-        doc.text("Ranking:", 14, y);
-        y += 4;
-        doc.setFont("helvetica", "normal");
-        aiRecommendation.ranking.forEach((item: any, idx: number) => {
-          const line = `${idx + 1}. ${item.supplier ?? "-"} — ${item.reason ?? ""}`;
-          const wrapped = doc.splitTextToSize(line, pageWidth - 32);
-          doc.text(wrapped, 18, y);
-          y += wrapped.length * 4;
+        sectionHeader("RANKING");
+        aiRecommendation.ranking.forEach((item: any) => {
+          writeLines(`${item.rank ?? "-"}. ${item.supplier ?? "-"}${item.rationale ? ` — ${item.rationale}` : ""}`, 14, 8);
         });
         y += 2;
       }
 
       // Warnings
       if (Array.isArray(aiRecommendation.warnings) && aiRecommendation.warnings.length > 0) {
-        if (y > 175) { doc.addPage(); y = 15; }
-        doc.setFillColor(255, 250, 230);
-        doc.setDrawColor(230, 180, 60);
-        const warnStart = y;
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(150, 100, 20);
-        doc.text("Warnings:", 14, y + 4);
-        let warnY = y + 9;
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(0, 0, 0);
-        aiRecommendation.warnings.forEach((w: string) => {
-          const wrapped = doc.splitTextToSize(`• ${w}`, pageWidth - 32);
-          doc.text(wrapped, 18, warnY);
-          warnY += wrapped.length * 4 + 1;
-        });
-        doc.setDrawColor(230, 180, 60);
-        doc.roundedRect(10, warnStart, pageWidth - 20, warnY - warnStart, 2, 2, "S");
-        y = warnY + 3;
+        sectionHeader("WARNINGS");
+        aiRecommendation.warnings.forEach((w: string) => writeLines(`• ${w}`, 14, 8));
+        y += 2;
       }
 
-      // Potential savings
-      if (aiRecommendation.potential_savings != null) {
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(27, 94, 32);
-        doc.text(`Potential Savings: ${fmtINR(aiRecommendation.potential_savings)}`, 14, y);
-        doc.setTextColor(0, 0, 0);
-        y += 5;
+      // Data quality issues
+      if (Array.isArray(aiRecommendation.data_quality_issues) && aiRecommendation.data_quality_issues.length > 0) {
+        sectionHeader("DATA QUALITY ISSUES");
+        aiRecommendation.data_quality_issues.forEach((d: string) => writeLines(`• ${d}`, 14, 8));
+        y += 2;
+      }
+
+      // Next steps
+      if (Array.isArray(aiRecommendation.next_steps_for_procurement) && aiRecommendation.next_steps_for_procurement.length > 0) {
+        sectionHeader("NEXT STEPS FOR PROCUREMENT");
+        aiRecommendation.next_steps_for_procurement.forEach((n: string) => writeLines(`• ${n}`, 14, 8));
+        y += 2;
       }
 
       // Disclaimer
+      if (y > 200) { doc.addPage(); y = 15; }
       doc.setFont("helvetica", "italic");
       doc.setFontSize(7);
       doc.setTextColor(120, 120, 120);
-      doc.text(
-        aiRecommendation.disclaimer ?? "AI-generated recommendation for reference only. Human review and approval required.",
-        14,
-        y
-      );
+      const disclaimer = doc.splitTextToSize(aiRecommendation.disclaimer ?? "AI-generated analysis for reference only. Human review and approval required.", pageWidth - 28);
+      doc.text(disclaimer, 14, y);
+      y += disclaimer.length * 3 + 3;
       doc.setTextColor(0, 0, 0);
       doc.setFont("helvetica", "normal");
       doc.setFontSize(9);
-      y += 6;
-      void aiStartY;
     }
 
-    // Final Recommendation box (human reviewer)
-    if (y > 170) { doc.addPage(); y = 15; }
-    const recSupplier = suppliers.find(s => s.id === sheet.reviewer_recommendation)?.name ?? "-";
-    doc.setFillColor(232, 245, 233);
-    doc.setDrawColor(76, 175, 80);
-    const reason = sheet.reviewer_recommendation_reason ?? "-";
-    const reasonLines = doc.splitTextToSize(`Reason: ${reason}`, pageWidth - 28);
-    const boxHeight = 18 + reasonLines.length * 4;
-    doc.roundedRect(10, y, pageWidth - 20, boxHeight, 2, 2, "FD");
-    doc.setTextColor(27, 94, 32);
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "bold");
-    doc.text("FINAL RECOMMENDATION (Human Reviewer)", 14, y + 6);
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(0, 0, 0);
-    doc.text(`Recommended Supplier: ${recSupplier}`, 14, y + 12);
-    doc.text(reasonLines, 14, y + 18);
-    y += boxHeight + 4;
+    // (Head's Decision already rendered at the top alongside AI Recommendation)
 
     // Footer
     const pageCount = (doc as any).internal.getNumberOfPages();
@@ -1029,57 +1377,163 @@ export default function ComparisonSheetPage() {
     if (!sheet || !rfq || suppliers.length === 0) return;
     setAiLoading(true);
     try {
+      // Build comprehensive context for Claude: PR, all quote items, extras, terms, benchmarks
       const comparisonData = {
-        rfq_number: rfq.rfq_number,
-        title: rfq.title,
-        suppliers: suppliers.map((s) => {
-          const quote = quoteBySupplierId[s.id];
-          const totals = perSupplierTotals.totals[s.id];
-          return {
-            name: s.name,
-            total_order_value: totals?.totalLanded ?? 0,
-            commercial_score: quote?.commercial_score ?? null,
-            payment_terms: quote?.payment_terms ?? null,
-            delivery_terms: quote?.delivery_terms ?? null,
-            warranty_months: quote?.warranty_months ?? null,
-            validity_days: quote?.validity_days ?? null,
-            rank: perSupplierTotals.rankBySupplierId[s.id] ?? null,
-          };
-        }),
-        line_items: prLineItems.map((pli) => ({
+        rfq: {
+          number: rfq.rfq_number,
+          title: rfq.title,
+          quote_count: suppliers.length,
+        },
+        pr_line_items: prLineItems.map((pli) => ({
           description: pli.description,
           quantity: pli.quantity,
           unit: pli.unit,
           benchmark_rate: benchmarkByPrLineId[pli.id] ?? null,
-          supplier_rates: suppliers.map((s) => ({
-            supplier: s.name,
-            landed_rate: cellsByPrLineIdAndSupplierId[pli.id]?.[s.id]?.total_landed_rate ?? null,
-            brand: cellsByPrLineIdAndSupplierId[pli.id]?.[s.id]?.brand ?? null,
-          })),
         })),
+        suppliers: suppliers.map((s) => {
+          const quote = quoteBySupplierId[s.id];
+          const allLines = allQuoteLinesBySupplierId[s.id] ?? [];
+          const extras = extraChargesBySupplierId[s.id] ?? [];
+          const subtotal = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
+          const gst = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
+          const freight = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
+          const extraTotal = extras.reduce((acc, c) => acc + c.amount * (c.taxable ? 1.18 : 1), 0);
+          const landed = subtotal + gst + freight + extraTotal;
+          return {
+            name: s.name,
+            items: allLines.map((li) => ({
+              description: li.original_description,
+              brand: li.brand,
+              quantity: Number(li.quantity ?? 0),
+              unit: li.unit,
+              rate: Number(li.rate ?? 0),
+              gst_percent: Number(li.gst_percent ?? 0),
+              freight_per_unit: Number(li.freight ?? 0),
+              lead_time_days: li.lead_time_days,
+            })),
+            extra_charges: extras.map((c) => ({ name: c.name, amount: c.amount, taxable: c.taxable })),
+            commercial: {
+              subtotal_excl_gst: Number(subtotal.toFixed(2)),
+              gst_amount: Number(gst.toFixed(2)),
+              freight_total: Number(freight.toFixed(2)),
+              extra_charges_total: Number(extraTotal.toFixed(2)),
+              landed_total: Number(landed.toFixed(2)),
+            },
+            terms: {
+              payment: quote?.payment_terms ?? null,
+              delivery: quote?.delivery_terms ?? null,
+              warranty_months: quote?.warranty_months ?? null,
+              validity_days: quote?.validity_days ?? null,
+              compliance_status: quote?.compliance_status ?? null,
+            },
+          };
+        }),
       };
+
+      const systemPrompt = `You are the head procurement advisor for Hagerstone International Pvt Ltd, a construction / interiors / MEP / EPC company operating across India. Your job is to produce a concise, decision-grade comparison analysis of supplier quotes.
+
+Context you must bring to every analysis:
+- Hagerstone's 5 non-negotiables: zero corruption, best market rates, fair supplier treatment, best credit/payment terms, full auditability.
+- Indian procurement realities: GST is 18% on most material/services; freight and installation charges often quoted separately; advance payment norms are 25-50%; 100% advance is a red flag to scrutinise.
+- Site engineers often raise vague PRs (e.g., "Signage, 1 sqft") and vendors itemise them into specific products. Your job is to intelligently ALIGN similar items across vendors when possible, or CLEARLY STATE that vendors quoted different scopes of work.
+- Spot anomalies: quotes >5% above benchmark, identical rates across vendors (collusion), unusually short validity, missing warranty, etc.
+- Be honest. If the PR is too vague to compare fairly, say so. If vendors quoted different products, say so.
+- Writing style: direct, factual, in Indian Rupees (₹). No filler.
+
+Output ONLY valid JSON. No markdown fences. No prose outside JSON.`;
+
+      const userPrompt = `Analyse this RFQ comparison and return a JSON object matching the schema below.
+
+INPUT DATA:
+${JSON.stringify(comparisonData, null, 2)}
+
+OUTPUT JSON SCHEMA (fill every field, use null only where truly unknown):
+{
+  "comparison_approach": "pr-driven" | "items-aligned" | "bid-totals-only",
+  "approach_reason": "Why this approach is right for this data — 1-2 sentences. E.g., 'PR has 1 vague item while vendors quoted 10+ detailed items, so direct per-line comparison is misleading. Using items-aligned grouping and bid-totals comparison instead.'",
+
+  "executive_summary": "2-3 sentence plain-English summary for a procurement head: who is cheaper, by how much, and whether the quotes are actually comparable.",
+
+  "supplier_profiles": [
+    {
+      "name": "Supplier name",
+      "items_quoted": number,
+      "landed_total": number,
+      "strengths": ["2-4 specific strengths, e.g. 'Lowest landed cost', 'SS material (premium)'"],
+      "weaknesses": ["2-4 specific weaknesses, e.g. '75% advance demand is high', 'No warranty specified'"],
+      "risk_flags": ["Critical issues only — leave empty [] if none"]
+    }
+  ],
+
+  "item_comparison": [
+    {
+      "category": "Short label like 'Board Room Signage' or 'Letter Depth Raising - Reception'",
+      "description": "What this group of items is, 1 line",
+      "vendor_items": [
+        {
+          "supplier": "Supplier name",
+          "item_description": "Exact item as quoted",
+          "quantity": number,
+          "unit": "string",
+          "rate_per_unit": number,
+          "landed_per_unit": number
+        }
+      ],
+      "alignment_note": "Are these the same product? If not, why are rates different? E.g. 'Stainless steel vs painted letters — SS is 20-50x costlier but more durable.'"
+    }
+  ],
+
+  "unmatched_items": [
+    {
+      "supplier": "Supplier name",
+      "item_description": "Item description",
+      "note": "Why it's unmatched — other vendor didn't quote equivalent"
+    }
+  ],
+
+  "commercial_analysis": {
+    "lowest_landed": { "supplier": "name", "amount": number },
+    "highest_landed": { "supplier": "name", "amount": number },
+    "price_spread_pct": number,
+    "spread_interpretation": "Why the spread exists — same scope different rates (bid war) OR different scope (not comparable) OR mix."
+  },
+
+  "recommended_supplier": "Supplier name (ONE — must match a supplier in the input)",
+  "reason": "Concise 2-3 sentence recommendation. Say the WHY — not just 'lowest price'. Include tradeoffs.",
+  "ranking": [
+    { "rank": 1, "supplier": "name", "rationale": "1 line" }
+  ],
+  "potential_savings": number_or_null,
+
+  "warnings": [
+    "Each warning is 1 concrete line. E.g., 'No warranty specified for either vendor — ask for OEM warranty before PO.'"
+  ],
+
+  "data_quality_issues": [
+    "E.g., 'PR description too vague — engineer should specify material (painted/SS), size, and quantity per location.'"
+  ],
+
+  "next_steps_for_procurement": [
+    "2-4 concrete actions. E.g., 'Clarify scope with requestor before PO issue.', 'Negotiate payment terms with kaiser vitals down to 50% advance.'"
+  ],
+
+  "disclaimer": "AI-generated analysis for reference only. Human review and approval required."
+}
+
+Rules:
+1. "recommended_supplier" MUST be one of the exact supplier names in the input.
+2. "item_comparison" should INTELLIGENTLY GROUP similar items. E.g., "Board Room Signage" category contains both vendors' versions of the same purpose. If vendor A quotes "Board Room SS Signage" and vendor B quotes "Board Room Painted Signage", group them in one category and flag the alignment_note.
+3. If the PR is specific (multiple specific items) use "pr-driven" approach — match each PR item to vendor items 1:1.
+4. If the PR is vague (1 item, vendors itemised into many) use "items-aligned" or "bid-totals-only" and explain why in "approach_reason".
+5. All monetary amounts in Indian Rupees (numeric, no symbol).
+6. Return valid JSON only. No markdown.`;
 
       const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1024,
-          messages: [{
-            role: "user",
-            content: `You are a procurement advisor for Hagerstone International, a construction/MEP/EPC company. Analyze the following supplier comparison data and provide a recommendation.
-
-Comparison Data:
-${JSON.stringify(comparisonData, null, 2)}
-
-Provide a JSON response with this exact structure:
-{
-  "recommended_supplier": "supplier name",
-  "reason": "brief reason for recommendation",
-  "ranking": [{"rank": 1, "supplier": "name", "rationale": "brief note"}, ...],
-  "warnings": ["any red flags or concerns"],
-  "potential_savings": number or null (estimated ₹ savings vs benchmark if applicable),
-  "disclaimer": "AI-generated recommendation for reference only. Human review and approval required."
-}`,
-          }],
+          model: "claude-opus-4-5",
+          max_tokens: 4096,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userPrompt }],
         },
       });
       if (fnError) throw new Error("Claude proxy error: " + fnError.message);
@@ -1089,9 +1543,17 @@ Provide a JSON response with this exact structure:
       if (!jsonMatch) throw new Error("Could not parse AI response");
       const parsed = JSON.parse(jsonMatch[0]);
       setAiRecommendation(parsed);
+
+      // Persist so subsequent loads show the same analysis without re-billing Claude
+      if (sheet?.id) {
+        await supabase.from("cps_comparison_sheets")
+          .update({ ai_recommendation: parsed })
+          .eq("id", sheet.id);
+      }
+      toast.success("AI comparison analysis generated");
     } catch (e: any) {
       console.error("AI recommendation error:", e);
-      toast.error(e?.message || "Failed to get AI recommendation");
+      toast.error(e?.message || "Failed to generate AI analysis");
     } finally {
       setAiLoading(false);
     }
@@ -1550,25 +2012,190 @@ Provide a JSON response with this exact structure:
         </Card>
       )}
 
-      {/* AI Recommendation */}
+      {/* AI Comparison Analysis — comprehensive, dynamically structured by Claude */}
       {canSeeMatrix && (aiRecommendation || aiLoading) && (
         <Card className="border-primary/30 bg-primary/5">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-primary" />
-              AI Recommendation
-              {aiLoading && <span className="text-xs text-muted-foreground font-normal ml-1">Analyzing...</span>}
-            </CardTitle>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-primary" />
+                  AI Comparison Analysis
+                  {aiLoading && <span className="text-xs text-muted-foreground font-normal ml-1">Analyzing...</span>}
+                </CardTitle>
+                {aiRecommendation?.approach_reason && (
+                  <CardDescription className="mt-1 text-xs">
+                    <span className="font-medium text-foreground">Approach: </span>
+                    {aiRecommendation.comparison_approach ?? "—"} — {aiRecommendation.approach_reason}
+                  </CardDescription>
+                )}
+              </div>
+              {aiRecommendation && canCreateRFQ && (
+                <Button size="sm" variant="outline" onClick={getAIRecommendation} disabled={aiLoading} className="shrink-0">
+                  <Sparkles className="h-3.5 w-3.5 mr-1" />
+                  Regenerate
+                </Button>
+              )}
+            </div>
           </CardHeader>
           {aiRecommendation && (
-            <CardContent className="space-y-3">
-              <div className="flex items-start gap-2">
-                <span className="text-sm font-medium text-foreground">Recommended:</span>
-                <span className="text-sm font-bold text-primary">{aiRecommendation.recommended_supplier}</span>
-              </div>
-              <div className="text-sm text-muted-foreground">{aiRecommendation.reason}</div>
+            <CardContent className="space-y-4">
+              {/* Executive Summary */}
+              {aiRecommendation.executive_summary && (
+                <div className="bg-background/60 rounded-md p-3 border border-border/60">
+                  <div className="text-xs font-semibold uppercase text-muted-foreground mb-1">Executive Summary</div>
+                  <p className="text-sm text-foreground">{aiRecommendation.executive_summary}</p>
+                </div>
+              )}
 
-              {aiRecommendation.ranking && aiRecommendation.ranking.length > 0 && (
+              {/* Recommendation banner */}
+              <div className="bg-green-50 border border-green-200 rounded-md p-3">
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-700 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <div className="text-sm">
+                      <span className="font-semibold text-green-900">Recommended: </span>
+                      <span className="font-bold text-green-900">{aiRecommendation.recommended_supplier}</span>
+                    </div>
+                    <p className="text-sm text-green-800 mt-1">{aiRecommendation.reason}</p>
+                    {aiRecommendation.potential_savings != null && Number(aiRecommendation.potential_savings) > 0 && (
+                      <div className="text-xs text-green-700 mt-2">
+                        Potential savings vs next option: <span className="font-semibold">₹{Number(aiRecommendation.potential_savings).toLocaleString("en-IN")}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Commercial analysis */}
+              {aiRecommendation.commercial_analysis && (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {aiRecommendation.commercial_analysis.lowest_landed && (
+                    <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
+                      <div className="text-[10px] uppercase text-emerald-700 font-semibold">Lowest Landed</div>
+                      <div className="text-sm font-bold text-emerald-900">{aiRecommendation.commercial_analysis.lowest_landed.supplier}</div>
+                      <div className="text-xs text-emerald-700">{formatCurrency(Number(aiRecommendation.commercial_analysis.lowest_landed.amount), canViewPrices)}</div>
+                    </div>
+                  )}
+                  {aiRecommendation.commercial_analysis.highest_landed && (
+                    <div className="rounded-md border border-rose-200 bg-rose-50 p-2">
+                      <div className="text-[10px] uppercase text-rose-700 font-semibold">Highest Landed</div>
+                      <div className="text-sm font-bold text-rose-900">{aiRecommendation.commercial_analysis.highest_landed.supplier}</div>
+                      <div className="text-xs text-rose-700">{formatCurrency(Number(aiRecommendation.commercial_analysis.highest_landed.amount), canViewPrices)}</div>
+                    </div>
+                  )}
+                  {aiRecommendation.commercial_analysis.price_spread_pct != null && (
+                    <div className="rounded-md border border-border bg-muted/30 p-2">
+                      <div className="text-[10px] uppercase text-muted-foreground font-semibold">Price Spread</div>
+                      <div className="text-sm font-bold text-foreground">{Number(aiRecommendation.commercial_analysis.price_spread_pct).toFixed(1)}%</div>
+                      <div className="text-[11px] text-muted-foreground">{aiRecommendation.commercial_analysis.spread_interpretation}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Supplier profiles */}
+              {Array.isArray(aiRecommendation.supplier_profiles) && aiRecommendation.supplier_profiles.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold uppercase text-muted-foreground">Supplier Profiles</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {aiRecommendation.supplier_profiles.map((sp: any, i: number) => (
+                      <div key={i} className="rounded-md border border-border bg-background/60 p-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="text-sm font-bold text-foreground">{sp.name}</div>
+                          {sp.landed_total != null && (
+                            <div className="text-xs font-semibold text-primary">{formatCurrency(Number(sp.landed_total), canViewPrices)}</div>
+                          )}
+                        </div>
+                        {sp.items_quoted != null && (
+                          <div className="text-[11px] text-muted-foreground mb-1.5">{sp.items_quoted} items quoted</div>
+                        )}
+                        {Array.isArray(sp.strengths) && sp.strengths.length > 0 && (
+                          <div className="mb-1.5">
+                            <div className="text-[10px] uppercase text-emerald-700 font-semibold">Strengths</div>
+                            <ul className="text-xs text-foreground list-disc list-inside space-y-0.5">
+                              {sp.strengths.map((s: string, j: number) => <li key={j}>{s}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {Array.isArray(sp.weaknesses) && sp.weaknesses.length > 0 && (
+                          <div className="mb-1.5">
+                            <div className="text-[10px] uppercase text-amber-700 font-semibold">Weaknesses</div>
+                            <ul className="text-xs text-foreground list-disc list-inside space-y-0.5">
+                              {sp.weaknesses.map((w: string, j: number) => <li key={j}>{w}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                        {Array.isArray(sp.risk_flags) && sp.risk_flags.length > 0 && (
+                          <div>
+                            <div className="text-[10px] uppercase text-rose-700 font-semibold">Risk Flags</div>
+                            <ul className="text-xs text-rose-800 list-disc list-inside space-y-0.5">
+                              {sp.risk_flags.map((r: string, j: number) => <li key={j}>{r}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Item comparison groups */}
+              {Array.isArray(aiRecommendation.item_comparison) && aiRecommendation.item_comparison.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold uppercase text-muted-foreground">Item-by-Item Comparison</div>
+                  <div className="space-y-2">
+                    {aiRecommendation.item_comparison.map((grp: any, i: number) => (
+                      <div key={i} className="rounded-md border border-border bg-background/60 p-3">
+                        <div className="flex items-baseline justify-between gap-2 mb-1">
+                          <div className="text-sm font-semibold text-foreground">{grp.category}</div>
+                        </div>
+                        {grp.description && <div className="text-xs text-muted-foreground mb-2">{grp.description}</div>}
+                        {Array.isArray(grp.vendor_items) && grp.vendor_items.length > 0 && (
+                          <div className="space-y-1.5">
+                            {grp.vendor_items.map((vi: any, j: number) => (
+                              <div key={j} className="flex items-start gap-2 text-xs border-l-2 border-primary/30 pl-2">
+                                <div className="flex-1">
+                                  <div className="font-medium text-foreground">{vi.supplier}</div>
+                                  <div className="text-muted-foreground">{vi.item_description}</div>
+                                  <div className="text-[11px] text-muted-foreground mt-0.5">
+                                    {vi.quantity != null && <>Qty: {vi.quantity} {vi.unit ?? ""} · </>}
+                                    {vi.rate_per_unit != null && <>Rate: {formatCurrency(Number(vi.rate_per_unit), canViewPrices)}</>}
+                                    {vi.landed_per_unit != null && <> · Landed/unit: {formatCurrency(Number(vi.landed_per_unit), canViewPrices)}</>}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {grp.alignment_note && (
+                          <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 italic">
+                            Note: {grp.alignment_note}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Unmatched items */}
+              {Array.isArray(aiRecommendation.unmatched_items) && aiRecommendation.unmatched_items.length > 0 && (
+                <div className="rounded-md bg-amber-50/50 border border-amber-200 p-3">
+                  <div className="text-xs font-semibold uppercase text-amber-700 mb-1.5">Unmatched Items</div>
+                  <ul className="space-y-1">
+                    {aiRecommendation.unmatched_items.map((um: any, i: number) => (
+                      <li key={i} className="text-xs text-amber-900">
+                        <span className="font-semibold">{um.supplier}:</span> {um.item_description}
+                        {um.note && <span className="text-amber-700 italic ml-1">— {um.note}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Ranking */}
+              {Array.isArray(aiRecommendation.ranking) && aiRecommendation.ranking.length > 0 && (
                 <div>
                   <div className="text-xs font-semibold uppercase text-muted-foreground mb-1">Ranking</div>
                   <div className="space-y-1">
@@ -1576,16 +2203,17 @@ Provide a JSON response with this exact structure:
                       <div key={idx} className="flex items-center gap-2 text-sm">
                         <span className="font-mono text-xs w-5 text-center text-muted-foreground">{item.rank}.</span>
                         <span className="font-medium">{item.supplier}</span>
-                        <span className="text-muted-foreground">— {item.rationale}</span>
+                        {item.rationale && <span className="text-muted-foreground">— {item.rationale}</span>}
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {aiRecommendation.warnings && aiRecommendation.warnings.length > 0 && (
+              {/* Warnings */}
+              {Array.isArray(aiRecommendation.warnings) && aiRecommendation.warnings.length > 0 && (
                 <div className="rounded-md bg-amber-50 border border-amber-200 p-3 space-y-1">
-                  <div className="text-xs font-semibold uppercase text-amber-700">Warnings</div>
+                  <div className="text-xs font-semibold uppercase text-amber-700 mb-1">Warnings</div>
                   {aiRecommendation.warnings.map((w: string, i: number) => (
                     <div key={i} className="flex items-start gap-2 text-sm text-amber-800">
                       <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
@@ -1595,22 +2223,33 @@ Provide a JSON response with this exact structure:
                 </div>
               )}
 
-              {aiRecommendation.potential_savings != null && (
-                <div className="text-sm">
-                  <span className="text-muted-foreground">Potential Savings: </span>
-                  <span className="font-semibold text-green-700">₹{Number(aiRecommendation.potential_savings).toLocaleString("en-IN")}</span>
+              {/* Data quality issues */}
+              {Array.isArray(aiRecommendation.data_quality_issues) && aiRecommendation.data_quality_issues.length > 0 && (
+                <div className="rounded-md bg-muted/40 border border-border p-3 space-y-1">
+                  <div className="text-xs font-semibold uppercase text-muted-foreground mb-1">Data Quality Issues</div>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {aiRecommendation.data_quality_issues.map((d: string, i: number) => (
+                      <li key={i} className="text-xs text-foreground">{d}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
-              <div className="text-xs text-muted-foreground border-t border-border/40 pt-2">
-                {aiRecommendation.disclaimer ?? "AI-generated recommendation for reference only. Human review and approval required."}
-              </div>
-
-              {!aiRecommendation && canCreateRFQ && (
-                <Button size="sm" variant="outline" onClick={getAIRecommendation} disabled={aiLoading}>
-                  {aiLoading ? "Analyzing..." : "Refresh AI Analysis"}
-                </Button>
+              {/* Next steps */}
+              {Array.isArray(aiRecommendation.next_steps_for_procurement) && aiRecommendation.next_steps_for_procurement.length > 0 && (
+                <div className="rounded-md bg-blue-50 border border-blue-200 p-3 space-y-1">
+                  <div className="text-xs font-semibold uppercase text-blue-700 mb-1">Next Steps for Procurement</div>
+                  <ul className="list-disc list-inside space-y-0.5">
+                    {aiRecommendation.next_steps_for_procurement.map((n: string, i: number) => (
+                      <li key={i} className="text-xs text-blue-900">{n}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
+
+              <div className="text-xs text-muted-foreground border-t border-border/40 pt-2 italic">
+                {aiRecommendation.disclaimer ?? "AI-generated analysis for reference only. Human review and approval required."}
+              </div>
             </CardContent>
           )}
         </Card>
@@ -1618,19 +2257,227 @@ Provide a JSON response with this exact structure:
 
       {canSeeMatrix && !aiRecommendation && !aiLoading && canCreateRFQ && (
         <div className="flex justify-end">
-          <Button size="sm" variant="outline" onClick={getAIRecommendation}>
+          <Button size="sm" onClick={getAIRecommendation} className="bg-primary">
             <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-            Get AI Recommendation
+            Generate AI Analysis
           </Button>
         </div>
       )}
 
-      {/* Comparison Matrix */}
-      {canSeeMatrix ? (
+      {/* Upgrade banner — old-format AI analysis exists; prompt to regenerate with new rich schema */}
+      {canSeeMatrix && aiRecommendation && !aiRecommendation.comparison_approach && !aiLoading && canCreateRFQ && (
+        <Card className="border-primary/40 bg-primary/5">
+          <CardContent className="py-4 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-start gap-2">
+              <Sparkles className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+              <div>
+                <div className="text-sm font-semibold text-foreground">New AI analysis available</div>
+                <div className="text-xs text-muted-foreground">
+                  This sheet has an older AI recommendation. Regenerate to get the new detailed analysis (supplier profiles,
+                  item-by-item alignment, commercial breakdown, warnings, next steps).
+                </div>
+              </div>
+            </div>
+            <Button size="sm" onClick={getAIRecommendation} className="bg-primary shrink-0">
+              <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+              Generate Detailed AI Analysis
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Head's Decision Card — shows procurement head's pick alongside AI's recommendation */}
+      {canSeeMatrix && sheet && suppliers.length > 0 && (
+        <Card className="border-primary/40">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-primary" />
+              Procurement Head's Decision
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {(() => {
+              const headPickId = sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? null;
+              const headPickName = headPickId ? (suppliers.find(s => s.id === headPickId)?.name ?? "—") : null;
+              const aiPickName = aiRecommendation?.recommended_supplier ?? null;
+              const matchesAI = aiPickName && headPickName && aiPickName === headPickName;
+              const mStatus = String(sheet.manual_review_status ?? "pending");
+
+              if (!headPickId) {
+                return (
+                  <div className="bg-amber-50 border border-amber-200 rounded-md p-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 text-amber-700 mt-0.5 shrink-0" />
+                      <div className="flex-1">
+                        <div className="text-sm font-semibold text-amber-900">Awaiting Procurement Head's Review</div>
+                        <p className="text-xs text-amber-800 mt-1">
+                          The procurement head has not yet selected a supplier. Review the AI analysis above and the bid comparisons below,
+                          then record the decision in the "Procurement Executive Review" section at the bottom of this page.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-blue-700 mt-0.5 shrink-0" />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-semibold text-blue-900">Head Selected:</span>
+                        <span className="text-sm font-bold text-blue-900">{headPickName}</span>
+                        {matchesAI ? (
+                          <Badge className="text-[10px] bg-green-100 text-green-800 border-green-200 border">✓ Matches AI</Badge>
+                        ) : aiPickName ? (
+                          <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border">⚠ Override AI (AI recommended: {aiPickName})</Badge>
+                        ) : null}
+                        <Badge className={`text-[10px] border ${manualStatusBadge(mStatus)}`}>{mStatus.replace(/_/g, " ")}</Badge>
+                      </div>
+                      {sheet.reviewer_recommendation_reason && (
+                        <div className="mt-2">
+                          <div className="text-[10px] uppercase text-blue-700 font-semibold">Reason Given</div>
+                          <p className="text-sm text-blue-900 whitespace-pre-wrap">{sheet.reviewer_recommendation_reason}</p>
+                        </div>
+                      )}
+                      {sheet.manual_review_by && (
+                        <div className="text-xs text-blue-700 mt-2">
+                          Reviewed by <strong>{usersById[sheet.manual_review_by]?.name ?? "—"}</strong>
+                          {sheet.manual_review_at && <> on {formatDateTime(sheet.manual_review_at)}</>}
+                        </div>
+                      )}
+                      {sheet.approved_by && (
+                        <div className="text-xs text-green-700 mt-1 font-medium">
+                          ✓ Approved by {usersById[sheet.approved_by]?.name ?? "—"}
+                          {sheet.approved_at && <> on {formatDateTime(sheet.approved_at)}</>}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Bid Totals Comparison — primary summary per supplier */}
+      {canSeeMatrix && suppliers.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Comparison Matrix</CardTitle>
-            <CardDescription>PR line items matched against supplier quotes.</CardDescription>
+            <CardTitle className="text-base">Bid Totals Comparison</CardTitle>
+            <CardDescription>Side-by-side totals per supplier — the primary view for commercial comparison</CardDescription>
+          </CardHeader>
+          <CardContent className="p-0 overflow-x-auto">
+            {(() => {
+              // Compute per-supplier totals including extra charges
+              const totals = suppliers.map((sup) => {
+                const lines = allQuoteLinesBySupplierId[sup.id] ?? [];
+                const charges = extraChargesBySupplierId[sup.id] ?? [];
+                const subtotal = lines.reduce((s, li) => {
+                  const r = Number(li.rate ?? 0);
+                  const q = Number(li.quantity ?? 0);
+                  return s + q * r;
+                }, 0);
+                const gst = lines.reduce((s, li) => {
+                  const r = Number(li.rate ?? 0);
+                  const q = Number(li.quantity ?? 0);
+                  const g = Number(li.gst_percent ?? 0);
+                  return s + q * r * g / 100;
+                }, 0);
+                const freight = lines.reduce((s, li) => {
+                  const f = Number(li.freight ?? 0);
+                  const q = Number(li.quantity ?? 0);
+                  return s + q * f;
+                }, 0);
+                const extraSum = charges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
+                const landedTotal = subtotal + gst + freight + extraSum;
+                const quote = quoteBySupplierId[sup.id];
+                return {
+                  sup,
+                  itemCount: lines.length,
+                  extraCount: charges.length,
+                  subtotal,
+                  gst,
+                  freight,
+                  extraSum,
+                  landedTotal,
+                  paymentTerms: quote?.payment_terms ?? null,
+                  deliveryTerms: quote?.delivery_terms ?? null,
+                  warrantyMonths: quote?.warranty_months ?? null,
+                  validityDays: quote?.validity_days ?? null,
+                  compliance: quote?.compliance_status ?? null,
+                };
+              });
+              const lowestLanded = Math.min(...totals.map((t) => t.landedTotal).filter((v) => v > 0));
+
+              const row = (label: string, value: (t: typeof totals[0]) => React.ReactNode, emphasize = false) => (
+                <TableRow className={emphasize ? "bg-primary/5 font-semibold" : ""}>
+                  <TableCell className={`${emphasize ? "text-foreground" : "text-muted-foreground"} font-medium whitespace-nowrap`}>{label}</TableCell>
+                  {totals.map((t) => (
+                    <TableCell key={t.sup.id} className={emphasize ? "text-primary font-bold" : ""}>
+                      {value(t)}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              );
+
+              return (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-[180px]">Metric</TableHead>
+                      {totals.map((t, idx) => (
+                        <TableHead key={t.sup.id} className="min-w-[200px]">
+                          <div className="flex items-center gap-2">
+                            <span>{t.sup.name}</span>
+                            {t.landedTotal > 0 && t.landedTotal === lowestLanded && (
+                              <Badge className="text-[10px] bg-green-100 text-green-800 border-0">lowest</Badge>
+                            )}
+                            <Badge variant="outline" className="text-[10px]">{["1st","2nd","3rd","4th","5th"][idx] ?? `${idx+1}th`}</Badge>
+                          </div>
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {row("Items Quoted", (t) => t.itemCount + (t.extraCount > 0 ? ` (+${t.extraCount} extra)` : ""))}
+                    {row("Subtotal (excl GST & freight)", (t) => formatCurrency(t.subtotal, canViewPrices))}
+                    {row("GST Amount", (t) => formatCurrency(t.gst, canViewPrices))}
+                    {row("Freight", (t) => t.freight > 0 ? formatCurrency(t.freight, canViewPrices) : "—")}
+                    {row("Extra Charges", (t) => t.extraSum > 0 ? formatCurrency(t.extraSum, canViewPrices) : "—")}
+                    {row("LANDED TOTAL", (t) => formatCurrency(t.landedTotal, canViewPrices), true)}
+                    {row("Payment Terms", (t) => (
+                      <span className="text-xs whitespace-pre-wrap break-words">{t.paymentTerms ?? "—"}</span>
+                    ))}
+                    {row("Delivery Terms", (t) => (
+                      <span className="text-xs whitespace-pre-wrap break-words">{t.deliveryTerms ?? "—"}</span>
+                    ))}
+                    {row("Warranty", (t) => t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—")}
+                    {row("Validity", (t) => t.validityDays != null ? `${t.validityDays} days` : "—")}
+                    {row("Compliance", (t) => (
+                      <Badge className={`text-xs border ${complianceBadgeCls(t.compliance)}`}>{t.compliance ?? "—"}</Badge>
+                    ))}
+                  </TableBody>
+                </Table>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Comparison Matrix — HIDDEN: the old per-PR-line matrix was confusing when vendors
+          itemise a vague PR into many items. The AI Analysis card + Bid Totals Comparison +
+          Detailed Quote Breakdown below give the complete clear picture. */}
+      {false && canSeeMatrix ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Per-Item Comparison Matrix</CardTitle>
+            <CardDescription>
+              Each PR line item matched against the best-fitting quote item per supplier. Note: rates are per-unit, not full bid totals —
+              see Bid Totals Comparison above for commercial summary.
+            </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
             {/* Desktop table */}
@@ -1982,6 +2829,99 @@ Provide a JSON response with this exact structure:
                         </TableRow>
                       </TableBody>
                     </Table>
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Vendor Quote Files — lets procurement head verify AI-parsed data against the original quote documents */}
+      {canSeeMatrix && suppliers.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Vendor Quote Files</CardTitle>
+            <CardDescription>
+              Original quote documents as received — verify AI-parsed values against what the vendor actually sent
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {suppliers.map((sup) => {
+              const quote = quoteBySupplierId[sup.id];
+              if (!quote) return null;
+              // Resolve a viewable URL. Legacy uploads have legacy_file_url (already signed/public).
+              // Otherwise raw_file_path is in cps-quotes bucket.
+              let fileUrl: string | null = null;
+              let displayPath: string | null = quote.raw_file_path ?? null;
+              if (quote.legacy_file_url) {
+                fileUrl = quote.legacy_file_url;
+              } else if (quote.raw_file_path) {
+                const { data: urlData } = supabase.storage.from("cps-quotes").getPublicUrl(quote.raw_file_path);
+                fileUrl = urlData?.publicUrl ?? null;
+              }
+              const lowerPath = (fileUrl ?? displayPath ?? "").toLowerCase();
+              const isImage = /\.(jpg|jpeg|png|webp|gif)(\?|$)/.test(lowerPath);
+              const isPdf = /\.pdf(\?|$)/.test(lowerPath);
+
+              return (
+                <div key={sup.id} className="border border-border rounded-lg overflow-hidden">
+                  <div className="px-4 py-2.5 bg-muted/30 border-b border-border flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-sm">{sup.name}</span>
+                      {quote.channel && (
+                        <Badge variant="outline" className="text-[10px] uppercase">{quote.channel}</Badge>
+                      )}
+                      {quote.is_legacy && (
+                        <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border">Legacy</Badge>
+                      )}
+                    </div>
+                    {fileUrl && (
+                      <a
+                        href={fileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-primary hover:underline font-medium"
+                      >
+                        Open in new tab ↗
+                      </a>
+                    )}
+                  </div>
+
+                  <div className="p-3">
+                    {!fileUrl ? (
+                      <div className="text-sm text-muted-foreground italic py-4 text-center">
+                        No file uploaded — this quote was entered manually via the portal or logged by a procurement executive.
+                        Verify details via the Detailed Quote Breakdown above.
+                      </div>
+                    ) : isImage ? (
+                      <div className="flex justify-center">
+                        <img
+                          src={fileUrl}
+                          alt={`${sup.name} quote`}
+                          className="max-w-full max-h-[600px] rounded border border-border"
+                          loading="lazy"
+                        />
+                      </div>
+                    ) : isPdf ? (
+                      <div className="space-y-2">
+                        <object data={fileUrl} type="application/pdf" width="100%" height="600px" className="rounded border border-border">
+                          <div className="text-sm text-muted-foreground py-4 text-center">
+                            PDF preview unavailable in this browser.{" "}
+                            <a href={fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-medium">
+                              Click here to download / view the PDF ↗
+                            </a>
+                          </div>
+                        </object>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground py-4 text-center">
+                        File uploaded but preview not supported.{" "}
+                        <a href={fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-medium">
+                          Download / view ↗
+                        </a>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
