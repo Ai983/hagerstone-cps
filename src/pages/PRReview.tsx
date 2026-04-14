@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -82,6 +83,7 @@ function SortIcon({ field, sortField, sortDir }: { field: string; sortField: str
 
 export default function PRReview() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
 
   // list state
   const [prs, setPrs] = useState<PR[]>([]);
@@ -147,6 +149,15 @@ export default function PRReview() {
   };
 
   useEffect(() => { fetchPRs(); }, []); // eslint-disable-line
+
+  // Auto-open the edit dialog for a specific PR if ?pr=<id> is in URL
+  useEffect(() => {
+    const targetPrId = searchParams.get("pr");
+    if (!targetPrId || prs.length === 0 || editOpen) return;
+    const target = prs.find((p) => p.id === targetPrId);
+    if (target) openEdit(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, prs]);
 
   // ---------- sort / filter ----------
 

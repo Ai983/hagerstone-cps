@@ -144,6 +144,19 @@ const formatDate = (d: string | null | undefined) => {
   return dt.toLocaleDateString("en-IN");
 };
 
+const formatDateTime = (d: string | null | undefined) => {
+  if (!d) return "—";
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "—";
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  let h = dt.getHours();
+  const min = String(dt.getMinutes()).padStart(2, "0");
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  return `${dd}/${mm}/${dt.getFullYear()}, ${h}:${min} ${ampm}`;
+};
+
 const normalize = (s: string) => s.trim().toLowerCase();
 
 // "Closest description text match" (simple heuristic, deterministic).
@@ -1987,7 +2000,7 @@ Provide a JSON response with this exact structure:
           <div className="flex items-center gap-2 flex-wrap">
             <Badge className={`text-xs border-0 ${manualStatusBadge(sheet.manual_review_status)}`}>{sheet.manual_review_status}</Badge>
             {sheet.manual_review_at && (
-              <div className="text-xs text-muted-foreground">Reviewed on {formatDate(sheet.manual_review_at)}</div>
+              <div className="text-xs text-muted-foreground">Reviewed on {formatDateTime(sheet.manual_review_at)}</div>
             )}
           </div>
 
@@ -2066,7 +2079,7 @@ Provide a JSON response with this exact structure:
             <>
               <div className="space-y-2">
                 <div className="text-sm text-muted-foreground">
-                  Reviewed by <span className="font-medium">{reviewerName}</span> on <span className="font-medium">{formatDate(sheet.manual_review_at)}</span>
+                  Reviewed by <span className="font-medium">{reviewerName}</span> on <span className="font-medium">{formatDateTime(sheet.manual_review_at)}</span>
                 </div>
                 <div className="text-sm">
                   <span className="text-muted-foreground">Notes: </span>
@@ -2098,7 +2111,7 @@ Provide a JSON response with this exact structure:
                   <span className="text-muted-foreground">Approved by </span>
                   <span className="font-medium">{approvedName}</span>
                   <span className="text-muted-foreground"> on </span>
-                  <span className="font-medium">{formatDate(sheet.approved_at)}</span>
+                  <span className="font-medium">{formatDateTime(sheet.approved_at)}</span>
                 </div>
               )}
             </>
@@ -2176,7 +2189,7 @@ Provide a JSON response with this exact structure:
               </Badge>
               {sheet.approved_by && (
                 <span className="text-sm text-muted-foreground">
-                  by {approvedName} on {formatDate(sheet.approved_at)}
+                  by {approvedName} on {formatDateTime(sheet.approved_at)}
                 </span>
               )}
               {sheet.status === "approved" && (

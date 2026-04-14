@@ -9,7 +9,6 @@ const NAV = [
   { title: "Kanban Board", url: "/kanban", icon: KanbanSquare, roles: ["procurement_executive","procurement_head","it_head","management","auditor","finance"] },
   { title: "Analytics", url: "/analytics", icon: LineChart, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor"] },
   { title: "Purchase Requests", url: "/requisitions", icon: FileText, roles: ["all"] },
-  { title: "PR Review", url: "/pr-review", icon: ClipboardCheck, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "RFQs", url: "/rfqs", icon: Send, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management"] },

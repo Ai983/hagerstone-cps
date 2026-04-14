@@ -132,6 +132,19 @@ const formatDate = (d: string | null) => {
   return dt.toLocaleDateString("en-IN");
 };
 
+const formatDateTime = (d: string | null | undefined) => {
+  if (!d) return "—";
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "—";
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  let h = dt.getHours();
+  const min = String(dt.getMinutes()).padStart(2, "0");
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  return `${dd}/${mm}/${dt.getFullYear()}, ${h}:${min} ${ampm}`;
+};
+
 const formatCurrency = (n: number | null | undefined) => {
   if (n === null || n === undefined) return "—";
   const v = Number(n);
@@ -1366,7 +1379,7 @@ Rules:
                       <TableCell>
                         <Badge className={`text-xs border-0 ${compBadge}`}>{q.compliance_status}</Badge>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{formatDate(q.received_at)}</TableCell>
+                      <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{formatDateTime(q.received_at)}</TableCell>
                       <TableCell className="text-right">
                         <Button variant="ghost" size="sm" onClick={() => openReview(q.id)}>
                           Review
@@ -1398,7 +1411,7 @@ Rules:
                   <div>
                     <div className="font-mono text-primary text-sm">{q.blind_quote_ref}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">{rfq?.rfq_number ?? "—"} · {q.channel}</div>
-                    <div className="text-xs text-muted-foreground">{formatDate(q.received_at)}</div>
+                    <div className="text-xs text-muted-foreground">{formatDateTime(q.received_at)}</div>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
                     <Badge className={`text-xs border-0 ${ps.badge}`}>{ps.label}</Badge>

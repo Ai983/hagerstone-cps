@@ -13,9 +13,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight } from "lucide-react";
+import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight, ClipboardCheck } from "lucide-react";
 
 // DB CHECK constraint allows: pending, pending_design, validated, duplicate_flagged, rfq_created, po_issued, delivered, cancelled
 type PRStatus = "pending" | "pending_design" | "validated" | "duplicate_flagged" | "rfq_created" | "po_issued" | "delivered" | "cancelled";
@@ -123,6 +124,19 @@ const formatIndianDate = (dateLike: string | Date | null | undefined) => {
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   return `${dd}/${mm}/${d.getFullYear()}`;
+};
+
+const formatIndianDateTime = (dateLike: string | Date | null | undefined) => {
+  if (!dateLike) return "—";
+  const d = typeof dateLike === "string" ? new Date(dateLike) : dateLike;
+  if (Number.isNaN(d.getTime())) return "—";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  let h = d.getHours();
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  return `${dd}/${mm}/${d.getFullYear()}, ${h}:${min} ${ampm}`;
 };
 
 const formatRequiredByDate = (dateStr: string) => {
@@ -357,7 +371,10 @@ export default function PurchaseRequisitions() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = prList.filter((p) => {
-      const matchesStatus = statusFilter === "all" ? true : p.status === statusFilter;
+      const matchesStatus =
+        statusFilter === "all" ? true :
+        statusFilter === "review" ? (p.status === "pending" || p.status === "pending_design") :
+        p.status === statusFilter;
       const matchesPriority = priorityFilter === "all" ? true : (p.priority ?? "normal") === priorityFilter;
       const matchesQ =
         !q ||
@@ -717,6 +734,22 @@ export default function PurchaseRequisitions() {
     return allowed.includes(s as PRStatus) ? (s as PRStatus) : null;
   };
 
+  // Status counts for KPI cards and tabs
+  const statusCounts = useMemo(() => {
+    const c: Record<string, number> = {
+      all: prList.length,
+      review: 0, validated: 0, duplicate_flagged: 0,
+      rfq_created: 0, po_issued: 0, delivered: 0, cancelled: 0,
+    };
+    prList.forEach((p) => {
+      if (p.status === "pending" || p.status === "pending_design") c.review += 1;
+      if (c[p.status] !== undefined) c[p.status] += 1;
+    });
+    return c;
+  }, [prList]);
+
+  const isProcurementUser = user?.role === "procurement_executive" || user?.role === "procurement_head" || user?.role === "it_head" || user?.role === "management";
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -735,7 +768,41 @@ export default function PurchaseRequisitions() {
         </div>
       </div>
 
-      {/* Filters */}
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        {[
+          { label: "Total PRs", count: statusCounts.all, color: "text-blue-700", bg: "bg-blue-50" },
+          { label: "Pending Review", count: statusCounts.review, color: "text-amber-700", bg: "bg-amber-50" },
+          { label: "Validated", count: statusCounts.validated, color: "text-cyan-700", bg: "bg-cyan-50" },
+          { label: "RFQ Created", count: statusCounts.rfq_created, color: "text-violet-700", bg: "bg-violet-50" },
+          { label: "Duplicate Flagged", count: statusCounts.duplicate_flagged, color: "text-orange-700", bg: "bg-orange-50" },
+          { label: "Cancelled", count: statusCounts.cancelled, color: "text-red-700", bg: "bg-red-50" },
+        ].map((k) => (
+          <Card key={k.label} className="shadow-sm">
+            <CardContent className={`p-4 ${k.bg}`}>
+              <div className="text-xs text-muted-foreground mb-1">{k.label}</div>
+              <div className={`text-2xl font-bold ${k.color}`}>{loading ? "—" : k.count}</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Status Tabs */}
+      <Tabs value={statusFilter} onValueChange={setStatusFilter} className="w-full">
+        <TabsList className="w-full overflow-x-auto justify-start flex-nowrap h-auto p-1">
+          <TabsTrigger value="all" className="text-xs gap-1.5">All <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.all}</Badge></TabsTrigger>
+          <TabsTrigger value="review" className="text-xs gap-1.5">
+            <ClipboardCheck className="h-3 w-3" /> Pending Review <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.review}</Badge>
+          </TabsTrigger>
+          <TabsTrigger value="validated" className="text-xs gap-1.5">Validated <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.validated}</Badge></TabsTrigger>
+          <TabsTrigger value="rfq_created" className="text-xs gap-1.5">RFQ Created <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.rfq_created}</Badge></TabsTrigger>
+          <TabsTrigger value="duplicate_flagged" className="text-xs gap-1.5">Duplicate <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.duplicate_flagged}</Badge></TabsTrigger>
+          <TabsTrigger value="po_issued" className="text-xs gap-1.5">PO Issued <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.po_issued}</Badge></TabsTrigger>
+          <TabsTrigger value="cancelled" className="text-xs gap-1.5">Cancelled <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.cancelled}</Badge></TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {/* Filters (search + priority only — status moved to tabs above) */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[240px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -746,19 +813,6 @@ export default function PurchaseRequisitions() {
             className="pl-9"
           />
         </div>
-        <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="validated">Validated</SelectItem>
-            <SelectItem value="duplicate_flagged">Duplicate Flagged</SelectItem>
-            <SelectItem value="rfq_created">RFQ Created</SelectItem>
-            <SelectItem value="cancelled">Cancelled</SelectItem>
-          </SelectContent>
-        </Select>
         <Select value={priorityFilter} onValueChange={setPriorityFilter}>
           <SelectTrigger className="w-40">
             <SelectValue placeholder="All Priority" />
@@ -843,9 +897,20 @@ export default function PurchaseRequisitions() {
                       <TableCell>
                         <Badge className={`text-xs border-0 ${badge.className}`}>{badge.label}</Badge>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{formatIndianDate(pr.created_at)}</TableCell>
+                      <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{formatIndianDateTime(pr.created_at)}</TableCell>
                       <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
+                          {isProcurementUser && (pr.status === "pending" || pr.status === "pending_design") && (
+                            <Button
+                              variant="default"
+                              size="sm"
+                              onClick={() => navigate(`/pr-review?pr=${pr.id}`)}
+                              title="Review PR (edit items, approve, or create RFQ)"
+                              className="bg-amber-600 hover:bg-amber-700 text-white"
+                            >
+                              <ClipboardCheck className="h-3.5 w-3.5 mr-1" /> Review
+                            </Button>
+                          )}
                           <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="View as Document">
                             <Printer className="h-3.5 w-3.5" />
                           </Button>

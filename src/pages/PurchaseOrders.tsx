@@ -127,6 +127,19 @@ const formatDate = (d: string | null | undefined) => {
   return dt.toLocaleDateString("en-IN");
 };
 
+const formatDateTime = (d: string | null | undefined) => {
+  if (!d) return "—";
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "—";
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  let h = dt.getHours();
+  const min = String(dt.getMinutes()).padStart(2, "0");
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  return `${dd}/${mm}/${dt.getFullYear()}, ${h}:${min} ${ampm}`;
+};
+
 const formatCurrency = (n: number | null | undefined, canViewPrices: boolean) => {
   if (!canViewPrices) return "—";
   if (n === null || n === undefined) return "—";
@@ -1821,7 +1834,13 @@ export default function PurchaseOrders() {
                       <div className="text-xs text-muted-foreground">RFQ: <span className="font-mono text-primary">{viewRfq.rfq_number}</span></div>
                     )}
                     <Badge className={`text-xs border-0 ${statusBadgeCls[viewPo.status] ?? statusBadgeCls.draft}`}>{viewPo.status}</Badge>
-                    <div className="text-sm text-muted-foreground">Date: {formatDate(viewPo.created_at)}</div>
+                    <div className="text-sm text-muted-foreground">Created: {formatDateTime(viewPo.created_at)}</div>
+                    {viewPo.approved_at && (
+                      <div className="text-xs text-muted-foreground">Approved: {formatDateTime(viewPo.approved_at)}</div>
+                    )}
+                    {viewPo.sent_at && (
+                      <div className="text-xs text-muted-foreground">Sent: {formatDateTime(viewPo.sent_at)}</div>
+                    )}
                   </div>
                 </div>
 
@@ -2282,7 +2301,7 @@ export default function PurchaseOrders() {
                     <div className="text-sm text-muted-foreground">
                       Current status: <span className="font-medium text-foreground">{viewPo.status}</span>
                       {viewPo.approved_by && (
-                        <span> · Approved by {viewApprovedByUser?.name ?? "—"} on {formatDate(viewPo.approved_at)}</span>
+                        <span> · Approved by {viewApprovedByUser?.name ?? "—"} on {formatDateTime(viewPo.approved_at)}</span>
                       )}
                     </div>
                   ) : null}
@@ -2291,7 +2310,7 @@ export default function PurchaseOrders() {
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       <div className="space-y-1">
                         <div className="text-sm font-medium">
-                          Approved by {viewApprovedByUser?.name ?? "—"} on {formatDate(viewPo.approved_at)}
+                          Approved by {viewApprovedByUser?.name ?? "—"} on {formatDateTime(viewPo.approved_at)}
                         </div>
                       </div>
                       <Button onClick={sendToSupplier} className="bg-blue-600 hover:bg-blue-700">
