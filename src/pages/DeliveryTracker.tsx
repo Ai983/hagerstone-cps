@@ -166,6 +166,7 @@ export default function DeliveryTracker() {
   const { user, canApprove, canViewPrices } = useAuth();
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [poCards, setPoCards] = useState<EnrichedPo[]>([]);
 
   const [search, setSearch] = useState("");
@@ -223,6 +224,7 @@ export default function DeliveryTracker() {
 
   const fetchAll = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const { data: poData, error: poErr } = await supabase
         .from("cps_purchase_orders")
@@ -283,7 +285,10 @@ export default function DeliveryTracker() {
 
       setPoCards(cards);
     } catch (e: any) {
-      toast.error(e?.message || "Failed to load deliveries");
+      const msg = e?.message || "Failed to load deliveries";
+      console.error("DeliveryTracker load error:", e);
+      toast.error(msg);
+      setLoadError(msg);
       setPoCards([]);
     } finally {
       setLoading(false);
@@ -732,6 +737,19 @@ export default function DeliveryTracker() {
           </SelectContent>
         </Select>
       </div>
+
+      {/* Error state with retry */}
+      {!loading && loadError && (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardContent className="py-8 flex flex-col items-center gap-3 text-center">
+            <div className="text-destructive font-medium">Unable to load deliveries</div>
+            <div className="text-sm text-muted-foreground max-w-md">{loadError}</div>
+            <Button variant="outline" size="sm" onClick={fetchAll}>
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Cards */}
       {loading ? (
