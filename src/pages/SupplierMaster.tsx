@@ -345,6 +345,10 @@ export default function SupplierMaster() {
       toast.error("Supplier name is required");
       return;
     }
+    if (!form.gstin.trim()) {
+      toast.error("GSTIN is required");
+      return;
+    }
 
     const categoriesArr = form.categoriesText
       .split(",")
@@ -707,7 +711,7 @@ export default function SupplierMaster() {
               <Label>Supplier name *</Label>
               <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Full company name" />
             </div>
-            <div className="space-y-1"><Label>GSTIN</Label><Input value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value })} placeholder="15-digit GSTIN" /></div>
+            <div className="space-y-1"><Label>GSTIN <span className="text-destructive">*</span></Label><Input value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value })} placeholder="15-digit GSTIN" required /></div>
             <div className="space-y-1"><Label>PAN</Label><Input value={form.pan} onChange={(e) => setForm({ ...form, pan: e.target.value })} placeholder="PAN" /></div>
             <div className="space-y-1"><Label>Email</Label><Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="contact@supplier.com" /></div>
             <div className="space-y-1"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 XXXXX XXXXX" /></div>

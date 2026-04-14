@@ -61,6 +61,7 @@ export default function VendorRegister() {
     if (!contactPerson.trim()) { toast.error("Contact person is required"); return; }
     if (!email.trim()) { toast.error("Email is required"); return; }
     if (!phone.trim()) { toast.error("Phone is required"); return; }
+    if (!gstin.trim()) { toast.error("GSTIN is required"); return; }
     if (!declaration) { toast.error("Please confirm the declaration"); return; }
 
     setSubmitting(true);
@@ -140,8 +141,8 @@ export default function VendorRegister() {
               <Input value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>GSTIN</Label>
-              <Input value={gstin} onChange={(e) => setGstin(e.target.value)} placeholder="15-digit GSTIN" />
+              <Label>GSTIN <span className="text-destructive">*</span></Label>
+              <Input value={gstin} onChange={(e) => setGstin(e.target.value)} placeholder="15-digit GSTIN" required />
             </div>
             <div className="space-y-2">
               <Label>PAN</Label>

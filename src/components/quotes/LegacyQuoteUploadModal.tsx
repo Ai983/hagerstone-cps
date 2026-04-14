@@ -325,6 +325,10 @@ export function LegacyQuoteUploadModal({
       toast.error("Vendor Name and Phone are required");
       return;
     }
+    if (!newVendorForm.gstin.trim()) {
+      toast.error("GSTIN is required");
+      return;
+    }
     if (!selectedRfqId) {
       toast.error("Please select an RFQ first");
       return;
@@ -814,9 +818,10 @@ export function LegacyQuoteUploadModal({
                           />
                         </div>
                         <div className="space-y-2">
-                          <Label>GSTIN</Label>
+                          <Label>GSTIN <span className="text-destructive">*</span></Label>
                           <Input
-                            placeholder="optional"
+                            placeholder="15-digit GSTIN"
+                            required
                             value={newVendorForm.gstin}
                             onChange={(e) =>
                               setNewVendorForm((p) => ({

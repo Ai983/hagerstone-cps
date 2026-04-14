@@ -44,7 +44,8 @@ type LineItem = {
   description: string;
   quantity: string;
   unit: string;
-  specs: string;
+  specs: string; // CLEAN specs only (Images: ... segment stripped, preserved in _imageUrls)
+  _imageUrls: string[]; // original site-reference image URLs to preserve on save
   preferred_brands: string;
   brand_make: string;
   colour_code: string;
@@ -57,6 +58,36 @@ type LineItem = {
 type SortDir = "asc" | "desc";
 
 // ---------- helpers ----------
+
+// Parses Images: url1,url2,url3 from the specs field (stored during PR creation)
+const parseReferenceImageUrls = (specs: string | null | undefined): string[] => {
+  if (!specs) return [];
+  const match = specs.match(/Images:\s*([^|]+)/i);
+  if (!match) return [];
+  return match[1]
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => /^https?:\/\//.test(s));
+};
+
+// Returns specs text WITHOUT the "Images: url1,url2,…" segment so the Textarea
+// shows only clean human-readable specs. Image URLs are rendered separately in the Site Refs column.
+const stripImagesFromSpecs = (specs: string | null | undefined): string => {
+  if (!specs) return "";
+  return specs
+    .split("|")
+    .map((s) => s.trim())
+    .filter((s) => s && !/^Images:/i.test(s))
+    .join(" | ");
+};
+
+// When saving, compose specs with the preserved image URLs so they aren't lost from the DB row.
+const composeSpecsWithImages = (cleanSpecs: string, imageUrls: string[]): string | null => {
+  const text = (cleanSpecs ?? "").trim();
+  const imagesSeg = (imageUrls ?? []).length ? `Images: ${imageUrls.join(",")}` : "";
+  const joined = [text, imagesSeg].filter(Boolean).join(" | ");
+  return joined || null;
+};
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-blue-100 text-blue-800",
@@ -210,7 +241,8 @@ export default function PRReview() {
         description: li.description ?? "",
         quantity: String(li.quantity ?? ""),
         unit: li.unit ?? "",
-        specs: li.specs ?? "",
+        specs: stripImagesFromSpecs(li.specs ?? ""),
+        _imageUrls: parseReferenceImageUrls(li.specs ?? ""),
         preferred_brands: Array.isArray(li.preferred_brands)
           ? li.preferred_brands.join(", ")
           : (li.preferred_brands ?? ""),
@@ -249,6 +281,7 @@ export default function PRReview() {
         quantity: "1",
         unit: "Nos",
         specs: "",
+        _imageUrls: [],
         preferred_brands: "",
         brand_make: "",
         colour_code: "",
@@ -296,7 +329,7 @@ export default function PRReview() {
           description: li.description.trim(),
           quantity: parseFloat(li.quantity) || 1,
           unit: li.unit.trim() || "Nos",
-          specs: li.specs.trim() || null,
+          specs: composeSpecsWithImages(li.specs, li._imageUrls ?? []),
           preferred_brands: li.preferred_brands
             ? li.preferred_brands.split(",").map((b) => b.trim()).filter(Boolean)
             : null,
@@ -337,7 +370,7 @@ export default function PRReview() {
           description: li.description.trim(),
           quantity: parseFloat(li.quantity) || 1,
           unit: li.unit.trim() || "Nos",
-          specs: li.specs.trim() || null,
+          specs: composeSpecsWithImages(li.specs, li._imageUrls ?? []),
           preferred_brands: li.preferred_brands ? li.preferred_brands.split(",").map((b) => b.trim()).filter(Boolean) : null,
           brand_make: li.brand_make.trim() || null,
           colour_code: li.colour_code.trim() || null,
@@ -400,7 +433,7 @@ export default function PRReview() {
           description: li.description.trim(),
           quantity: parseFloat(li.quantity) || 1,
           unit: li.unit.trim() || "Nos",
-          specs: li.specs.trim() || null,
+          specs: composeSpecsWithImages(li.specs, li._imageUrls ?? []),
           preferred_brands: li.preferred_brands ? li.preferred_brands.split(",").map((b) => b.trim()).filter(Boolean) : null,
           brand_make: li.brand_make.trim() || null,
           colour_code: li.colour_code.trim() || null,
@@ -631,13 +664,14 @@ export default function PRReview() {
                           <TableHead className="w-32">Brand / Make</TableHead>
                           <TableHead className="w-28">Colour Code</TableHead>
                           <TableHead className="min-w-[140px]">Notes / Instructions</TableHead>
+                          <TableHead className="w-24">Site Refs</TableHead>
                           <TableHead className="w-10" />
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {visibleItems.length === 0 ? (
                           <TableRow>
-                            <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
+                            <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
                               No line items. Add items below.
                             </TableCell>
                           </TableRow>
@@ -714,6 +748,36 @@ export default function PRReview() {
                                     onChange={(e) => updateItem(idx, { design_notes: e.target.value })}
                                     placeholder="Any additional notes…"
                                   />
+                                </TableCell>
+                                <TableCell>
+                                  {(() => {
+                                    const urls = li._imageUrls ?? [];
+                                    if (urls.length === 0) {
+                                      return <span className="text-[10px] text-muted-foreground italic">—</span>;
+                                    }
+                                    return (
+                                      <div className="flex flex-wrap gap-1 items-center">
+                                        {urls.map((url, i) => (
+                                          <a
+                                            key={i}
+                                            href={url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="h-10 w-10 rounded border border-border overflow-hidden hover:ring-2 hover:ring-primary/50 transition-all block"
+                                            title={`Site reference image ${i + 1} — click to view full size`}
+                                          >
+                                            <img
+                                              src={url}
+                                              alt={`Ref ${i + 1}`}
+                                              className="h-full w-full object-cover"
+                                              loading="lazy"
+                                            />
+                                          </a>
+                                        ))}
+                                        <span className="text-[10px] text-muted-foreground ml-1">{urls.length}</span>
+                                      </div>
+                                    );
+                                  })()}
                                 </TableCell>
                                 <TableCell>
                                   <button

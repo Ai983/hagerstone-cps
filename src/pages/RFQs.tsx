@@ -616,6 +616,10 @@ export default function RFQs() {
       toast.error("Vendor Name and Phone are required");
       return;
     }
+    if (!newVendorForm.gstin.trim()) {
+      toast.error("GSTIN is required");
+      return;
+    }
     setSavingNewVendor(true);
     const { data: newSupplier, error } = await supabase
       .from("cps_suppliers")
@@ -1470,11 +1474,12 @@ export default function RFQs() {
                               />
                             </div>
                             <div className="space-y-1">
-                              <Label className="text-xs">GSTIN</Label>
+                              <Label className="text-xs">GSTIN <span className="text-destructive">*</span></Label>
                               <Input
-                                placeholder="optional"
+                                placeholder="15-digit GSTIN"
                                 value={newVendorForm.gstin}
                                 onChange={(e) => setNewVendorForm((p) => ({ ...p, gstin: e.target.value }))}
+                                required
                               />
                             </div>
                           </div>

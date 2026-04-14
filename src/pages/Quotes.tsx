@@ -1081,6 +1081,7 @@ Rules:
     // If new vendor mode: insert vendor first
     if (newVendorMode) {
       if (!newVendorForm.name.trim()) { toast.error("Vendor name is required"); return; }
+      if (!newVendorForm.gstin.trim()) { toast.error("GSTIN is required"); return; }
       const { data: vendorInsert, error: vendorErr } = await supabase
         .from("cps_suppliers")
         .insert([{
@@ -1510,8 +1511,8 @@ Rules:
                           <Input className="h-8 text-sm" value={newVendorForm.email} onChange={e => setNewVendorForm(p => ({ ...p, email: e.target.value }))} /></div>
                         <div className="space-y-1"><Label className="text-xs">City</Label>
                           <Input className="h-8 text-sm" value={newVendorForm.city} onChange={e => setNewVendorForm(p => ({ ...p, city: e.target.value }))} /></div>
-                        <div className="space-y-1"><Label className="text-xs">GSTIN</Label>
-                          <Input className="h-8 text-sm" value={newVendorForm.gstin} onChange={e => setNewVendorForm(p => ({ ...p, gstin: e.target.value }))} /></div>
+                        <div className="space-y-1"><Label className="text-xs">GSTIN <span className="text-destructive">*</span></Label>
+                          <Input className="h-8 text-sm" value={newVendorForm.gstin} onChange={e => setNewVendorForm(p => ({ ...p, gstin: e.target.value }))} placeholder="15-digit GSTIN" required /></div>
                       </div>
                     </div>
                   )}
