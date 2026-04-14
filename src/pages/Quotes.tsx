@@ -179,6 +179,7 @@ export default function Quotes() {
   const { user, canViewPrices } = useAuth();
 
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [quotes, setQuotes] = useState<QuoteListRow[]>([]);
   const [rfqs, setRfqs] = useState<Rfq[]>([]);
 
@@ -290,6 +291,7 @@ export default function Quotes() {
 
   const fetchQuotes = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const rfqsRows = await fetchRfqs();
       const byId: Record<string, Rfq> = {};
@@ -326,8 +328,10 @@ export default function Quotes() {
 
       setLoading(false);
     } catch (e: any) {
+      const msg = e?.message || "Failed to load quotes";
       console.error("Quotes load error:", e);
-      toast.error(e?.message || "Failed to load quotes");
+      toast.error(msg);
+      setLoadError(msg);
       setQuotes([]);
       setRfqs([]);
       setRfqById({});
@@ -1191,6 +1195,19 @@ Rules:
           </Button>
         </div>
       </div>
+
+      {/* Error state with retry */}
+      {!loading && loadError && (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardContent className="py-6 flex flex-col items-center gap-3 text-center">
+            <div className="text-destructive font-medium">Unable to load quotes</div>
+            <div className="text-sm text-muted-foreground max-w-md">{loadError}</div>
+            <Button variant="outline" size="sm" onClick={fetchQuotes}>
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <Card>
