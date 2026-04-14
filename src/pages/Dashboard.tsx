@@ -127,11 +127,16 @@ export default function Dashboard() {
       }
 
       if (canApprove) {
+        // A PO is "pending approval" when either:
+        //  - legacy path: status = pending_approval
+        //  - current path: status = draft AND founder_approval_status in (sent, pending)
+        //    (PO created, founders notified via WhatsApp, waiting for response)
         const { data: pendingData } = await supabase
           .from("cps_purchase_orders")
-          .select("id, po_number, supplier_id, grand_total")
-          .eq("status", "pending_approval")
-          .limit(5);
+          .select("id, po_number, supplier_id, grand_total, status, founder_approval_status")
+          .or("status.eq.pending_approval,and(status.eq.draft,founder_approval_status.in.(sent,pending))")
+          .order("created_at", { ascending: false })
+          .limit(10);
         const poRows = (pendingData ?? []) as PendingPO[];
         // Resolve supplier names
         const supplierIds = Array.from(new Set(poRows.map((r) => r.supplier_id).filter(Boolean))) as string[];

@@ -1106,10 +1106,6 @@ Rules:
       toast.error("RFQ and Supplier are required");
       return;
     }
-    if (!logForm.quoteNumber.trim()) {
-      toast.error("Supplier's quote reference is required");
-      return;
-    }
 
     // Calculate totals from per-item entries
     let subtotal = 0;
@@ -1129,7 +1125,7 @@ Rules:
     const payload: any = {
       rfq_id: rfqId,
       supplier_id: resolvedSupplierId,
-      quote_number: logForm.quoteNumber.trim(),
+      quote_number: logForm.quoteNumber.trim() || null,
       channel: logForm.channel,
       received_at: logForm.receivedDate ? new Date(logForm.receivedDate).toISOString() : new Date().toISOString(),
       payment_terms: logForm.paymentTerms.trim() || null,
@@ -1522,7 +1518,7 @@ Rules:
               {/* ── Row 2: Quote ref + Channel + Date ── */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1.5">
-                  <Label>Supplier's Quote Ref *</Label>
+                  <Label>Supplier's Quote Ref <span className="text-xs text-muted-foreground font-normal">(optional)</span></Label>
                   <Input value={logForm.quoteNumber} onChange={(e) => setLogForm((p) => ({ ...p, quoteNumber: e.target.value }))} placeholder="e.g. 2025-26-074" />
                 </div>
                 <div className="space-y-1.5">

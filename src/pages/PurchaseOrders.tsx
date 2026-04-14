@@ -279,7 +279,13 @@ export default function PurchaseOrders() {
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = rows.filter((r) => {
-      const matchesStatus = statusFilter === "all" ? true : String(r.status) === statusFilter;
+      // "pending_approval" filter matches both explicit status and draft-awaiting-founder flow
+      const matchesStatus =
+        statusFilter === "all" ? true :
+        statusFilter === "pending_approval"
+          ? (String(r.status) === "pending_approval" ||
+             (String(r.status) === "draft" && ["sent", "pending"].includes(String((r as any).founder_approval_status ?? ""))))
+          : String(r.status) === statusFilter;
       if (!matchesStatus) return false;
       if (!q) return true;
       return (
