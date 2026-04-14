@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -115,6 +115,19 @@ function SortIcon({ field, sortField, sortDir }: { field: string; sortField: str
 export default function PRReview() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  // True when this page was opened with ?pr=<id> from the main /requisitions page.
+  // In that case, closing the dialog should return the user to /requisitions
+  // (they shouldn't see the standalone PR Review listing they came through).
+  const cameFromPrPage = !!searchParams.get("pr");
+
+  const closeReviewDialog = (open: boolean) => {
+    setEditOpen(open);
+    if (!open && cameFromPrPage) {
+      navigate("/requisitions");
+    }
+  };
 
   // list state
   const [prs, setPrs] = useState<PR[]>([]);
@@ -343,7 +356,7 @@ export default function PRReview() {
       }
 
       toast.success("PR line items saved");
-      setEditOpen(false);
+      closeReviewDialog(false);
       fetchPRs();
     } catch (e: any) {
       toast.error(e.message || "Save failed");
@@ -401,7 +414,7 @@ export default function PRReview() {
       }]);
 
       toast.success(`${editPr.pr_number} approved — now visible in RFQ page`);
-      setEditOpen(false);
+      closeReviewDialog(false);
       fetchPRs();
     } catch (e: any) {
       toast.error(e.message || "Approval failed");
@@ -481,7 +494,7 @@ export default function PRReview() {
       }]);
 
       toast.success(`${rfqNumber} created as draft — go to RFQ page to add suppliers and send`);
-      setEditOpen(false);
+      closeReviewDialog(false);
       fetchPRs();
     } catch (e: any) {
       toast.error(e.message || "Failed to create RFQ");
@@ -618,7 +631,7 @@ export default function PRReview() {
       </Card>
 
       {/* Edit Dialog */}
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+      <Dialog open={editOpen} onOpenChange={closeReviewDialog}>
         <DialogContent className="w-[calc(100vw-1rem)] max-w-6xl p-0">
           <div className="overflow-y-auto max-h-[90vh]">
             <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
@@ -850,7 +863,7 @@ export default function PRReview() {
             </div>
 
             <DialogFooter className="px-6 pb-6 border-t border-border pt-4 flex items-center gap-2 flex-wrap">
-              <Button variant="outline" onClick={() => setEditOpen(false)} disabled={saving || creatingRfq}>
+              <Button variant="outline" onClick={() => closeReviewDialog(false)} disabled={saving || creatingRfq}>
                 Close
               </Button>
               <Button variant="outline" onClick={handleSave} disabled={saving || creatingRfq || loadingItems}>
