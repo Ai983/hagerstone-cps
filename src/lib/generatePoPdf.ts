@@ -315,16 +315,16 @@ export function buildPoPdf(data: PoPdfData): Blob {
     i + 1,
     li.hsn_code ?? "",
     li.description,
-    "",          /* Image */
-    delivSch,    /* Delivery Date */
+    "",                  /* Image */
+    delivSch,            /* Delivery Date */
     li.quantity,
     li.unit ?? "",
-    li.rate + "/-" + (li.unit ? li.unit : ""),
-    "",          /* Disc% */
+    INR(li.rate),        /* Rate — number only, ₹ prefix; unit shown in its own column */
+    "",                  /* Disc% */
     INR(li.total_value),
-    halfGst(li), /* SGST */
-    halfGst(li), /* CGST */
-    "",          /* IGST */
+    halfGst(li),         /* SGST */
+    halfGst(li),         /* CGST */
+    "",                  /* IGST */
   ]);
 
   autoTable(doc, {
@@ -336,7 +336,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
       "Total Value\nof Order", "SGST\n%Rate", "CGST\n%Rate", "IGST\n%Rate",
     ]],
     body: tableBody,
-    styles: { fontSize: 6.5, cellPadding: 1.5, lineColor: [0, 0, 0], lineWidth: 0.2 },
+    styles: { fontSize: 6.5, cellPadding: 1.5, lineColor: [0, 0, 0], lineWidth: 0.2, overflow: "linebreak" },
     headStyles: {
       fillColor: [220, 230, 241],
       textColor: [20, 20, 20],
@@ -345,20 +345,21 @@ export function buildPoPdf(data: PoPdfData): Blob {
       halign: "center",
       valign: "middle",
     },
+    /* Total widths sum: 7+14+38+8+15+8+8+18+7+24+9+9+9 = 174 mm  (page width 210, margins 6+6 → CW = 198, fits with breathing room) */
     columnStyles: {
-      0:  { cellWidth: 7,  halign: "center" },
-      1:  { cellWidth: 14, halign: "center" },
-      2:  { cellWidth: 46 },
-      3:  { cellWidth: 10, halign: "center" },
-      4:  { cellWidth: 16, halign: "center" },
-      5:  { cellWidth: 9,  halign: "right" },
-      6:  { cellWidth: 9,  halign: "center" },
-      7:  { cellWidth: 18, halign: "right" },
-      8:  { cellWidth: 8,  halign: "center" },
-      9:  { cellWidth: 20, halign: "right" },
-      10: { cellWidth: 10, halign: "center" },
-      11: { cellWidth: 10, halign: "center" },
-      12: { cellWidth: 10, halign: "center" },
+      0:  { cellWidth: 7,  halign: "center" },                 /* Sr No */
+      1:  { cellWidth: 14, halign: "center" },                 /* HSN */
+      2:  { cellWidth: 38, halign: "left", overflow: "linebreak" }, /* Description — wraps */
+      3:  { cellWidth: 8,  halign: "center" },                 /* Image */
+      4:  { cellWidth: 15, halign: "center" },                 /* Delivery Date */
+      5:  { cellWidth: 8,  halign: "right" },                  /* Qty */
+      6:  { cellWidth: 8,  halign: "center" },                 /* Unit */
+      7:  { cellWidth: 18, halign: "right" },                  /* Rate */
+      8:  { cellWidth: 7,  halign: "center" },                 /* Disc% */
+      9:  { cellWidth: 24, halign: "right" },                  /* Total Value of Order — widened */
+      10: { cellWidth: 9,  halign: "center" },                 /* SGST */
+      11: { cellWidth: 9,  halign: "center" },                 /* CGST */
+      12: { cellWidth: 9,  halign: "center" },                 /* IGST */
     },
     didParseCell: (data) => {
       if (data.section === "head" && data.column.index >= 10) {
@@ -454,32 +455,35 @@ export function buildPoPdf(data: PoPdfData): Blob {
     doc.setFontSize(7.5);
     doc.setTextColor(20, 20, 20);
     doc.text("Supplier Bank Account Details", ML, y);
-    y += 4;
+    y += 2;
 
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7);
-    doc.setTextColor(40, 40, 40);
-
-    const bankCol1 = ML;
-    const bankCol2 = ML + CW * 0.50;
-    const rowStart = y;
-
-    doc.setFont("helvetica", "bold");
-    doc.text("A/c Holder Name:", bankCol1, y);
-    doc.text("Bank Name:", bankCol2, y);
-    doc.setFont("helvetica", "normal");
-    doc.text(String(data.bankAccountHolderName ?? "—"), bankCol1 + 28, y);
-    doc.text(String(data.bankName ?? "—"), bankCol2 + 18, y);
-    y += 4;
-
-    doc.setFont("helvetica", "bold");
-    doc.text("IFSC:", bankCol1, y);
-    doc.text("A/c No:", bankCol2, y);
-    doc.setFont("helvetica", "normal");
-    doc.text(String(data.bankIfsc ?? "—"), bankCol1 + 28, y);
-    doc.text(String(data.bankAccountNumber ?? "—"), bankCol2 + 18, y);
-    y += 5;
-    void rowStart;
+    /* Render as a proper bounded 4-cell table so long values can't overflow */
+    autoTable(doc, {
+      startY: y,
+      margin: { left: ML, right: MR },
+      body: [
+        [
+          { content: "A/c Holder Name", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+          { content: String(data.bankAccountHolderName ?? "—") },
+          { content: "Bank Name", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+          { content: String(data.bankName ?? "—") },
+        ],
+        [
+          { content: "IFSC", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+          { content: String(data.bankIfsc ?? "—") },
+          { content: "A/c No", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+          { content: String(data.bankAccountNumber ?? "—") },
+        ],
+      ],
+      styles: { fontSize: 7, cellPadding: 1.5, lineColor: [180, 180, 180], lineWidth: 0.2, overflow: "linebreak" },
+      columnStyles: {
+        0: { cellWidth: 32 },
+        1: { cellWidth: CW / 2 - 32 },
+        2: { cellWidth: 22 },
+        3: { cellWidth: CW / 2 - 22 },
+      },
+    });
+    y = (doc as any).lastAutoTable.finalY + 3;
   }
 
   /* ── 7. Signatures ── */
