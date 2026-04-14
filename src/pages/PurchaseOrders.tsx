@@ -73,6 +73,10 @@ type PoRow = {
   founder_approval_reason?: string | null;
   legacy_po_number?: string | null;
   po_pdf_url?: string | null;
+  bank_account_holder_name?: string | null;
+  bank_name?: string | null;
+  bank_ifsc?: string | null;
+  bank_account_number?: string | null;
 };
 
 type SupplierRow = {
@@ -266,6 +270,17 @@ export default function PurchaseOrders() {
   const [editPenaltyClause, setEditPenaltyClause] = useState("");
   const [editLineItems, setEditLineItems] = useState<PoLineItemRow[]>([]);
   const [editSaving, setEditSaving] = useState(false);
+  // Supplier bank details (head fills before sending for approval)
+  const [editBankHolderName, setEditBankHolderName] = useState("");
+  const [editBankName, setEditBankName] = useState("");
+  const [editBankIfsc, setEditBankIfsc] = useState("");
+  const [editBankAccountNumber, setEditBankAccountNumber] = useState("");
+  // Supplier details (edits persist to cps_suppliers so they're reusable)
+  const [editSupplierName, setEditSupplierName] = useState("");
+  const [editSupplierGstin, setEditSupplierGstin] = useState("");
+  const [editSupplierAddress, setEditSupplierAddress] = useState("");
+  const [editSupplierPhone, setEditSupplierPhone] = useState("");
+  const [editSupplierEmail, setEditSupplierEmail] = useState("");
   const [viewPaymentSchedule, setViewPaymentSchedule] = useState<PaymentScheduleRow[]>([]);
   const [markPaidOpen, setMarkPaidOpen] = useState(false);
   const [markPaidRow, setMarkPaidRow] = useState<PaymentScheduleRow | null>(null);
@@ -307,7 +322,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number",
         )
         .order("created_at", { ascending: false });
 
@@ -877,7 +892,7 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number",
         )
         .eq("id", poId)
         .single();
@@ -1170,6 +1185,10 @@ export default function PurchaseOrders() {
         gstAmount,
         grandTotal,
         logoBase64,
+        bankAccountHolderName: viewPo.bank_account_holder_name,
+        bankName: viewPo.bank_name,
+        bankIfsc: viewPo.bank_ifsc,
+        bankAccountNumber: viewPo.bank_account_number,
         lineItems: viewPoLineItems.map((li) => ({
           description: li.description ?? "",
           quantity: Number(li.quantity ?? 0),
@@ -1203,6 +1222,17 @@ export default function PurchaseOrders() {
     setEditPaymentTerms(viewPo.payment_terms ?? "");
     setEditPenaltyClause(viewPo.penalty_clause ?? "");
     setEditLineItems(viewPoLineItems.map((li) => ({ ...li })));
+    // Pre-fill bank details. Holder name defaults to supplier name when empty.
+    setEditBankHolderName(viewPo.bank_account_holder_name ?? viewSupplier?.name ?? viewPo.supplier_name_text ?? "");
+    setEditBankName(viewPo.bank_name ?? "");
+    setEditBankIfsc(viewPo.bank_ifsc ?? "");
+    setEditBankAccountNumber(viewPo.bank_account_number ?? "");
+    // Pre-fill supplier details so head can fill missing info inline
+    setEditSupplierName(viewSupplier?.name ?? viewPo.supplier_name_text ?? "");
+    setEditSupplierGstin(viewSupplier?.gstin ?? "");
+    setEditSupplierAddress(viewSupplier?.address_text ?? "");
+    setEditSupplierPhone(viewSupplier?.phone ?? "");
+    setEditSupplierEmail(viewSupplier?.email ?? "");
     setEditMode(true);
   };
 
@@ -1241,6 +1271,10 @@ export default function PurchaseOrders() {
         total_value: subTotal,
         gst_amount: gstTotal,
         grand_total: grandTotal,
+        bank_account_holder_name: editBankHolderName.trim() || null,
+        bank_name: editBankName.trim() || null,
+        bank_ifsc: editBankIfsc.trim().toUpperCase() || null,
+        bank_account_number: editBankAccountNumber.trim() || null,
       }).eq("id", viewPo.id);
       if (poErr) throw poErr;
 
@@ -1257,6 +1291,18 @@ export default function PurchaseOrders() {
           total_value: li.total_value,
         }).eq("id", li.id);
         if (liErr) throw liErr;
+      }
+
+      // Persist supplier detail edits to cps_suppliers (reusable across POs)
+      if (viewPo.supplier_id) {
+        const { error: supErr } = await supabase.from("cps_suppliers").update({
+          name: editSupplierName.trim() || viewSupplier?.name || "Unnamed",
+          gstin: editSupplierGstin.trim() || null,
+          address_text: editSupplierAddress.trim() || null,
+          phone: editSupplierPhone.trim() || null,
+          email: editSupplierEmail.trim() || null,
+        }).eq("id", viewPo.supplier_id);
+        if (supErr) console.error("Supplier update error:", supErr);
       }
 
       toast.success("PO updated successfully");
@@ -1854,20 +1900,52 @@ export default function PurchaseOrders() {
                 <div className="grid grid-cols-1 gap-4">
                   <div className="flex items-start justify-between gap-6">
                     <div className="flex-1 space-y-2">
-                      <div className="font-medium text-foreground">Supplier Details</div>
-                      <div className="text-sm">
-                        <div className="font-medium">{viewSupplier?.name ?? viewPo.supplier_name_text ?? "—"}</div>
-                        <div className="text-muted-foreground">GSTIN: {viewSupplier?.gstin ?? "—"}</div>
-                        <div className="text-muted-foreground">
-                          Address: {viewSupplier?.address_text ?? "—"} {viewSupplier?.city ? `, ${viewSupplier.city}` : ""}{" "}
-                          {viewSupplier?.state ? `, ${viewSupplier.state}` : ""}
-                        </div>
-                        <div className="text-muted-foreground">Phone: {viewSupplier?.phone ?? "—"}</div>
-                        <div className="text-muted-foreground">Email: {viewSupplier?.email ?? "—"}</div>
-                        {!viewSupplier && viewPo.supplier_name_text && (
-                          <div className="text-xs text-amber-700 italic mt-1">Legacy PO — supplier not linked to supplier master</div>
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-foreground">Supplier Details</div>
+                        {editMode && viewPo.supplier_id && (
+                          <span className="text-[10px] text-muted-foreground italic">
+                            Saves to supplier master — shared across all POs
+                          </span>
                         )}
                       </div>
+                      {editMode && viewPo.supplier_id ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                          <div className="space-y-1 sm:col-span-2">
+                            <Label className="text-xs">Supplier Name</Label>
+                            <Input value={editSupplierName} onChange={(e) => setEditSupplierName(e.target.value)} className="h-9" />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">GSTIN</Label>
+                            <Input value={editSupplierGstin} onChange={(e) => setEditSupplierGstin(e.target.value.toUpperCase())} placeholder="15-digit GSTIN" maxLength={15} className="h-9 font-mono uppercase" />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Phone</Label>
+                            <Input value={editSupplierPhone} onChange={(e) => setEditSupplierPhone(e.target.value)} placeholder="+91 XXXXXXXXXX" className="h-9" />
+                          </div>
+                          <div className="space-y-1 sm:col-span-2">
+                            <Label className="text-xs">Email</Label>
+                            <Input type="email" value={editSupplierEmail} onChange={(e) => setEditSupplierEmail(e.target.value)} placeholder="vendor@example.com" className="h-9" />
+                          </div>
+                          <div className="space-y-1 sm:col-span-2">
+                            <Label className="text-xs">Address</Label>
+                            <Textarea rows={2} value={editSupplierAddress} onChange={(e) => setEditSupplierAddress(e.target.value)} placeholder="Supplier address" />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-sm">
+                          <div className="font-medium">{viewSupplier?.name ?? viewPo.supplier_name_text ?? "—"}</div>
+                          <div className="text-muted-foreground">GSTIN: {viewSupplier?.gstin ?? "—"}</div>
+                          <div className="text-muted-foreground">
+                            Address: {viewSupplier?.address_text ?? "—"} {viewSupplier?.city ? `, ${viewSupplier.city}` : ""}{" "}
+                            {viewSupplier?.state ? `, ${viewSupplier.state}` : ""}
+                          </div>
+                          <div className="text-muted-foreground">Phone: {viewSupplier?.phone ?? "—"}</div>
+                          <div className="text-muted-foreground">Email: {viewSupplier?.email ?? "—"}</div>
+                          {!viewSupplier && viewPo.supplier_name_text && (
+                            <div className="text-xs text-amber-700 italic mt-1">Legacy PO — supplier not linked to supplier master</div>
+                          )}
+                        </div>
+                      )}
                     </div>
                     <div className="flex-1 space-y-2">
                       <div className="font-medium text-foreground">Addresses</div>
@@ -1921,6 +1999,78 @@ export default function PurchaseOrders() {
                       )}
                     </div>
                   </div>
+                </div>
+
+                {/* Supplier Bank Account Details — head fills before sending for founder approval */}
+                <div className="rounded-lg border border-border p-4 space-y-3 bg-muted/20">
+                  <div className="flex items-center justify-between">
+                    <div className="font-medium text-foreground">Supplier Bank Account Details</div>
+                    {!editMode && (
+                      <span className="text-[10px] text-muted-foreground italic">
+                        Filled by procurement head before sending to founder for approval
+                      </span>
+                    )}
+                  </div>
+                  {editMode ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Account Holder Name</Label>
+                        <Input
+                          value={editBankHolderName}
+                          onChange={(e) => setEditBankHolderName(e.target.value)}
+                          placeholder="Defaults to supplier name — edit if different"
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Bank Name</Label>
+                        <Input
+                          value={editBankName}
+                          onChange={(e) => setEditBankName(e.target.value)}
+                          placeholder="e.g. HDFC Bank, SBI"
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">IFSC</Label>
+                        <Input
+                          value={editBankIfsc}
+                          onChange={(e) => setEditBankIfsc(e.target.value.toUpperCase())}
+                          placeholder="e.g. HDFC0000123"
+                          maxLength={11}
+                          className="h-9 text-sm font-mono uppercase"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Account Number</Label>
+                        <Input
+                          value={editBankAccountNumber}
+                          onChange={(e) => setEditBankAccountNumber(e.target.value.replace(/\D/g, ""))}
+                          placeholder="Digits only"
+                          className="h-9 text-sm font-mono"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <div className="text-xs text-muted-foreground">Account Holder Name</div>
+                        <div className="font-medium">{viewPo.bank_account_holder_name ?? "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Bank Name</div>
+                        <div className="font-medium">{viewPo.bank_name ?? "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">IFSC</div>
+                        <div className="font-mono font-medium">{viewPo.bank_ifsc ?? "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Account Number</div>
+                        <div className="font-mono font-medium">{viewPo.bank_account_number ?? "—"}</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Line Items Table */}

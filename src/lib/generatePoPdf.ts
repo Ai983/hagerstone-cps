@@ -43,6 +43,12 @@ export interface PoPdfData {
 
   lineItems: PoPdfLineItem[];
 
+  /* supplier bank account (filled by procurement head before approval) */
+  bankAccountHolderName?: string | null;
+  bankName?: string | null;
+  bankIfsc?: string | null;
+  bankAccountNumber?: string | null;
+
   /* optional logo — pass base64 string (without data-uri prefix) */
   logoBase64?: string | null;
 }
@@ -433,6 +439,48 @@ export function buildPoPdf(data: PoPdfData): Blob {
   doc.setFont("helvetica", "normal");
   doc.text("Rupees : " + amountInWords(data.grandTotal), ML, y);
   y += 6;
+
+  /* ── 6b. Supplier Bank Account Details ── */
+  const hasBank = Boolean(
+    data.bankAccountHolderName || data.bankName || data.bankIfsc || data.bankAccountNumber
+  );
+  if (hasBank) {
+    doc.setLineWidth(0.3);
+    doc.setDrawColor(180);
+    doc.line(ML, y, W - MR, y);
+    y += 4;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(20, 20, 20);
+    doc.text("Supplier Bank Account Details", ML, y);
+    y += 4;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(40, 40, 40);
+
+    const bankCol1 = ML;
+    const bankCol2 = ML + CW * 0.50;
+    const rowStart = y;
+
+    doc.setFont("helvetica", "bold");
+    doc.text("A/c Holder Name:", bankCol1, y);
+    doc.text("Bank Name:", bankCol2, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(String(data.bankAccountHolderName ?? "—"), bankCol1 + 28, y);
+    doc.text(String(data.bankName ?? "—"), bankCol2 + 18, y);
+    y += 4;
+
+    doc.setFont("helvetica", "bold");
+    doc.text("IFSC:", bankCol1, y);
+    doc.text("A/c No:", bankCol2, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(String(data.bankIfsc ?? "—"), bankCol1 + 28, y);
+    doc.text(String(data.bankAccountNumber ?? "—"), bankCol2 + 18, y);
+    y += 5;
+    void rowStart;
+  }
 
   /* ── 7. Signatures ── */
   doc.setLineWidth(0.3);
