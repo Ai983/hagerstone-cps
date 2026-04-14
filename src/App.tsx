@@ -7,25 +7,66 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Layout } from "@/components/layout/Layout";
 
-const Login = React.lazy(() => import("@/pages/Login"));
-const Dashboard = React.lazy(() => import("@/pages/Dashboard"));
-const PurchaseRequisitions = React.lazy(() => import("@/pages/PurchaseRequisitions"));
-const SupplierMaster = React.lazy(() => import("@/pages/SupplierMaster"));
-const ItemMaster = React.lazy(() => import("@/pages/ItemMaster"));
-const RFQs = React.lazy(() => import("@/pages/RFQs"));
-const Quotes = React.lazy(() => import("@/pages/Quotes"));
-const ComparisonSheet = React.lazy(() => import("@/pages/ComparisonSheet"));
-const PurchaseOrders = React.lazy(() => import("@/pages/PurchaseOrders"));
-const DeliveryTracker = React.lazy(() => import("@/pages/DeliveryTracker"));
-const AuditLog = React.lazy(() => import("@/pages/AuditLog"));
-const VendorRegister = React.lazy(() => import("@/pages/VendorRegister"));
-const VendorStatus = React.lazy(() => import("@/pages/VendorStatus"));
-const VendorUploadQuote = React.lazy(() => import("@/pages/VendorUploadQuote"));
-const InvoiceUpload = React.lazy(() => import("@/pages/InvoiceUpload"));
-const ApprovePoPage = React.lazy(() => import("@/pages/ApprovePoPage"));
-const PRReview = React.lazy(() => import("@/pages/PRReview"));
-const KanbanBoard = React.lazy(() => import("@/pages/KanbanBoard"));
-const Analytics = React.lazy(() => import("@/pages/Analytics"));
+/**
+ * Wraps React.lazy with a stale-chunk handler.
+ * When Vercel redeploys, old JS chunks 404. The cached HTML still
+ * references those old chunk names, so React.lazy import fails with
+ * "Failed to fetch dynamically imported module". This handler detects
+ * the chunk failure and triggers a one-time hard reload, which pulls
+ * the fresh index.html referencing the new chunks.
+ *
+ * sessionStorage guards against infinite reload loops — if reload
+ * still fails, we surface the real error instead of looping.
+ */
+const lazyWithRetry = <T extends React.ComponentType<any>>(
+  factory: () => Promise<{ default: T }>,
+): React.LazyExoticComponent<T> =>
+  React.lazy(async () => {
+    const reloadKey = "cps_chunk_reload_attempted";
+    try {
+      const mod = await factory();
+      // success — clear any prior reload flag
+      sessionStorage.removeItem(reloadKey);
+      return mod;
+    } catch (err: any) {
+      const msg = String(err?.message ?? err ?? "");
+      const isChunkError =
+        /Failed to fetch dynamically imported module/i.test(msg) ||
+        /Importing a module script failed/i.test(msg) ||
+        /ChunkLoadError/i.test(msg) ||
+        /Loading chunk/i.test(msg);
+
+      const alreadyReloaded = sessionStorage.getItem(reloadKey) === "1";
+      if (isChunkError && !alreadyReloaded) {
+        sessionStorage.setItem(reloadKey, "1");
+        window.location.reload();
+        // return a never-resolving promise so Suspense keeps the loader
+        // showing until the reload takes effect
+        return new Promise(() => {}) as Promise<{ default: T }>;
+      }
+      throw err;
+    }
+  });
+
+const Login = lazyWithRetry(() => import("@/pages/Login"));
+const Dashboard = lazyWithRetry(() => import("@/pages/Dashboard"));
+const PurchaseRequisitions = lazyWithRetry(() => import("@/pages/PurchaseRequisitions"));
+const SupplierMaster = lazyWithRetry(() => import("@/pages/SupplierMaster"));
+const ItemMaster = lazyWithRetry(() => import("@/pages/ItemMaster"));
+const RFQs = lazyWithRetry(() => import("@/pages/RFQs"));
+const Quotes = lazyWithRetry(() => import("@/pages/Quotes"));
+const ComparisonSheet = lazyWithRetry(() => import("@/pages/ComparisonSheet"));
+const PurchaseOrders = lazyWithRetry(() => import("@/pages/PurchaseOrders"));
+const DeliveryTracker = lazyWithRetry(() => import("@/pages/DeliveryTracker"));
+const AuditLog = lazyWithRetry(() => import("@/pages/AuditLog"));
+const VendorRegister = lazyWithRetry(() => import("@/pages/VendorRegister"));
+const VendorStatus = lazyWithRetry(() => import("@/pages/VendorStatus"));
+const VendorUploadQuote = lazyWithRetry(() => import("@/pages/VendorUploadQuote"));
+const InvoiceUpload = lazyWithRetry(() => import("@/pages/InvoiceUpload"));
+const ApprovePoPage = lazyWithRetry(() => import("@/pages/ApprovePoPage"));
+const PRReview = lazyWithRetry(() => import("@/pages/PRReview"));
+const KanbanBoard = lazyWithRetry(() => import("@/pages/KanbanBoard"));
+const Analytics = lazyWithRetry(() => import("@/pages/Analytics"));
 
 const Loader = () => (
   <div className="min-h-screen flex items-center justify-center">
