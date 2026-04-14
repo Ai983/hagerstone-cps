@@ -858,7 +858,7 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number",
         )
         .eq("id", poId)
         .single();
@@ -1811,6 +1811,15 @@ export default function PurchaseOrders() {
                   <div className="text-right space-y-2">
                     <div className="text-lg font-bold">PURCHASE ORDER</div>
                     <div className="font-mono text-primary">{viewPo.po_number}</div>
+                    {viewPo.source === "legacy" && (
+                      <Badge className="text-xs border bg-amber-100 text-amber-800 border-amber-300">📄 LEGACY</Badge>
+                    )}
+                    {viewPo.legacy_po_number && (
+                      <div className="text-xs text-muted-foreground italic">Legacy #: {viewPo.legacy_po_number}</div>
+                    )}
+                    {viewRfq?.rfq_number && (
+                      <div className="text-xs text-muted-foreground">RFQ: <span className="font-mono text-primary">{viewRfq.rfq_number}</span></div>
+                    )}
                     <Badge className={`text-xs border-0 ${statusBadgeCls[viewPo.status] ?? statusBadgeCls.draft}`}>{viewPo.status}</Badge>
                     <div className="text-sm text-muted-foreground">Date: {formatDate(viewPo.created_at)}</div>
                   </div>
@@ -1822,7 +1831,7 @@ export default function PurchaseOrders() {
                     <div className="flex-1 space-y-2">
                       <div className="font-medium text-foreground">Supplier Details</div>
                       <div className="text-sm">
-                        <div className="font-medium">{viewSupplier?.name ?? "—"}</div>
+                        <div className="font-medium">{viewSupplier?.name ?? viewPo.supplier_name_text ?? "—"}</div>
                         <div className="text-muted-foreground">GSTIN: {viewSupplier?.gstin ?? "—"}</div>
                         <div className="text-muted-foreground">
                           Address: {viewSupplier?.address_text ?? "—"} {viewSupplier?.city ? `, ${viewSupplier.city}` : ""}{" "}
@@ -1830,6 +1839,9 @@ export default function PurchaseOrders() {
                         </div>
                         <div className="text-muted-foreground">Phone: {viewSupplier?.phone ?? "—"}</div>
                         <div className="text-muted-foreground">Email: {viewSupplier?.email ?? "—"}</div>
+                        {!viewSupplier && viewPo.supplier_name_text && (
+                          <div className="text-xs text-amber-700 italic mt-1">Legacy PO — supplier not linked to supplier master</div>
+                        )}
                       </div>
                     </div>
                     <div className="flex-1 space-y-2">
@@ -1906,6 +1918,15 @@ export default function PurchaseOrders() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
+                        {(editMode ? editLineItems : viewPoLineItems).length === 0 && (
+                          <TableRow>
+                            <TableCell colSpan={10} className="text-center py-6 text-muted-foreground text-sm">
+                              {viewPo.source === "legacy"
+                                ? "No itemised line items — this is a legacy PO uploaded as a PDF. See Payment Schedule below for amounts."
+                                : "No line items"}
+                            </TableCell>
+                          </TableRow>
+                        )}
                         {(editMode ? editLineItems : viewPoLineItems).map((li, idx) => (
                           <TableRow key={li.id}>
                             <TableCell className="text-muted-foreground">{idx + 1}</TableCell>
@@ -1952,23 +1973,39 @@ export default function PurchaseOrders() {
                     </Table>
                   </div>
 
-                  {/* Footer totals */}
-                  <div className="flex items-end justify-end gap-6">
-                    <div className="min-w-[320px]">
-                      <div className="flex justify-between text-sm text-muted-foreground">
-                        <div>Sub Total</div>
-                        <div className="font-medium">{formatCurrency(viewPo.total_value, canViewPrices)}</div>
+                  {/* Footer totals — derive from payment schedule when line items are empty (legacy POs) */}
+                  {(() => {
+                    const scheduleTotal = viewPaymentSchedule.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                    const hasLineItems = viewPoLineItems.length > 0 || editLineItems.length > 0;
+                    const dbGrand = Number(viewPo.grand_total ?? 0);
+                    const showGrand = hasLineItems || dbGrand > 0 ? dbGrand : scheduleTotal;
+                    const showSub = hasLineItems || dbGrand > 0 ? Number(viewPo.total_value ?? 0) : scheduleTotal;
+                    const showGst = hasLineItems || dbGrand > 0 ? Number(viewPo.gst_amount ?? 0) : 0;
+                    const derivedFromSchedule = !hasLineItems && dbGrand === 0 && scheduleTotal > 0;
+                    return (
+                      <div className="flex items-end justify-end gap-6">
+                        <div className="min-w-[320px]">
+                          <div className="flex justify-between text-sm text-muted-foreground">
+                            <div>Sub Total</div>
+                            <div className="font-medium">{formatCurrency(showSub, canViewPrices)}</div>
+                          </div>
+                          <div className="flex justify-between text-sm text-muted-foreground mt-1">
+                            <div>GST Amount</div>
+                            <div className="font-medium">{formatCurrency(showGst, canViewPrices)}</div>
+                          </div>
+                          <div className="flex justify-between text-lg font-bold mt-3">
+                            <div>Grand Total</div>
+                            <div>{formatCurrency(showGrand, canViewPrices)}</div>
+                          </div>
+                          {derivedFromSchedule && (
+                            <div className="text-[10px] text-amber-700 italic mt-1 text-right">
+                              Derived from payment schedule
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex justify-between text-sm text-muted-foreground mt-1">
-                        <div>GST Amount</div>
-                        <div className="font-medium">{formatCurrency(viewPo.gst_amount, canViewPrices)}</div>
-                      </div>
-                      <div className="flex justify-between text-lg font-bold mt-3">
-                        <div>Grand Total</div>
-                        <div>{formatCurrency(viewPo.grand_total, canViewPrices)}</div>
-                      </div>
-                    </div>
-                  </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Terms */}
