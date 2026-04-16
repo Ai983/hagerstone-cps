@@ -154,12 +154,21 @@ export default function ApprovePoPage() {
 
     setSubmitting(true);
     try {
-      /* mark token used — procurement head sees responses individually */
+      /* mark token used */
       const { error: tokUpdErr } = await supabase
         .from("cps_po_approval_tokens")
         .update({ used_at: new Date().toISOString(), response: choice, reason: reason.trim() || null })
         .eq("id", tokenRow.id);
       if (tokUpdErr) throw tokUpdErr;
+
+      /* update PO founder_approval_status — status field has a DB constraint so we don't change it here */
+      await supabase
+        .from("cps_purchase_orders")
+        .update({
+          founder_approval_status: choice,
+          founder_approval_reason: reason.trim() || null,
+        })
+        .eq("id", tokenRow.po_id);
 
       setDone(true);
     } catch (e: any) {

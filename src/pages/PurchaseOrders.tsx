@@ -29,6 +29,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Info, PenLine, Plus, Search, Trash2, Upload } from "lucide-react";
 
 import LegacyPOUploadModal from "@/components/pos/LegacyPOUploadModal";
+import { PaymentTermsModal } from "@/components/procurement/PaymentTermsModal";
 
 type PoStatus =
   | "draft"
@@ -77,6 +78,13 @@ type PoRow = {
   bank_name?: string | null;
   bank_ifsc?: string | null;
   bank_account_number?: string | null;
+  // Payment terms fields (SPEC-01)
+  payment_terms_type?: string | null;
+  payment_terms_source?: string | null;
+  payment_terms_confidence?: number | null;
+  payment_due_date?: string | null;
+  finance_dispatch_status?: string | null;
+  finance_dispatch_sent_at?: string | null;
 };
 
 type SupplierRow = {
@@ -171,13 +179,41 @@ const statusBadgeCls: Record<string, string> = {
   pending_approval: "bg-amber-100 text-amber-800 border-amber-200",
   approved: "bg-green-100 text-green-800 border-green-200",
   rejected: "bg-red-100 text-red-800 border-red-200",
-  sent: "bg-blue-100 text-blue-800 border-blue-200",
+  sent: "bg-indigo-100 text-indigo-800 border-indigo-200",
   acknowledged: "bg-teal-100 text-teal-800 border-teal-200",
   dispatched: "bg-purple-100 text-purple-800 border-purple-200",
   delivered: "bg-green-100 text-green-800 border-green-200",
-  closed: "bg-muted text-muted-foreground border-border/80",
+  closed: "bg-gray-100 text-gray-600 border-gray-200",
   cancelled: "bg-red-100 text-red-800 border-red-200",
 };
+
+// Lifecycle display labels
+const STATUS_LABEL: Record<string, string> = {
+  draft:            "Draft",
+  pending_approval: "Sent to Founders",
+  approved:         "Founder Approved",
+  sent:             "Sent to Finance",
+  closed:           "Closed",
+  rejected:         "Rejected",
+  cancelled:        "Cancelled",
+  acknowledged:     "Acknowledged",
+  dispatched:       "Dispatched",
+  delivered:        "Delivered",
+};
+
+function poStatusDisplay(r: PoRow): { label: string; cls: string } {
+  const s = String(r.status ?? "draft");
+  if (s === "closed")    return { label: "Closed",           cls: statusBadgeCls.closed };
+  if (s === "cancelled") return { label: "Cancelled",        cls: statusBadgeCls.cancelled };
+  if (s === "rejected")  return { label: "Rejected",         cls: statusBadgeCls.rejected };
+  if (s === "sent")      return { label: "Sent to Finance",  cls: statusBadgeCls.sent };
+  if (r.founder_approval_status === "approved")
+                         return { label: "Founder Approved", cls: statusBadgeCls.approved };
+  if (s === "pending_approval" || r.founder_approval_status === "pending" || r.founder_approval_status === "sent")
+                         return { label: "Sent to Founders", cls: statusBadgeCls.pending_approval };
+  if (s === "draft")     return { label: "Draft",            cls: statusBadgeCls.draft };
+  return { label: STATUS_LABEL[s] ?? s, cls: statusBadgeCls[s] ?? statusBadgeCls.draft };
+}
 
 type CreateLine = {
   sort_order: number;
@@ -257,7 +293,17 @@ export default function PurchaseOrders() {
   const [rejectReason, setRejectReason] = useState<string>("");
   const [standardTnCs, setStandardTnCs] = useState<Record<string, string>>({});
   const [approveSending, setApproveSending] = useState(false);
+  const [resending, setResending] = useState(false);
   const [legacyModalOpen, setLegacyModalOpen] = useState(false);
+  const [paymentTermsModal, setPaymentTermsModal] = useState<{
+    open: boolean;
+    poId: string;
+    poNumber: string;
+    supplierName: string;
+    totalAmount: number;
+    projectSite: string;
+    linkedQuoteId?: string;
+  } | null>(null);
   const [isSingleVendor, setIsSingleVendor] = useState(false);
   const [singleVendorReason, setSingleVendorReason] = useState("");
 
@@ -322,7 +368,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at",
         )
         .order("created_at", { ascending: false });
 
@@ -683,7 +729,7 @@ export default function PurchaseOrders() {
             pr_id: (eligibleRfqsOptions.find((r) => r.id === selectedRfqId) as any)?.pr_id ?? null,
             supplier_id: createSupplierId,
             comparison_sheet_id: comparisonSheetId || null,
-            status: "draft",
+            status: "pending_approval",
             version: 1,
             project_code: prProjectCode || null,
             ship_to_address: createShipTo,
@@ -751,7 +797,13 @@ export default function PurchaseOrders() {
       const _shipTo = createShipTo;
       (async () => {
         try {
-          const origin = window.location.origin;
+          /* ── fetch portal_base_url from config (so links work from localhost too) ── */
+          const { data: baseUrlRow } = await supabase
+            .from("cps_config")
+            .select("value")
+            .eq("key", "portal_base_url")
+            .maybeSingle();
+          const origin = (baseUrlRow as any)?.value || window.location.origin;
 
           /* get supplier details for PDF */
           let supplierName = "";
@@ -1007,6 +1059,106 @@ export default function PurchaseOrders() {
     }
   };
 
+  const resendFounderNotification = async () => {
+    if (!viewPo) return;
+    setResending(true);
+    try {
+      const poId = viewPo.id;
+      const poNumber = viewPo.po_number;
+
+      /* check for existing active (unused + not expired) token for Bhaskar */
+      const { data: existingTokens } = await supabase
+        .from("cps_po_approval_tokens")
+        .select("id,token,expires_at,used_at")
+        .eq("po_id", poId)
+        .eq("founder_name", "Bhaskar")
+        .is("used_at", null);
+
+      let approvalToken: string;
+      const now = new Date();
+      const activeToken = (existingTokens ?? []).find((t: any) => new Date(t.expires_at) > now);
+
+      if (activeToken) {
+        /* reuse the existing valid token */
+        approvalToken = (activeToken as any).token;
+      } else {
+        /* delete expired/stale tokens and create a fresh one */
+        await supabase
+          .from("cps_po_approval_tokens")
+          .delete()
+          .eq("po_id", poId)
+          .is("used_at", null);
+
+        const { data: newTok, error: tokErr } = await supabase
+          .from("cps_po_approval_tokens")
+          .insert([{ po_id: poId, po_number: poNumber, founder_name: "Bhaskar" }])
+          .select("token")
+          .single();
+        if (tokErr || !newTok) throw new Error("Failed to create approval token");
+        approvalToken = (newTok as any).token;
+      }
+
+      /* fetch webhook + whatsapp config + portal base URL */
+      const { data: cfgRows } = await supabase
+        .from("cps_config")
+        .select("key,value")
+        .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar", "portal_base_url"]);
+      const cfgMap: Record<string, string> = {};
+      (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
+
+      const webhookUrl = cfgMap["webhook_po_founder_approval"];
+      if (!webhookUrl) throw new Error("webhook_po_founder_approval not configured in cps_config");
+
+      const bhaskarWA = cfgMap["founder_whatsapp_bhaskar"] || "919953001048";
+      const portalBase = cfgMap["portal_base_url"] || window.location.origin;
+      const bhaskarLink = `${portalBase}/approve-po?token=${approvalToken}`;
+      const supplierName = viewSupplier?.name ?? "";
+
+      /* fire webhook */
+      const resp = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "po_created",
+          po_id: poId,
+          po_number: poNumber,
+          supplier_name: supplierName,
+          grand_total: viewPo.grand_total,
+          gst_amount: viewPo.gst_amount,
+          total_value: viewPo.total_value,
+          payment_terms: viewPo.payment_terms || null,
+          delivery_date: viewPo.delivery_date || null,
+          po_pdf_url: (viewPo as any).po_pdf_url || null,
+          bhaskar_approval_link: bhaskarLink,
+          bhaskar_whatsapp: bhaskarWA,
+        }),
+      });
+
+      if (!resp.ok) throw new Error(`Webhook returned ${resp.status} — check n8n`);
+
+      /* ensure founder_approval_status is "pending" */
+      await supabase
+        .from("cps_purchase_orders")
+        .update({ founder_approval_status: "pending" })
+        .eq("id", poId);
+
+      toast.success("Approval message resent to Bhaskar");
+
+      /* refresh token display */
+      const { data: freshTokens } = await supabase
+        .from("cps_po_approval_tokens")
+        .select("id,founder_name,response,reason,used_at")
+        .eq("po_id", poId)
+        .order("created_at", { ascending: true });
+      setViewPoTokens((freshTokens ?? []) as Array<{ id: string; founder_name: string; response: string | null; reason: string | null; used_at: string | null }>);
+
+    } catch (e: any) {
+      toast.error("Resend failed: " + (e?.message ?? "unknown error"));
+    } finally {
+      setResending(false);
+    }
+  };
+
   const commitReject = async () => {
     if (!user || !viewPo) return;
     if (viewPo.status !== "pending_approval") {
@@ -1087,10 +1239,9 @@ export default function PurchaseOrders() {
     try {
       const now = new Date().toISOString();
       const { error } = await supabase.from("cps_purchase_orders").update({
-        status: "sent",
+        founder_approval_status: "approved",
         approved_by: user.id,
         approved_at: now,
-        sent_at: now,
       }).eq("id", viewPo.id);
       if (error) throw error;
 
@@ -1454,6 +1605,15 @@ export default function PurchaseOrders() {
                   canApprove={canApprove}
                   onApprove={(po) => openView(po.id)}
                   onReject={(po) => openView(po.id)}
+                  onSetPaymentTerms={(po, supplierName) => setPaymentTermsModal({
+                    open: true,
+                    poId: po.id,
+                    poNumber: po.po_number,
+                    supplierName,
+                    totalAmount: po.grand_total ?? 0,
+                    projectSite: po.ship_to_address ?? '',
+                    linkedQuoteId: undefined,
+                  })}
                 />
               )}
             </TableBody>
@@ -1481,20 +1641,10 @@ export default function PurchaseOrders() {
                       )}
                     </div>
                     <div className="flex flex-col items-end gap-1">
-                      <Badge className={`text-xs border-0 ${statusBadgeCls[String(r.status)] ?? statusBadgeCls.draft}`}>{r.status}</Badge>
-                      {r.source === "legacy" && r.founder_approval_status && (
-                        <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none ${
-                          r.founder_approval_status === "approved" ? "bg-green-100 text-green-800 border-green-200" :
-                          r.founder_approval_status === "rejected" ? "bg-red-100 text-red-800 border-red-200" :
-                          r.founder_approval_status === "sent" ? "bg-blue-100 text-blue-800 border-blue-200" :
-                          "bg-muted text-muted-foreground border-border/80"
-                        }`}>
-                          {r.founder_approval_status === "approved" ? "Founder Approved" :
-                           r.founder_approval_status === "rejected" ? "Rejected by Founder" :
-                           r.founder_approval_status === "sent" ? "⏳ Awaiting Founder" :
-                           "Pending Approval"}
-                        </span>
-                      )}
+                      {(() => {
+                        const { label, cls } = poStatusDisplay(r);
+                        return <Badge className={`text-xs border-0 ${cls}`}>{label}</Badge>;
+                      })()}
                     </div>
                   </div>
                   <div className="text-xs text-muted-foreground">
@@ -1516,6 +1666,17 @@ export default function PurchaseOrders() {
         onClose={() => setLegacyModalOpen(false)}
         onSuccess={fetchPoRows}
       />
+
+      {paymentTermsModal && (
+        <PaymentTermsModal
+          {...paymentTermsModal}
+          onSuccess={() => {
+            setPaymentTermsModal(null);
+            fetchPoRows();
+          }}
+          onClose={() => setPaymentTermsModal(null)}
+        />
+      )}
 
       {/* Create PO Dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -1885,7 +2046,7 @@ export default function PurchaseOrders() {
                     {viewRfq?.rfq_number && (
                       <div className="text-xs text-muted-foreground">RFQ: <span className="font-mono text-primary">{viewRfq.rfq_number}</span></div>
                     )}
-                    <Badge className={`text-xs border-0 ${statusBadgeCls[viewPo.status] ?? statusBadgeCls.draft}`}>{viewPo.status}</Badge>
+                    {(() => { const { label, cls } = poStatusDisplay(viewPo); return <Badge className={`text-xs border-0 ${cls}`}>{label}</Badge>; })()}
                     <div className="text-sm text-muted-foreground">Created: {formatDateTime(viewPo.created_at)}</div>
                     {viewPo.approved_at && (
                       <div className="text-xs text-muted-foreground">Approved: {formatDateTime(viewPo.approved_at)}</div>
@@ -2357,121 +2518,65 @@ export default function PurchaseOrders() {
                     </div>
                   )}
 
-                  {viewPo.status === "draft" && isProcurementHead && (
-                    <div className="flex items-start justify-between gap-4 flex-wrap">
-                      <div className="space-y-1">
-                        <div className="text-sm font-medium">PO is awaiting approval</div>
-                        <div className="text-sm text-muted-foreground">Review founder feedback above, then send to supplier.</div>
+                  {/* Lifecycle status banners */}
+                  {(viewPo.status === "pending_approval" || viewPo.status === "draft") && viewPo.founder_approval_status !== "approved" && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex items-start justify-between gap-4 flex-wrap">
+                      <div className="space-y-1 flex-1">
+                        <div className="text-sm font-semibold text-amber-900">⏳ Awaiting Founder Approval</div>
+                        <div className="text-xs text-amber-700">WhatsApp approval request sent. This PO will move to "Founder Approved" once the founder responds via their link.</div>
                       </div>
-                      <div className="flex gap-3">
-                        <Button
-                          onClick={() => {
-                            const reason = window.prompt("Rejection reason:");
-                            if (reason !== null) commitRejectWithReason(reason);
-                          }}
-                          variant="destructive"
-                        >
-                          Reject PO
-                        </Button>
-                        {(() => {
-                          const selfCreated = viewPo.created_by != null && viewPo.created_by === user?.id;
-                          const hasTokens = viewPoTokens.length > 0;
-                          const anyApproved = viewPoTokens.some(t => t.response === "approved");
-                          const anyRejected = viewPoTokens.some(t => t.response === "rejected");
-                          const founderApprovalComplete = hasTokens && anyApproved && !anyRejected;
-                          const founderBlocked = hasTokens && (!anyApproved || anyRejected);
-                          // Self-created restriction is waived when founders have already approved
-                          const isDisabled = approveSending || founderBlocked || (!founderApprovalComplete && selfCreated);
-                          const tooltipMsg = anyRejected
-                            ? "Cannot send — a founder has rejected this PO"
-                            : founderBlocked
-                            ? "Waiting for at least one founder to approve"
-                            : !founderApprovalComplete && selfCreated
-                            ? "You cannot approve a PO you created"
-                            : null;
-                          return (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span>
-                                  <Button
-                                    onClick={approveSendPo}
-                                    disabled={isDisabled}
-                                    className="bg-green-600 hover:bg-green-700 text-white"
-                                  >
-                                    {approveSending ? "Sending..." : "Send to Supplier"}
-                                  </Button>
-                                </span>
-                              </TooltipTrigger>
-                              {tooltipMsg && <TooltipContent>{tooltipMsg}</TooltipContent>}
-                            </Tooltip>
-                          );
-                        })()}
-                      </div>
+                      {isProcurementHead && (
+                        <div className="flex gap-2 flex-shrink-0">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-amber-400 text-amber-800 hover:bg-amber-100"
+                            disabled={resending}
+                            onClick={resendFounderNotification}
+                          >
+                            {resending ? "Sending…" : "Resend to Founders"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => {
+                              const reason = window.prompt("Rejection reason:");
+                              if (reason !== null) commitRejectWithReason(reason);
+                            }}
+                          >
+                            Reject PO
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   )}
 
-                  {viewPo.status === "pending_approval" && canApprove ? (
-                    <>
-                      <div className="flex items-start justify-between gap-4 flex-wrap">
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium">Approval</div>
-                          <div className="text-sm text-muted-foreground">Review founder feedback above, then send to supplier.</div>
-                        </div>
-                        <div className="flex items-center gap-3 flex-wrap justify-end">
-                          <div className="space-y-2">
-                            <div className="text-sm font-medium">Approval Notes (optional)</div>
-                            <Textarea rows={2} value={approvalNotes} onChange={(e) => setApprovalNotes(e.target.value)} />
-                          </div>
-                          <div className="flex items-center gap-3 flex-wrap">
-                            {viewPo.created_by && viewPo.created_by === user?.id ? (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span>
-                                    <Button disabled className="bg-green-600 hover:bg-green-700">
-                                      Approve PO
-                                    </Button>
-                                  </span>
-                                </TooltipTrigger>
-                                <TooltipContent>You cannot approve a PO you created</TooltipContent>
-                              </Tooltip>
-                            ) : (
-                              <Button onClick={commitApprove} variant="default" className="bg-green-600 hover:bg-green-700">
-                                Send to Supplier
-                              </Button>
-                            )}
-
-                            <div className="space-y-2">
-                              <div className="text-sm font-medium text-destructive">Reject Reason</div>
-                              <Textarea rows={2} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Required reason for rejection" />
-                              <Button onClick={commitReject} variant="destructive" className="mt-1">
-                                Reject
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
+                  {(viewPo.status === "pending_approval" || viewPo.status === "draft") && viewPo.founder_approval_status === "approved" && (
+                    <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-1">
+                      <div className="text-sm font-semibold text-green-900">✅ Founder Approved</div>
+                      <div className="text-xs text-green-700">
+                        Close this dialog and click <strong>"Set Payment Terms"</strong> on the PO row to forward to Finance.
                       </div>
-                    </>
-                  ) : null}
-
-                  {!["pending_approval", "draft", "rejected", "cancelled"].includes(String(viewPo.status)) ? (
-                    <div className="text-sm text-muted-foreground">
-                      Current status: <span className="font-medium text-foreground">{viewPo.status}</span>
-                      {viewPo.approved_by && (
-                        <span> · Approved by {viewApprovedByUser?.name ?? "—"} on {formatDateTime(viewPo.approved_at)}</span>
+                      {viewPo.approved_at && (
+                        <div className="text-xs text-green-600">Approved: {formatDateTime(viewPo.approved_at)}</div>
                       )}
                     </div>
-                  ) : null}
+                  )}
 
-                  {viewPo.status === "approved" && (
-                    <div className="flex items-start justify-between gap-4 flex-wrap">
-                      <div className="space-y-1">
-                        <div className="text-sm font-medium">
-                          Approved by {viewApprovedByUser?.name ?? "—"} on {formatDateTime(viewPo.approved_at)}
-                        </div>
-                      </div>
-                      <Button onClick={sendToSupplier} className="bg-blue-600 hover:bg-blue-700">
-                        Send to Supplier
-                      </Button>
+                  {viewPo.status === "sent" && (
+                    <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 space-y-1">
+                      <div className="text-sm font-semibold text-indigo-900">📤 Sent to Finance</div>
+                      <div className="text-xs text-indigo-700">Payment terms have been set and this PO has been forwarded to the Finance team for payment processing.</div>
+                      {viewPo.payment_terms_type && (
+                        <div className="text-xs text-indigo-600 font-medium">Terms: {viewPo.payment_terms_type}</div>
+                      )}
+                    </div>
+                  )}
+
+                  {viewPo.status === "closed" && (
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-1">
+                      <div className="text-sm font-semibold text-gray-700">✔ Closed</div>
+                      <div className="text-xs text-gray-500">This PO has been paid and closed by Finance.</div>
                     </div>
                   )}
                 </div>
@@ -2548,6 +2653,7 @@ function PoTableRows({
   onView,
   userId,
   canApprove,
+  onSetPaymentTerms,
 }: {
   poRows: PoRow[];
   canViewPrices: boolean;
@@ -2556,6 +2662,7 @@ function PoTableRows({
   canApprove: boolean;
   onApprove: (po: PoRow) => void;
   onReject: (po: PoRow) => void;
+  onSetPaymentTerms: (po: PoRow, supplierName: string) => void;
 }) {
   const { user } = useAuth();
   const [suppliersById, setSuppliersById] = useState<Record<string, SupplierRow>>({});
@@ -2665,22 +2772,24 @@ function PoTableRows({
             <TableCell className="text-right">{formatCurrency(r.grand_total, canViewPrices)}</TableCell>
             <TableCell className="text-muted-foreground">{formatDate(r.delivery_date)}</TableCell>
             <TableCell>
-              <div className="flex flex-col gap-1">
-                <Badge className={`text-xs border-0 ${statusBadgeCls[String(r.status)] ?? statusBadgeCls.draft}`}>{r.status}</Badge>
-                {r.founder_approval_status && (
-                  <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit ${
-                    r.founder_approval_status === "approved" ? "bg-green-100 text-green-800 border-green-200" :
-                    r.founder_approval_status === "rejected" ? "bg-red-100 text-red-800 border-red-200" :
-                    r.founder_approval_status === "sent" ? "bg-blue-100 text-blue-800 border-blue-200" :
-                    "bg-muted text-muted-foreground border-border/80"
-                  }`}>
-                    {r.founder_approval_status === "approved" ? "✅ Founder Approved" :
-                     r.founder_approval_status === "rejected" ? "❌ Rejected" :
-                     r.founder_approval_status === "sent" ? "📱 Sent to Founders" :
-                     "⏳ Awaiting Approval"}
-                  </span>
-                )}
-              </div>
+              {(() => {
+                const { label, cls } = poStatusDisplay(r);
+                return (
+                  <div className="flex flex-col gap-1">
+                    <Badge className={`text-xs border-0 ${cls}`}>{label}</Badge>
+                    {r.payment_terms_type && (
+                      <span className="text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit bg-indigo-50 text-indigo-700 border-indigo-200">
+                        💳 {r.payment_terms_type}
+                      </span>
+                    )}
+                    {r.finance_dispatch_status === "failed" && (
+                      <span className="text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit bg-red-50 text-red-700 border-red-200">
+                        ⚠ Dispatch failed
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
             </TableCell>
             <TableCell className="text-muted-foreground">{approvedBy?.name ?? "—"}</TableCell>
             <TableCell className="text-right">
@@ -2688,6 +2797,16 @@ function PoTableRows({
                 <Button variant="ghost" size="sm" onClick={() => onView(r.id)}>
                   View
                 </Button>
+                {r.founder_approval_status === "approved" && !["sent","closed","cancelled","rejected"].includes(String(r.status)) && !r.payment_terms_type && canApprove && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-amber-300 text-amber-700 hover:bg-amber-50 text-xs"
+                    onClick={() => onSetPaymentTerms(r, supplier?.name ?? (r.supplier_name_text || ""))}
+                  >
+                    Set Payment Terms
+                  </Button>
+                )}
                 {canApproveThis ? (
                   canApproveByAntiCorruption ? (
                     <Button
