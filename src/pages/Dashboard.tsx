@@ -64,6 +64,8 @@ export default function Dashboard() {
   const [incompleteVendorCount, setIncompleteVendorCount] = useState(0);
 
   const hideValues = user?.role === "requestor" || user?.role === "site_receiver";
+  const [lang, setLang] = useState<'en' | 'hi'>('hi');
+  const t = (en: string, hi: string) => lang === 'hi' ? hi : en;
 
   useEffect(() => {
     fetchAll();
@@ -268,20 +270,20 @@ export default function Dashboard() {
 
   const kpis = useMemo(() => {
     const base = [
-      { title: "Total PRs", value: totalPRs, icon: FileText, color: "text-blue-600", bg: "bg-blue-50", note: "All purchase requisitions" },
-      { title: "Active RFQs", value: activeRFQs, icon: Send, color: "text-purple-600", bg: "bg-purple-50", note: "Sent / awaiting response" },
-      { title: "Quotes Pending Review", value: quotesPending, icon: MessageSquare, color: "text-amber-600", bg: "bg-amber-50", note: "Needs manual review" },
-      { title: "Active POs", value: activePOs, icon: ShoppingCart, color: "text-green-600", bg: "bg-green-50", note: "Approved through dispatched" },
-      { title: "Pending GRNs", value: pendingGRNs, icon: Truck, color: "text-orange-600", bg: "bg-orange-50", note: "Delivered, awaiting GRN" },
-      { title: "Total Suppliers", value: totalSuppliers, icon: Users, color: "text-teal-600", bg: "bg-teal-50", note: "Active suppliers" },
+      { title: t("Total PRs", "Kul Requests"), value: totalPRs, icon: FileText, color: "text-blue-600", bg: "bg-blue-50", note: t("All purchase requisitions", "Saari purchase requests") },
+      { title: t("Active RFQs", "Active RFQs"), value: activeRFQs, icon: Send, color: "text-purple-600", bg: "bg-purple-50", note: t("Sent / awaiting response", "Bheja gaya / jawab pending") },
+      { title: t("Quotes Pending Review", "Quotes Review Baaki"), value: quotesPending, icon: MessageSquare, color: "text-amber-600", bg: "bg-amber-50", note: t("Needs manual review", "Review karna hai") },
+      { title: t("Active POs", "Active POs"), value: activePOs, icon: ShoppingCart, color: "text-green-600", bg: "bg-green-50", note: t("Approved through dispatched", "Approved se dispatched tak") },
+      { title: t("Pending GRNs", "Delivery Pending"), value: pendingGRNs, icon: Truck, color: "text-orange-600", bg: "bg-orange-50", note: t("Delivered, awaiting GRN", "Deliver hua, GRN baaki") },
+      { title: t("Total Suppliers", "Kul Suppliers"), value: totalSuppliers, icon: Users, color: "text-teal-600", bg: "bg-teal-50", note: t("Active suppliers", "Active suppliers") },
     ];
     return base;
-  }, [totalPRs, activeRFQs, quotesPending, activePOs, pendingGRNs, totalSuppliers]);
+  }, [totalPRs, activeRFQs, quotesPending, activePOs, pendingGRNs, totalSuppliers, lang]);
 
   const priceKpis = canViewPrices
     ? [
-        { title: "Total PO Value", value: formatCurrency(totalPOValue), icon: IndianRupee, color: "text-emerald-600", bg: "bg-emerald-50", note: "Sum of all PO grand totals" },
-        { title: "Avg Savings vs Benchmark", value: avgSavings != null ? `${avgSavings.toFixed(1)}%` : "—", icon: TrendingDown, color: "text-rose-600", bg: "bg-rose-50", note: "From comparison sheets" },
+        { title: t("Total PO Value", "Total PO Value"), value: formatCurrency(totalPOValue), icon: IndianRupee, color: "text-emerald-600", bg: "bg-emerald-50", note: t("Sum of all PO grand totals", "Saare POs ka total") },
+        { title: t("Avg Savings vs Benchmark", "Avg Savings"), value: avgSavings != null ? `${avgSavings.toFixed(1)}%` : "—", icon: TrendingDown, color: "text-rose-600", bg: "bg-rose-50", note: t("From comparison sheets", "Comparison sheets se") },
       ]
     : [];
 
@@ -289,19 +291,19 @@ export default function Dashboard() {
     const role = user?.role;
     if (role === "requestor") return [{ label: "Naya Saman Mangwao", path: "/requisitions", icon: Plus }];
     if (role === "procurement_executive") return [
-      { label: "Create RFQ", path: "/rfqs", icon: Send },
-      { label: "Review Quotes", path: "/quotes", icon: Eye },
+      { label: t("Create RFQ", "RFQ Banao"), path: "/rfqs", icon: Send },
+      { label: t("Review Quotes", "Quotes Dekho"), path: "/quotes", icon: Eye },
     ];
     if (role === "procurement_head" || role === "it_head") return [
-      { label: "Pending Approvals", path: "/purchase-orders?status=pending_approval", icon: CheckCircle2 },
-      { label: "Create PO", path: "/purchase-orders", icon: ShoppingCart },
+      { label: t("Pending Approvals", "Approval Pending"), path: "/purchase-orders?status=pending_approval", icon: CheckCircle2 },
+      { label: t("Create PO", "PO Banao"), path: "/purchase-orders", icon: ShoppingCart },
     ];
     if (role === "management") return [
-      { label: "View Reports", path: "/audit", icon: BarChart3 },
-      { label: "Pending Approvals", path: "/purchase-orders?status=pending_approval", icon: CheckCircle2 },
+      { label: t("View Reports", "Reports Dekho"), path: "/audit", icon: BarChart3 },
+      { label: t("Pending Approvals", "Approval Pending"), path: "/purchase-orders?status=pending_approval", icon: CheckCircle2 },
     ];
-    return [{ label: "View Dashboard", path: "/dashboard", icon: ClipboardList }];
-  }, [user?.role]);
+    return [{ label: t("View Dashboard", "Dashboard Dekho"), path: "/dashboard", icon: ClipboardList }];
+  }, [user?.role, lang]);
 
   return (
     <div className="space-y-8">
@@ -311,7 +313,10 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold text-foreground">{greeting}, {user?.name?.split(" ")[0]} 👋</h1>
           <p className="text-muted-foreground text-sm mt-1">{dateStr}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button size="sm" variant="outline" onClick={() => setLang(l => l === 'en' ? 'hi' : 'en')}>
+            {lang === 'en' ? 'Hinglish' : 'English'}
+          </Button>
           {quickActions.map((a) => (
             <Button key={a.label} variant="outline" size="sm" onClick={() => navigate(a.path)}>
               <a.icon className="h-4 w-4 mr-2" />
@@ -387,31 +392,31 @@ export default function Dashboard() {
         <Card className="border-amber-200 bg-amber-50/40">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold text-amber-800 flex items-center gap-2">
-              📄 Manual Entries This Month
+              📄 {t("Manual Entries This Month", "Is Maheene ke Manual Entries")}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1.5 pt-0">
             {legacyPOCount > 0 && (
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Legacy POs</span>
+                <span className="text-muted-foreground">{t("Legacy POs", "Legacy POs")}</span>
                 <Badge className="bg-amber-100 text-amber-800 border border-amber-300 text-xs">{legacyPOCount}</Badge>
               </div>
             )}
             {legacyQuoteCount > 0 && (
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Legacy Quotes</span>
+                <span className="text-muted-foreground">{t("Legacy Quotes", "Legacy Quotes")}</span>
                 <Badge className="bg-amber-100 text-amber-800 border border-amber-300 text-xs">{legacyQuoteCount}</Badge>
               </div>
             )}
             {incompleteVendorCount > 0 && (
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">New Vendors (incomplete profile)</span>
+                <span className="text-muted-foreground">{t("New Vendors (incomplete profile)", "Naye Vendors (profile adhoori)")}</span>
                 <Badge className="bg-blue-100 text-blue-800 border border-blue-300 text-xs">{incompleteVendorCount}</Badge>
               </div>
             )}
             <div className="pt-1">
               <Button variant="ghost" size="sm" className="text-xs text-amber-700 h-7 px-2" onClick={() => navigate("/suppliers")}>
-                View All →
+                {t("View All →", "Sab Dekho →")}
               </Button>
             </div>
           </CardContent>
@@ -422,19 +427,19 @@ export default function Dashboard() {
       {canApprove && pendingApprovals.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base font-semibold">Pending Approvals</CardTitle>
+            <CardTitle className="text-base font-semibold">{t("Pending Approvals", "Approval Pending")}</CardTitle>
             <Badge variant="outline" className="text-amber-600 border-amber-300 bg-amber-50">
-              {pendingApprovals.length} pending
+              {pendingApprovals.length} {t("pending", "baaki")}
             </Badge>
           </CardHeader>
           <CardContent className="p-0">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>PO Number</TableHead>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>Grand Total</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
+                  <TableHead>{t("PO Number", "PO Number")}</TableHead>
+                  <TableHead>{t("Supplier", "Supplier")}</TableHead>
+                  <TableHead>{t("Grand Total", "Total Amount")}</TableHead>
+                  <TableHead className="text-right">{t("Action", "Action")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -452,7 +457,7 @@ export default function Dashboard() {
                         disabled={approvingId === po.id}
                         onClick={() => quickApprove(po)}
                       >
-                        {approvingId === po.id ? "Approving..." : "Approve"}
+                        {approvingId === po.id ? t("Approving...", "Ho raha hai...") : t("Approve", "Approve Karo")}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -469,7 +474,7 @@ export default function Dashboard() {
           <CardHeader className="flex flex-row items-center justify-between pb-3">
             <CardTitle className="text-base font-semibold flex items-center gap-2">
               <Bell className="h-4 w-4 text-primary" />
-              Notifications
+              {t("Notifications", "Notifications")}
             </CardTitle>
             <Badge variant="outline" className="text-primary border-primary/30 bg-primary/5">
               {notifications.length}
@@ -482,8 +487,8 @@ export default function Dashboard() {
                 quote_uploaded: "bg-green-100 text-green-800",
               };
               const labels: Record<string, string> = {
-                pr_raised: "New PR",
-                quote_uploaded: "Quote",
+                pr_raised: t("New PR", "Naya PR"),
+                quote_uploaded: t("Quote", "Quote"),
               };
               const ts = new Date(n.ts);
               const timeStr = ts.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -514,7 +519,7 @@ export default function Dashboard() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base font-semibold flex items-center gap-2">
-              🖼️ Site Reference Images
+              🖼️ {t("Site Reference Images", "Site ki Photos")}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -537,19 +542,19 @@ export default function Dashboard() {
       {canViewAudit && recentActivity.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base font-semibold">Recent Activity</CardTitle>
+            <CardTitle className="text-base font-semibold">{t("Recent Activity", "Recent Kaam")}</CardTitle>
             <Button variant="ghost" size="sm" onClick={() => navigate("/audit")}>
-              View All <ArrowRight className="h-4 w-4 ml-1" />
+              {t("View All", "Sab Dekho")} <ArrowRight className="h-4 w-4 ml-1" />
             </Button>
           </CardHeader>
           <CardContent className="p-0">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Time</TableHead>
-                  <TableHead>User</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Description</TableHead>
+                  <TableHead>{t("Time", "Samay")}</TableHead>
+                  <TableHead>{t("User", "User")}</TableHead>
+                  <TableHead>{t("Action", "Kaam")}</TableHead>
+                  <TableHead>{t("Description", "Details")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -558,7 +563,7 @@ export default function Dashboard() {
                     <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
                       {new Date(row.logged_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                     </TableCell>
-                    <TableCell className="text-sm">{row.user_name ?? "System"}</TableCell>
+                    <TableCell className="text-sm">{row.user_name ?? t("System", "System")}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-xs">{row.action_type}</Badge>
                     </TableCell>
