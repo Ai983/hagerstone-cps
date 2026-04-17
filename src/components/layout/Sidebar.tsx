@@ -23,9 +23,9 @@ const NAV = [
 
 const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Purchase Requests", url: "/requisitions", icon: FileText },
-  { title: "Delivery Tracker", url: "/delivery", icon: Truck },
-  { title: "Item Master", url: "/items", icon: Package },
+  { title: "Meri Requests", url: "/requisitions", icon: FileText },
+  { title: "Delivery Status", url: "/delivery", icon: Truck },
+  { title: "Saman List", url: "/items", icon: Package },
 ];
 
 export function AppSidebar() {

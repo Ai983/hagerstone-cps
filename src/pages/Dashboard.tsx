@@ -287,7 +287,7 @@ export default function Dashboard() {
 
   const quickActions = useMemo(() => {
     const role = user?.role;
-    if (role === "requestor") return [{ label: "Raise New PR", path: "/requisitions", icon: Plus }];
+    if (role === "requestor") return [{ label: "Naya Saman Mangwao", path: "/requisitions", icon: Plus }];
     if (role === "procurement_executive") return [
       { label: "Create RFQ", path: "/rfqs", icon: Send },
       { label: "Review Quotes", path: "/quotes", icon: Eye },
@@ -327,19 +327,19 @@ export default function Dashboard() {
           <div className="grid grid-cols-2 gap-3">
             <Card className="shadow-sm">
               <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground mb-1">My Purchase Requests</div>
+                <div className="text-xs text-muted-foreground mb-1">Meri Requests</div>
                 <div className="text-3xl font-bold text-foreground">{loading ? <Skeleton className="h-8 w-16" /> : totalPRs}</div>
               </CardContent>
             </Card>
             <Card className="shadow-sm">
               <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground mb-1">Pending Deliveries</div>
+                <div className="text-xs text-muted-foreground mb-1">Baki Delivery</div>
                 <div className="text-3xl font-bold text-foreground">{loading ? <Skeleton className="h-8 w-16" /> : pendingGRNs}</div>
               </CardContent>
             </Card>
           </div>
           <Button className="w-full h-12 text-base" onClick={() => navigate('/requisitions')}>
-            <Plus className="h-5 w-5 mr-2" /> Raise Purchase Request
+            <Plus className="h-5 w-5 mr-2" /> Naya Saman Mangwao
           </Button>
         </div>
       )}

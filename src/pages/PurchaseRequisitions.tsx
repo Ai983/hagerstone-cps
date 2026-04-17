@@ -63,28 +63,28 @@ type ProjectRow = {
 };
 
 const hindi: Record<string, string> = {
-  "Purchase Requisitions": "खरीद अनुरोध",
-  "New PR": "नया अनुरोध",
-  "Project Site": "प्रोजेक्ट साइट",
-  "Project Code": "प्रोजेक्ट कोड",
-  "Required By Date": "आवश्यकता तिथि",
-  "Notes": "टिप्पणी",
-  "Notes / Special Instructions": "टिप्पणी / विशेष निर्देश",
-  "Items Required": "आवश्यक सामग्री",
-  "Material Name": "सामग्री का नाम",
-  "Quantity": "मात्रा",
-  "Unit": "इकाई",
-  "Submit PR": "अनुरोध जमा करें",
-  "Cancel": "रद्द करें",
-  "Add Item": "सामग्री जोड़ें",
-  "Search items": "सामग्री खोजें",
-  "PR Number": "अनुरोध संख्या",
-  "Status": "स्थिति",
-  "Raised On": "दिनांक",
-  "View": "देखें",
-  "Step 1 of procurement — raise a material request": "चरण 1 — सामग्री अनुरोध दर्ज करें",
-  "Preferred Brand": "पसंदीदा ब्रांड",
-  "Required for Which Work": "किस कार्य के लिए आवश्यक",
+  "Purchase Requisitions": "Meri Purchase Requests",
+  "New PR": "Naya Request",
+  "Project Site": "Project Site",
+  "Project Code": "Project Code",
+  "Required By Date": "Kab Chahiye?",
+  "Notes": "Notes",
+  "Notes / Special Instructions": "Koi Special Baat",
+  "Items Required": "Kya Kya Chahiye",
+  "Material Name": "Saman ka Naam",
+  "Quantity": "Kitna Chahiye",
+  "Unit": "Unit",
+  "Submit PR": "Request Bhejo",
+  "Cancel": "Cancel",
+  "Add Item": "Aur Saman Jodo",
+  "Search items": "Saman Dhundo",
+  "PR Number": "Request Number",
+  "Status": "Status",
+  "Raised On": "Kab Maanga",
+  "View": "Dekho",
+  "Step 1 of procurement — raise a material request": "Yahan apna saman request karo — procurement team baki kaam karegi",
+  "Preferred Brand": "Brand (Agar Pata Ho)",
+  "Required for Which Work": "Kis Kaam ke Liye",
 };
 
 type LineItem = {
@@ -192,8 +192,13 @@ export default function PurchaseRequisitions() {
   const [loading, setLoading] = useState(true);
   const [itemsLoading, setItemsLoading] = useState(true);
 
-  const [lang, setLang] = useState<'en' | 'hi'>('en');
+  const isRequestor = user?.role === 'requestor' || user?.role === 'site_receiver';
+  const [lang, setLang] = useState<'en' | 'hi'>(isRequestor ? 'hi' : 'en');
   const t = (key: string) => lang === 'hi' ? (hindi[key] ?? key) : key;
+
+  useEffect(() => {
+    if (isRequestor) setLang('hi');
+  }, [isRequestor]);
 
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [projectSelMode, setProjectSelMode] = useState<'select' | 'text'>('select');
@@ -759,7 +764,7 @@ export default function PurchaseRequisitions() {
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setLang(l => l === 'en' ? 'hi' : 'en')}>
-            {lang === 'en' ? 'हिंदी' : 'English'}
+            {lang === 'en' ? 'Hinglish' : 'English'}
           </Button>
           <Button onClick={() => openWizard()} className="h-11 sm:h-9">
             <Plus className="h-4 w-4 mr-2" />
@@ -771,12 +776,12 @@ export default function PurchaseRequisitions() {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { label: "Total PRs", count: statusCounts.all, color: "text-blue-700", bg: "bg-blue-50" },
-          { label: "Pending Review", count: statusCounts.review, color: "text-amber-700", bg: "bg-amber-50" },
-          { label: "Validated", count: statusCounts.validated, color: "text-cyan-700", bg: "bg-cyan-50" },
-          { label: "RFQ Created", count: statusCounts.rfq_created, color: "text-violet-700", bg: "bg-violet-50" },
-          { label: "Duplicate Flagged", count: statusCounts.duplicate_flagged, color: "text-orange-700", bg: "bg-orange-50" },
-          { label: "Cancelled", count: statusCounts.cancelled, color: "text-red-700", bg: "bg-red-50" },
+          { label: lang === 'hi' ? "Saari Requests" : "Total PRs", count: statusCounts.all, color: "text-blue-700", bg: "bg-blue-50" },
+          { label: lang === 'hi' ? "Review Mein Hai" : "Pending Review", count: statusCounts.review, color: "text-amber-700", bg: "bg-amber-50" },
+          { label: lang === 'hi' ? "Approved" : "Validated", count: statusCounts.validated, color: "text-cyan-700", bg: "bg-cyan-50" },
+          { label: lang === 'hi' ? "Supplier Ko Bheja" : "RFQ Created", count: statusCounts.rfq_created, color: "text-violet-700", bg: "bg-violet-50" },
+          { label: lang === 'hi' ? "Duplicate" : "Duplicate Flagged", count: statusCounts.duplicate_flagged, color: "text-orange-700", bg: "bg-orange-50" },
+          { label: lang === 'hi' ? "Cancel" : "Cancelled", count: statusCounts.cancelled, color: "text-red-700", bg: "bg-red-50" },
         ].map((k) => (
           <Card key={k.label} className="shadow-sm">
             <CardContent className={`p-4 ${k.bg}`}>
@@ -790,15 +795,15 @@ export default function PurchaseRequisitions() {
       {/* Status Tabs */}
       <Tabs value={statusFilter} onValueChange={setStatusFilter} className="w-full">
         <TabsList className="w-full overflow-x-auto justify-start flex-nowrap h-auto p-1">
-          <TabsTrigger value="all" className="text-xs gap-1.5">All <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.all}</Badge></TabsTrigger>
+          <TabsTrigger value="all" className="text-xs gap-1.5">{lang === 'hi' ? 'Sab' : 'All'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.all}</Badge></TabsTrigger>
           <TabsTrigger value="review" className="text-xs gap-1.5">
-            <ClipboardCheck className="h-3 w-3" /> Pending Review <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.review}</Badge>
+            <ClipboardCheck className="h-3 w-3" /> {lang === 'hi' ? 'Review Mein' : 'Pending Review'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.review}</Badge>
           </TabsTrigger>
-          <TabsTrigger value="validated" className="text-xs gap-1.5">Validated <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.validated}</Badge></TabsTrigger>
-          <TabsTrigger value="rfq_created" className="text-xs gap-1.5">RFQ Created <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.rfq_created}</Badge></TabsTrigger>
+          <TabsTrigger value="validated" className="text-xs gap-1.5">{lang === 'hi' ? 'Approved' : 'Validated'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.validated}</Badge></TabsTrigger>
+          <TabsTrigger value="rfq_created" className="text-xs gap-1.5">{lang === 'hi' ? 'Supplier Ko Bheja' : 'RFQ Created'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.rfq_created}</Badge></TabsTrigger>
           <TabsTrigger value="duplicate_flagged" className="text-xs gap-1.5">Duplicate <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.duplicate_flagged}</Badge></TabsTrigger>
-          <TabsTrigger value="po_issued" className="text-xs gap-1.5">PO Issued <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.po_issued}</Badge></TabsTrigger>
-          <TabsTrigger value="cancelled" className="text-xs gap-1.5">Cancelled <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.cancelled}</Badge></TabsTrigger>
+          <TabsTrigger value="po_issued" className="text-xs gap-1.5">{lang === 'hi' ? 'PO Ban Gaya' : 'PO Issued'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.po_issued}</Badge></TabsTrigger>
+          <TabsTrigger value="cancelled" className="text-xs gap-1.5">{lang === 'hi' ? 'Cancel' : 'Cancelled'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.cancelled}</Badge></TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -1000,10 +1005,12 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      Which project is this for? <span className="text-muted-foreground/60">/ यह किस प्रोजेक्ट के लिए है?</span>{' '}
+                      {lang === 'hi' ? 'Ye saman kis project ke liye chahiye?' : 'Which project is this for?'}{' '}
                       <span className="text-primary">*</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Select a project to auto-fill the delivery address / प्रोजेक्ट चुनें</p>
+                    <p className="text-sm text-muted-foreground">
+                      {lang === 'hi' ? 'Project chuniye — delivery address automatic bhar jayega' : 'Select a project to auto-fill the delivery address'}
+                    </p>
                   </div>
                   <Select
                     value={wizProjectId}
@@ -1055,9 +1062,11 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      Delivery location <span className="text-muted-foreground/60">/ डिलीवरी का पता</span>
+                      {lang === 'hi' ? 'Delivery kahan karni hai?' : 'Delivery location'}
                     </p>
-                    <p className="text-sm text-muted-foreground">Pre-filled from project — edit if needed / प्रोजेक्ट से भरा है — जरूरत हो तो बदलें</p>
+                    <p className="text-sm text-muted-foreground">
+                      {lang === 'hi' ? 'Project se address aa gaya hai — zaroorat ho toh badlo' : 'Pre-filled from project — edit if needed'}
+                    </p>
                   </div>
                   <Textarea
                     autoFocus
@@ -1068,7 +1077,7 @@ export default function PurchaseRequisitions() {
                   />
                   <div className="flex items-center gap-3">
                     <Button variant="ghost" className="h-12 px-6 rounded-lg" onClick={() => setWizardStep(1)}>
-                      ← Back
+                      {lang === 'hi' ? '← Wapas' : '← Back'}
                     </Button>
                     <Button
                       className="h-12 px-8 rounded-lg"
@@ -1087,10 +1096,12 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      When do you need these? <span className="text-muted-foreground/60">/ इन सामग्रियों की कब जरूरत है?</span>{' '}
+                      {lang === 'hi' ? 'Saman kab tak chahiye?' : 'When do you need these?'}{' '}
                       <span className="text-primary">*</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Default is 2 weeks from today / डिफ़ॉल्ट: आज से 2 हफ्ते बाद</p>
+                    <p className="text-sm text-muted-foreground">
+                      {lang === 'hi' ? 'Default: aaj se 2 hafte baad' : 'Default is 2 weeks from today'}
+                    </p>
                   </div>
                   <Input
                     autoFocus
@@ -1102,7 +1113,7 @@ export default function PurchaseRequisitions() {
                   />
 
                   <div className="space-y-3 pt-2">
-                    <p className="text-sm font-medium text-foreground">Priority / प्राथमिकता</p>
+                    <p className="text-sm font-medium text-foreground">{lang === 'hi' ? 'Priority (Zaroorat kitni?)' : 'Priority'}</p>
                     <div className="flex flex-wrap gap-2">
                       {(["urgent", "high", "normal", "low"] as PRPriority[]).map((p) => (
                         <button
@@ -1120,13 +1131,13 @@ export default function PurchaseRequisitions() {
                       ))}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Use "Urgent" only when work is blocked / केवल अति-आवश्यक होने पर
+                      {lang === 'hi' ? '"Urgent" tabhi dalo jab kaam ruk gaya ho' : 'Use "Urgent" only when work is blocked'}
                     </p>
                   </div>
 
                   <div className="flex items-center gap-3">
                     <Button variant="ghost" className="h-12 px-6 rounded-lg" onClick={() => setWizardStep(2)}>
-                      ← Back
+                      {lang === 'hi' ? '← Wapas' : '← Back'}
                     </Button>
                     <Button
                       className="h-12 px-8 rounded-lg"
@@ -1145,16 +1156,19 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      What materials do you need? <span className="text-muted-foreground/60">/ आपको कौन सी सामग्री चाहिए?</span>
+                      {lang === 'hi' ? 'Kya kya saman chahiye?' : 'What materials do you need?'}{' '}
+                      <span className="text-primary">*</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Search item master or type manually / आइटम खोजें या मैन्युअल लिखें</p>
+                    <p className="text-sm text-muted-foreground">
+                      {lang === 'hi' ? 'Item list mein dhundo ya naam khud likho' : 'Search item master or type manually'}
+                    </p>
                   </div>
 
                   <div className="space-y-4 max-h-[55vh] overflow-y-auto pr-1">
                     {wizLineItems.map((li, idx) => (
                       <div key={li.rowKey} className="border border-border/60 rounded-xl p-4 space-y-3 bg-muted/20">
                         <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium text-muted-foreground">Item {idx + 1}</span>
+                          <span className="text-sm font-medium text-muted-foreground">{lang === 'hi' ? `Saman ${idx + 1}` : `Item ${idx + 1}`}</span>
                           {wizLineItems.length > 1 && (
                             <button
                               className="h-7 w-7 rounded-full flex items-center justify-center hover:bg-destructive/10 text-destructive transition-colors"
@@ -1323,7 +1337,7 @@ export default function PurchaseRequisitions() {
 
                         <div className="grid grid-cols-3 gap-3">
                           <div className="space-y-1">
-                            <Label className="text-xs text-muted-foreground">Quantity / <span className="text-muted-foreground/70">मात्रा</span></Label>
+                            <Label className="text-xs text-muted-foreground">{lang === 'hi' ? 'Kitna Chahiye' : 'Quantity'}</Label>
                             <Input
                               type="number"
                               min={1}
@@ -1333,7 +1347,7 @@ export default function PurchaseRequisitions() {
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs text-muted-foreground">Unit / <span className="text-muted-foreground/70">इकाई</span></Label>
+                            <Label className="text-xs text-muted-foreground">Unit</Label>
                             <Input
                               value={li.unit}
                               onChange={(e) => setWizLineItems((prev) => prev.map((r) => r.rowKey === li.rowKey ? { ...r, unit: e.target.value } : r))}
@@ -1341,7 +1355,7 @@ export default function PurchaseRequisitions() {
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs text-muted-foreground">Brand / <span className="text-muted-foreground/70">ब्रांड</span></Label>
+                            <Label className="text-xs text-muted-foreground">{lang === 'hi' ? 'Brand (Agar Pata Ho)' : 'Brand'}</Label>
                             <Input
                               value={li.preferredBrand}
                               onChange={(e) => setWizLineItems((prev) => prev.map((r) => r.rowKey === li.rowKey ? { ...r, preferredBrand: e.target.value } : r))}
@@ -1352,7 +1366,7 @@ export default function PurchaseRequisitions() {
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="space-y-1">
-                            <Label className="text-xs text-muted-foreground">Required for / <span className="text-muted-foreground/70">किस कार्य के लिए</span></Label>
+                            <Label className="text-xs text-muted-foreground">{lang === 'hi' ? 'Kis Kaam ke Liye' : 'Required for'}</Label>
                             <Input
                               value={li.requiredFor}
                               onChange={(e) => setWizLineItems((prev) => prev.map((r) => r.rowKey === li.rowKey ? { ...r, requiredFor: e.target.value } : r))}
@@ -1361,7 +1375,7 @@ export default function PurchaseRequisitions() {
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs text-muted-foreground">Colour / <span className="text-muted-foreground/70">रंग</span></Label>
+                            <Label className="text-xs text-muted-foreground">{lang === 'hi' ? 'Colour / Rang' : 'Colour'}</Label>
                             <Input
                               value={li.color}
                               onChange={(e) => setWizLineItems((prev) => prev.map((r) => r.rowKey === li.rowKey ? { ...r, color: e.target.value } : r))}
@@ -1374,7 +1388,7 @@ export default function PurchaseRequisitions() {
                         {/* Reference image upload */}
                         <div className="space-y-2">
                           <Label className="text-xs text-muted-foreground">
-                            Reference Photos / <span className="text-muted-foreground/70">संदर्भ फ़ोटो</span>
+                            {lang === 'hi' ? 'Reference Photo' : 'Reference Photos'}
                             <span className="ml-1 text-muted-foreground/50">({li.referenceImages.length}/5)</span>
                           </Label>
                           {li.referenceImages.length < 5 && (
@@ -1397,7 +1411,7 @@ export default function PurchaseRequisitions() {
                                   }}
                                 />
                                 <div className="h-10 flex items-center justify-center gap-1.5 rounded-lg border border-border/60 bg-muted/30 hover:bg-muted/60 transition-colors text-xs text-muted-foreground font-medium">
-                                  📷 Camera / कैमरा
+                                  {lang === 'hi' ? '📷 Camera' : '📷 Camera / Photo'}
                                 </div>
                               </label>
                               <label className="flex-1 cursor-pointer">
@@ -1417,7 +1431,7 @@ export default function PurchaseRequisitions() {
                                   }}
                                 />
                                 <div className="h-10 flex items-center justify-center gap-1.5 rounded-lg border border-border/60 bg-muted/30 hover:bg-muted/60 transition-colors text-xs text-muted-foreground font-medium">
-                                  🖼 Gallery / गैलरी
+                                  {lang === 'hi' ? '🖼 Gallery' : '🖼 Gallery'}
                                 </div>
                               </label>
                             </div>
@@ -1453,7 +1467,7 @@ export default function PurchaseRequisitions() {
 
                   <div className="flex items-center gap-3 pt-2">
                     <Button variant="ghost" className="h-11 px-6 rounded-lg" onClick={() => setWizardStep(3)}>
-                      ← Back
+                      {lang === 'hi' ? '← Wapas' : '← Back'}
                     </Button>
                     <Button
                       variant="outline"
@@ -1480,10 +1494,12 @@ export default function PurchaseRequisitions() {
                 <div className="space-y-6">
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
-                      Any special instructions? <span className="text-muted-foreground/60">/ कोई विशेष निर्देश?</span>{' '}
+                      {lang === 'hi' ? 'Koi special baat likhiye?' : 'Any special instructions?'}{' '}
                       <span className="text-primary">*</span>
                     </p>
-                    <p className="text-sm text-muted-foreground">Required — describe delivery/quality notes / आवश्यक — डिलीवरी/गुणवत्ता निर्देश लिखें</p>
+                    <p className="text-sm text-muted-foreground">
+                      {lang === 'hi' ? 'Zaroor likhein — delivery aur quality ke baare mein batayein' : 'Required — describe delivery/quality notes'}
+                    </p>
                   </div>
                   <Textarea
                     autoFocus
@@ -1493,7 +1509,7 @@ export default function PurchaseRequisitions() {
                     className={`text-base min-h-[120px] resize-none ${!wizNotes.trim() ? 'border-destructive/50' : ''}`}
                   />
                   {!wizNotes.trim() && (
-                    <p className="text-xs text-destructive">Please add instructions before submitting / कृपया निर्देश भरें</p>
+                    <p className="text-xs text-destructive">{lang === 'hi' ? 'Kuch toh likhiye — submit se pehle' : 'Please add instructions before submitting'}</p>
                   )}
                   <div className="flex items-center gap-3">
                     <Button
@@ -1501,14 +1517,14 @@ export default function PurchaseRequisitions() {
                       className="h-12 px-6 rounded-lg"
                       onClick={() => setWizardStep(4)}
                     >
-                      ← Back
+                      {lang === 'hi' ? '← Wapas' : '← Back'}
                     </Button>
                     <Button
                       className="h-12 px-8 rounded-lg"
                       disabled={wizSubmitting || !wizNotes.trim()}
                       onClick={submitWizard}
                     >
-                      {wizSubmitting ? "Submitting..." : (lang === 'hi' ? 'अनुरोध जमा करें' : 'Submit PR')}
+                      {wizSubmitting ? (lang === 'hi' ? 'Bhej rahe hain...' : 'Submitting...') : (lang === 'hi' ? 'Request Bhejo' : 'Submit PR')}
                     </Button>
                   </div>
                 </div>
@@ -1529,8 +1545,8 @@ export default function PurchaseRequisitions() {
                   <div className="space-y-2">
                     <p className="text-2xl md:text-3xl font-light text-foreground">
                       {wizDuplicates.length > 0
-                        ? "PR Submitted — but flagged as possible duplicate"
-                        : (lang === 'hi' ? 'PR सफलतापूर्वक जमा हुई!' : 'PR Submitted Successfully!')}
+                        ? (lang === 'hi' ? 'Request Bhej Di — lekin duplicate lag raha hai' : 'PR Submitted — but flagged as possible duplicate')
+                        : (lang === 'hi' ? 'Request Bhej Di! ✓' : 'PR Submitted Successfully!')}
                     </p>
                     <p className="text-muted-foreground">
                       <span className="font-mono text-primary font-semibold">{wizSuccess.prNumber}</span>
@@ -1563,10 +1579,10 @@ export default function PurchaseRequisitions() {
                   </div>
                   <div className="flex items-center justify-center gap-3 pt-4">
                     <Button variant="outline" className="h-11" onClick={() => setWizardOpen(false)}>
-                      View My PRs
+                      {lang === 'hi' ? 'Meri Requests Dekho' : 'View My PRs'}
                     </Button>
                     <Button className="h-11" onClick={openWizard}>
-                      Raise Another PR
+                      {lang === 'hi' ? 'Aur Request Karo' : 'Raise Another PR'}
                     </Button>
                   </div>
                 </div>
