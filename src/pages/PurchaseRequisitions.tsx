@@ -1059,8 +1059,8 @@ export default function PurchaseRequisitions() {
           </div>
 
           {/* Step content */}
-          <div className="flex-1 overflow-y-auto flex items-start justify-center px-4 py-8">
-            <div className="w-full max-w-2xl space-y-8">
+          <div className="flex-1 overflow-y-auto flex items-start justify-center px-3 sm:px-4 py-4 sm:py-8">
+            <div className="w-full max-w-2xl space-y-6 sm:space-y-8">
 
               {/* Step 1: Project */}
               {wizardStep === 1 && (
@@ -1088,14 +1088,14 @@ export default function PurchaseRequisitions() {
                       }
                     }}
                   >
-                    <SelectTrigger className="h-14 text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0">
+                    <SelectTrigger className="h-12 sm:h-14 text-base sm:text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0">
                       <SelectValue placeholder="Select a project..." />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent position="popper" sideOffset={4} className="max-h-[40vh] overflow-y-auto z-[300]">
                       {projects.map((p) => (
                         <SelectItem key={p.id} value={p.id} className="py-3 text-base">{p.name}</SelectItem>
                       ))}
-                      <SelectItem value="__other__" className="py-3 text-base">Other (type manually)</SelectItem>
+                      <SelectItem value="__other__" className="py-3 text-base font-medium text-primary">+ Other (type manually)</SelectItem>
                     </SelectContent>
                   </Select>
                   {wizProjectId === "__other__" && (
@@ -1104,7 +1104,7 @@ export default function PurchaseRequisitions() {
                       placeholder="Type project / site name..."
                       value={wizProjectName === "__other__" ? "" : wizProjectName}
                       onChange={(e) => { setWizProjectName(e.target.value); setWizProjectSite(e.target.value); }}
-                      className="h-14 text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0"
+                      className="h-12 sm:h-14 text-base sm:text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0"
                     />
                   )}
                   {(wizProjectId && wizProjectId !== "__other__") || (wizProjectId === "__other__" && wizProjectSite.trim()) ? (
@@ -1135,7 +1135,7 @@ export default function PurchaseRequisitions() {
                     value={wizProjectSite}
                     onChange={(e) => setWizProjectSite(e.target.value)}
                     placeholder="Site address..."
-                    className="text-lg min-h-[100px] resize-none border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0"
+                    className="text-base sm:text-lg min-h-[80px] sm:min-h-[100px] resize-none border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0"
                   />
                   <div className="flex items-center gap-3">
                     <Button variant="ghost" className="h-12 px-6 rounded-lg" onClick={() => setWizardStep(1)}>
@@ -1171,7 +1171,7 @@ export default function PurchaseRequisitions() {
                     min={todayISODate()}
                     value={wizRequiredBy}
                     onChange={(e) => setWizRequiredBy(e.target.value)}
-                    className="h-14 text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0 w-48"
+                    className="h-12 sm:h-14 text-base sm:text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0 w-full sm:w-48"
                   />
 
                   <div className="space-y-3 pt-2">
@@ -1226,7 +1226,7 @@ export default function PurchaseRequisitions() {
                     </p>
                   </div>
 
-                  <div className="space-y-4 max-h-[55vh] overflow-y-auto pr-1">
+                  <div className="space-y-4 max-h-[50vh] sm:max-h-[55vh] overflow-y-auto pr-1">
                     {wizLineItems.map((li, idx) => (
                       <div key={li.rowKey} className="border border-border/60 rounded-xl p-4 space-y-3 bg-muted/20">
                         <div className="flex items-center justify-between">
@@ -1327,8 +1327,8 @@ export default function PurchaseRequisitions() {
                                 <X className="h-4 w-4" />
                               </button>
                             </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div className="col-span-2 space-y-1">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div className="col-span-1 sm:col-span-2 space-y-1">
                                 <Label className="text-xs text-muted-foreground">Item Name *</Label>
                                 <Input
                                   value={wizNewItemForms[li.rowKey]?.name ?? ""}
@@ -1397,7 +1397,7 @@ export default function PurchaseRequisitions() {
                           <p className="text-xs text-amber-600">⚠ Item not in database. Procurement team will be notified.</p>
                         )}
 
-                        <div className="grid grid-cols-3 gap-3">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                           <div className="space-y-1">
                             <Label className="text-xs text-muted-foreground">{lang === 'hi' ? 'Kitna Chahiye' : 'Quantity'}</Label>
                             <Input
@@ -1416,7 +1416,7 @@ export default function PurchaseRequisitions() {
                               className="h-11"
                             />
                           </div>
-                          <div className="space-y-1">
+                          <div className="space-y-1 col-span-2 sm:col-span-1">
                             <Label className="text-xs text-muted-foreground">{lang === 'hi' ? 'Brand (Agar Pata Ho)' : 'Brand'}</Label>
                             <Input
                               value={li.preferredBrand}
@@ -1426,7 +1426,7 @@ export default function PurchaseRequisitions() {
                             />
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div className="space-y-1">
                             <Label className="text-xs text-muted-foreground">{lang === 'hi' ? 'Kis Kaam ke Liye' : 'Required for'}</Label>
                             <Input
