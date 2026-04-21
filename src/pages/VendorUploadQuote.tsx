@@ -42,6 +42,7 @@ type LineItem = {
 
 type ManualLineEntry = {
   line_item_id: string;
+  quantity: string;
   rate: string;
   gst_percent: string;
   brand: string;
@@ -218,6 +219,7 @@ export default function VendorUploadQuote() {
     if (lineItems.length > 0) {
       setManualEntries(lineItems.map((li) => ({
         line_item_id: li.line_item_id,
+        quantity: String(li.quantity ?? 1),
         rate: "",
         gst_percent: "18",
         brand: "",
@@ -334,7 +336,7 @@ export default function VendorUploadQuote() {
         let sumBase = 0, sumLanded = 0;
         for (const entry of filledManualLines) {
           const li = lineItems.find((l) => l.line_item_id === entry.line_item_id);
-          const qty = li?.quantity ?? 1;
+          const qty = parseFloat(entry.quantity) || li?.quantity || 1;
           const rate = parseFloat(entry.rate) || 0;
           const gst = parseFloat(entry.gst_percent) || 0;
           const base = rate * qty;
@@ -390,7 +392,7 @@ export default function VendorUploadQuote() {
           const li = lineItems.find((l) => l.line_item_id === entry.line_item_id);
           const rate = parseFloat(entry.rate) || 0;
           const gst = parseFloat(entry.gst_percent) || 0;
-          const qty = li?.quantity ?? 1;
+          const qty = parseFloat(entry.quantity) || li?.quantity || 1;
           const baseTotal = rate * qty;
           const landedRate = rate + rate * (gst / 100);
           return {
@@ -728,7 +730,7 @@ export default function VendorUploadQuote() {
     if (!li || !entry) return null;
     const rate = parseFloat(entry.rate) || 0;
     const gst = parseFloat(entry.gst_percent) || 0;
-    const qty = li.quantity ?? 1;
+    const qty = parseFloat(entry.quantity) || li.quantity || 1;
     const totalBase = rate * qty;
     const totalLanded = totalBase + totalBase * (gst / 100);
     const itemLabel = li.item_description ?? li.item_name ?? "Item";
@@ -753,6 +755,26 @@ export default function VendorUploadQuote() {
         </>}
       >
         <div className="space-y-4">
+          {/* Quantity — editable, pre-filled from RFQ */}
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">
+              Quantity <span className="text-gray-400">(RFQ asked for {li.quantity} {li.unit ?? ""})</span>
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min="0"
+                step="any"
+                className="w-28 text-lg font-semibold border border-gray-300 rounded-lg px-3 py-2 outline-none text-center"
+                style={{ borderColor: entry.quantity ? "hsl(20,50%,35%)" : undefined }}
+                value={entry.quantity}
+                onChange={(e) => updateEntry("quantity", e.target.value)}
+              />
+              <span className="text-gray-500">{li.unit ?? "units"}</span>
+            </div>
+          </div>
+
+          {/* Rate */}
           <div>
             <label className="text-xs text-gray-500 block mb-1">Rate per {li.unit ?? "unit"} (excluding GST)</label>
             <div className="flex items-center gap-2">
@@ -771,6 +793,7 @@ export default function VendorUploadQuote() {
               <span className="text-gray-400">per {li.unit ?? "unit"}</span>
             </div>
           </div>
+
           <div className="flex gap-4">
             <div>
               <label className="text-xs text-gray-500 block mb-1">GST %</label>
@@ -793,15 +816,30 @@ export default function VendorUploadQuote() {
               />
             </div>
           </div>
-          {rate > 0 && (
-            <div className="rounded-xl p-3 text-sm" style={{ background: "hsl(20,50%,97%)" }}>
-              <span className="text-gray-500">Total for {qty} {li.unit ?? "units"}: </span>
-              <span className="font-bold" style={{ color: "hsl(20,50%,35%)" }}>
-                ₹{totalLanded.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
-              </span>
-              <span className="text-gray-400 text-xs ml-1">(incl. {gst}% GST)</span>
-            </div>
-          )}
+
+          {/* Live total — always visible */}
+          <div className="rounded-xl p-3 text-sm" style={{ background: "hsl(20,50%,97%)" }}>
+            {rate > 0 ? (
+              <>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Base ({qty} × ₹{rate})</span>
+                  <span className="font-medium text-gray-700">₹{totalBase.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between items-center mt-1">
+                  <span className="text-gray-500">GST ({gst}%)</span>
+                  <span className="text-gray-500">+₹{(totalLanded - totalBase).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                </div>
+                <div className="flex justify-between items-center mt-1.5 pt-1.5 border-t border-orange-100">
+                  <span className="font-semibold text-gray-700">Total landed</span>
+                  <span className="font-bold text-lg" style={{ color: "hsl(20,50%,35%)" }}>
+                    ₹{totalLanded.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <span className="text-gray-400 text-xs">Enter rate above to see total</span>
+            )}
+          </div>
         </div>
         <StepActions onBack={goBack} onNext={goNext} nextLabel={itemIdx < lineItems.length - 1 ? "Next Item →" : "Continue →"} />
       </StepLayout>
@@ -841,15 +879,15 @@ export default function VendorUploadQuote() {
             const li = lineItems.find((l) => l.line_item_id === entry.line_item_id);
             const rate = parseFloat(entry.rate) || 0;
             const gst = parseFloat(entry.gst_percent) || 0;
-            const qty = li?.quantity ?? 1;
+            const qty = parseFloat(entry.quantity) || li?.quantity || 1;
             const landed = rate + rate * (gst / 100);
             const total = landed * qty;
             return (
               <div key={entry.line_item_id} className="px-4 py-3 border-t border-gray-100">
                 <div className="font-medium text-gray-800">{li?.item_description ?? li?.item_name}</div>
                 <div className="text-gray-500 text-xs mt-0.5">
-                  ₹{rate}/{ li?.unit} + {gst}% GST = ₹{landed.toFixed(2)}/{li?.unit}
-                  &nbsp;·&nbsp;Total for {qty}: <span className="font-semibold text-gray-700">₹{total.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                  {qty} {li?.unit} × ₹{rate} + {gst}% GST = ₹{landed.toFixed(2)}/{li?.unit}
+                  &nbsp;·&nbsp;<span className="font-semibold text-gray-700">Total: ₹{total.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
                 </div>
                 {entry.brand && <div className="text-xs text-gray-400 mt-0.5">Brand: {entry.brand}</div>}
               </div>
