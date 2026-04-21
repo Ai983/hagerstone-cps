@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useDebounce } from "@/hooks/useDebounce";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -170,6 +171,7 @@ export default function DeliveryTracker() {
   const [poCards, setPoCards] = useState<EnrichedPo[]>([]);
 
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search);
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortFieldDel, setSortFieldDel] = useState("created_at");
   const [sortDirDel, setSortDirDel] = useState<"asc" | "desc">("desc");
@@ -286,7 +288,6 @@ export default function DeliveryTracker() {
       setPoCards(cards);
     } catch (e: any) {
       const msg = e?.message || "Failed to load deliveries";
-      console.error("DeliveryTracker load error:", e);
       toast.error(msg);
       setLoadError(msg);
       setPoCards([]);
@@ -330,7 +331,7 @@ export default function DeliveryTracker() {
   // ── Filters ────────────────────────────────────────────────────────────────
 
   const filteredCards = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     const list = poCards.filter((po) => {
       if (statusFilter === "dispatched" && po.status !== "dispatched") return false;
       if (statusFilter === "in_transit" && po.status !== "in_transit") return false;
@@ -351,7 +352,7 @@ export default function DeliveryTracker() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirDel === "asc" ? cmp : -cmp;
     });
-  }, [poCards, search, statusFilter, sortFieldDel, sortDirDel]);
+  }, [poCards, debouncedSearch, statusFilter, sortFieldDel, sortDirDel]);
 
   // ── Timeline helpers ───────────────────────────────────────────────────────
 
@@ -675,7 +676,7 @@ export default function DeliveryTracker() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Active Deliveries</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.activeDeliveries}</div>
+            <div className="text-2xl font-bold text-foreground">{loading ? <Skeleton className="h-7 w-12" /> : stats.activeDeliveries}</div>
           </CardContent>
         </Card>
         <Card>
@@ -683,7 +684,7 @@ export default function DeliveryTracker() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Delivered This Month</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.deliveredThisMonth}</div>
+            <div className="text-2xl font-bold text-foreground">{loading ? <Skeleton className="h-7 w-12" /> : stats.deliveredThisMonth}</div>
           </CardContent>
         </Card>
         <Card>
@@ -691,7 +692,7 @@ export default function DeliveryTracker() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Pending GRN</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.pendingGrn}</div>
+            <div className="text-2xl font-bold text-foreground">{loading ? <Skeleton className="h-7 w-12" /> : stats.pendingGrn}</div>
           </CardContent>
         </Card>
         <Card>
@@ -699,7 +700,7 @@ export default function DeliveryTracker() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Delayed</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-amber-600">{loading ? "—" : stats.delayed}</div>
+            <div className="text-2xl font-bold text-amber-600">{loading ? <Skeleton className="h-7 w-12" /> : stats.delayed}</div>
           </CardContent>
         </Card>
       </div>

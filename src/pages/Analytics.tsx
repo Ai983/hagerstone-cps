@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -150,7 +151,7 @@ export default function Analytics() {
       });
       setItemCategoryByPrId(categoryByPr);
     } catch (e: any) {
-      console.error("Analytics load error:", e);
+      toast.error(e?.message || "Failed to load analytics data");
     }
     setLoading(false);
   };

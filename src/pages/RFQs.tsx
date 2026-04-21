@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -154,6 +155,7 @@ export default function RFQs() {
   const [approvedQuotesByRfq, setApprovedQuotesByRfq] = useState<Record<string, number>>({});
 
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search);
   const [statusFilter, setStatusFilter] = useState<RfqStatus | "all">("all");
   const [sortFieldRfq, setSortFieldRfq] = useState("created_at");
   const [sortDirRfq, setSortDirRfq] = useState<"asc" | "desc">("desc");
@@ -229,7 +231,6 @@ export default function RFQs() {
     setApprovedQuotesByRfq({});
     const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,pr_id,title,status,deadline,created_at,target_category").order("created_at", { ascending: false });
     if (error) {
-      console.error("RFQ list load error:", error);
       toast.error("Failed to load RFQs");
       setRfqs([]);
       setLoading(false);
@@ -362,7 +363,7 @@ export default function RFQs() {
   };
 
   const rfqTable = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     const list = rfqs.filter((r) => {
       const matchesStatus = statusFilter === "all" ? true : r.status === statusFilter;
       if (!matchesStatus) return false;
@@ -377,7 +378,7 @@ export default function RFQs() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirRfq === "asc" ? cmp : -cmp;
     });
-  }, [rfqs, search, statusFilter, prDisplayById, sortFieldRfq, sortDirRfq]);
+  }, [rfqs, debouncedSearch, statusFilter, prDisplayById, sortFieldRfq, sortDirRfq]);
 
   const openDialog = async () => {
     setDialogOpen(true);
@@ -779,8 +780,7 @@ export default function RFQs() {
             suppliers: suppliersPayload,
             total_suppliers: suppliersPayload.length,
           }),
-        }).catch((e) => {
-          console.error("RFQ webhook error:", e);
+        }).catch(() => {
           toast.warning("RFQ saved but WhatsApp dispatch may have failed. Check with n8n team.");
         });
       }
@@ -803,7 +803,6 @@ export default function RFQs() {
       setReviewOpen(false);
       await fetchRFQs();
     } catch (e: any) {
-      console.error("Send failed:", e);
       toast.error(e?.message || "Failed to send RFQ. Please try again.");
     } finally {
       setSending(false);

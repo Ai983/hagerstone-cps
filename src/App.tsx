@@ -67,6 +67,7 @@ const ApprovePoPage = lazyWithRetry(() => import("@/pages/ApprovePoPage"));
 const PRReview = lazyWithRetry(() => import("@/pages/PRReview"));
 const KanbanBoard = lazyWithRetry(() => import("@/pages/KanbanBoard"));
 const Analytics = lazyWithRetry(() => import("@/pages/Analytics"));
+const NotFound = lazyWithRetry(() => import("@/pages/NotFound"));
 
 const Loader = () => (
   <div className="min-h-screen flex items-center justify-center">
@@ -115,7 +116,7 @@ const App = () => (
               <Route path="/pr-review" element={<Protected><PRReview /></Protected>} />
               <Route path="/kanban" element={<Protected><KanbanBoard /></Protected>} />
               <Route path="/analytics" element={<Protected><Analytics /></Protected>} />
-              <Route path="*" element={<Protected><div className="p-8 text-center"><h1 className="text-2xl font-bold">404 — Page not found</h1></div></Protected>} />
+              <Route path="*" element={<NotFound />} />
             </Routes>
           </React.Suspense>
         </BrowserRouter>

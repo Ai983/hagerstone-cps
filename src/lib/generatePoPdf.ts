@@ -103,16 +103,50 @@ const amountInWords = (amount: number): string => {
   return w.trim();
 };
 
-/* ─────────────────────────────────────────── fixed company values ── */
+/* ────────────────────────────────── company config (overridable) ── */
 
-const CO_NAME    = "Hagerstone International Pvt. Ltd";
-const CO_GST     = "GST NO: 09AAECH3768B1ZM";
-const CO_ADDR    = "D-107, 91 Springboard Hub, Red FM Road, Sector-2, Noida, (U.P)";
-const CO_TEL     = "Tel: +91 9811596660";
-const CO_EMAIL   = "Email: procurement@hagerstone.com";
-const PREPARED   = "AJIT";
-const CHK        = "AVISHA";
-const AUTH_SIG   = "MR. BHASKAR TYAGI";
+/** Defaults — can be overridden at runtime via loadCompanyConfig() */
+export const companyConfig = {
+  CO_NAME:    "Hagerstone International Pvt. Ltd",
+  CO_GST:     "GST NO: 09AAECH3768B1ZM",
+  CO_ADDR:    "D-107, 91 Springboard Hub, Red FM Road, Sector-2, Noida, (U.P)",
+  CO_TEL:     "Tel: +91 9811596660",
+  CO_EMAIL:   "Email: procurement@hagerstone.com",
+  PREPARED:   "AJIT",
+  CHK:        "AVISHA",
+  AUTH_SIG:   "MR. BHASKAR TYAGI",
+};
+
+/** Load overrides from cps_config table. Call once at app startup or before PDF gen. */
+export async function loadCompanyConfig(supabaseClient: SupabaseClient): Promise<void> {
+  const keys = [
+    "po_company_name", "po_company_gst", "po_company_address",
+    "po_company_tel", "po_company_email",
+    "po_prepared_by", "po_checked_by", "po_authorised_signatory",
+  ];
+  const { data } = await supabaseClient.from("cps_config").select("key,value").in("key", keys);
+  if (!data) return;
+  const map: Record<string, string> = {};
+  (data as Array<{ key: string; value: string }>).forEach((r) => { map[r.key] = r.value; });
+  if (map.po_company_name)       companyConfig.CO_NAME  = map.po_company_name;
+  if (map.po_company_gst)        companyConfig.CO_GST   = map.po_company_gst;
+  if (map.po_company_address)    companyConfig.CO_ADDR  = map.po_company_address;
+  if (map.po_company_tel)        companyConfig.CO_TEL   = map.po_company_tel;
+  if (map.po_company_email)      companyConfig.CO_EMAIL = map.po_company_email;
+  if (map.po_prepared_by)        companyConfig.PREPARED = map.po_prepared_by;
+  if (map.po_checked_by)         companyConfig.CHK      = map.po_checked_by;
+  if (map.po_authorised_signatory) companyConfig.AUTH_SIG = map.po_authorised_signatory;
+}
+
+// Aliases for use in buildPoPdf — read from mutable config
+const CO_NAME  = () => companyConfig.CO_NAME;
+const CO_GST   = () => companyConfig.CO_GST;
+const CO_ADDR  = () => companyConfig.CO_ADDR;
+const CO_TEL   = () => companyConfig.CO_TEL;
+const CO_EMAIL = () => companyConfig.CO_EMAIL;
+const PREPARED = () => companyConfig.PREPARED;
+const CHK      = () => companyConfig.CHK;
+const AUTH_SIG = () => companyConfig.AUTH_SIG;
 
 const TERMS: string[] = [
   "Please strictly mention PO number, packing detail & complete description of the item in your invoice, otherwise material will not be accepted.",
@@ -158,19 +192,19 @@ export function buildPoPdf(data: PoPdfData): Blob {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(20, 20, 20);
-  doc.text(CO_NAME, ML, y + 8);
+  doc.text(CO_NAME(), ML, y + 8);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(60, 60, 60);
-  doc.text(CO_GST, ML, y + 14);
+  doc.text(CO_GST(), ML, y + 14);
 
   /* Address + contact — left side, below GST (so they don't clash with logo) */
   doc.setFontSize(7);
   doc.setTextColor(80, 80, 80);
-  const coAddrLines = doc.splitTextToSize(CO_ADDR, CW - LOGO_W - 4);
+  const coAddrLines = doc.splitTextToSize(CO_ADDR(), CW - LOGO_W - 4);
   doc.text(coAddrLines, ML, y + 19);
-  doc.text(CO_TEL + "   " + CO_EMAIL, ML, y + 19 + coAddrLines.length * 3.5);
+  doc.text(CO_TEL() + "   " + CO_EMAIL(), ML, y + 19 + coAddrLines.length * 3.5);
 
   y += HEADER_H + 4;
   doc.setDrawColor(0);
@@ -497,14 +531,14 @@ export function buildPoPdf(data: PoPdfData): Blob {
   doc.setFontSize(7);
   doc.setTextColor(60, 60, 60);
   doc.text("Prepared By :", sigCols[0], y);
-  doc.text("Prepared By : " + PREPARED, sigCols[1], y);
-  doc.text("Chk By : " + CHK, sigCols[2], y);
+  doc.text("Prepared By : " + PREPARED(), sigCols[1], y);
+  doc.text("Chk By : " + CHK(), sigCols[2], y);
   doc.text("Authorised Signatory", sigCols[3], y);
   y += 5;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7.5);
   doc.setTextColor(20, 20, 20);
-  doc.text(AUTH_SIG, sigCols[3], y);
+  doc.text(AUTH_SIG(), sigCols[3], y);
 
   /* ── 8. Footer notice ── */
   y = H - 10;
@@ -541,7 +575,6 @@ export async function uploadPoPdf(
     .upload(path, pdfBlob, { contentType: "application/pdf", upsert: true });
 
   if (error) {
-    console.error("PDF upload failed:", error.message);
     return null;
   }
 

@@ -174,8 +174,7 @@ If you cannot find any payment terms, set confidence to 0 and leave payment_term
             JSON.stringify(parsed.payment_terms_json.installments, null, 2));
         }
       }
-    } catch (err) {
-      console.error('AI extraction failed:', err);
+    } catch {
       setAiResult(null);
     } finally {
       setAiLoading(false);
@@ -239,8 +238,7 @@ If you cannot find any payment terms, set confidence to 0 and leave payment_term
 
       toast.success('Payment terms saved and sent to Finance');
       onSuccess();
-    } catch (err) {
-      console.error(err);
+    } catch {
       toast.error('Failed to save payment terms');
     } finally {
       setSubmitting(false);
@@ -272,7 +270,6 @@ If you cannot find any payment terms, set confidence to 0 and leave payment_term
         .maybeSingle();
 
       if (!cfg?.value || cfg.value === 'REPLACE_WITH_N8N_WF4_WEBHOOK_URL') {
-        console.warn('WF4 webhook URL not configured in cps_config');
         return;
       }
 
@@ -311,8 +308,7 @@ If you cannot find any payment terms, set confidence to 0 and leave payment_term
           finance_dispatch_status: 'sent',
         })
         .eq('id', poId);
-    } catch (err) {
-      console.error('WF4 webhook failed:', err);
+    } catch {
       await supabase
         .from('cps_purchase_orders')
         .update({ finance_dispatch_status: 'failed' })

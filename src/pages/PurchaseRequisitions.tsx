@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useDebounce } from "@/hooks/useDebounce";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -205,6 +206,7 @@ export default function PurchaseRequisitions() {
 
   const [prList, setPrList] = useState<PurchaseRequisition[]>([]);
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sortField, setSortFieldPR] = useState("created_at");
   const [sortDir, setSortDirPR] = useState<"asc" | "desc">("desc");
@@ -271,7 +273,6 @@ export default function PurchaseRequisitions() {
     const { data: prs, error } = await prQuery;
 
     if (error) {
-      console.error("PR list load error:", error);
       toast.error("Failed to load purchase requisitions");
       setPrList([]);
       setLoading(false);
@@ -323,7 +324,6 @@ export default function PurchaseRequisitions() {
       .eq("active", true);
 
     if (error) {
-      console.error("Item master load error:", error);
       toast.error("Failed to load item master");
       setItemsMaster([]);
       setItemsLoading(false);
@@ -374,7 +374,7 @@ export default function PurchaseRequisitions() {
   };
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     const list = prList.filter((p) => {
       const matchesStatus =
         statusFilter === "all" ? true :
@@ -402,7 +402,7 @@ export default function PurchaseRequisitions() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [prList, search, statusFilter, priorityFilter, sortField, sortDir]);
+  }, [prList, debouncedSearch, statusFilter, priorityFilter, sortField, sortDir]);
 
   const openWizard = () => {
     setWizardStep(1);
@@ -433,7 +433,6 @@ export default function PurchaseRequisitions() {
       .eq("pr_id", pr.id)
       .order("sort_order", { ascending: true });
     if (error) {
-      console.error("PR detail load error:", error);
       toast.error("Failed to load PR details");
       setDetailLines([]);
       setDetailLoading(false);
@@ -465,7 +464,6 @@ export default function PurchaseRequisitions() {
       .eq("pr_id", pr.id)
       .order("sort_order", { ascending: true });
     if (error) {
-      console.error("PR doc load error:", error);
       toast.error("Failed to load PR details");
       setDocLines([]);
       setDocLoading(false);
@@ -706,9 +704,9 @@ export default function PurchaseRequisitions() {
               pr_id: prId,
               status: "pending",
             } as any);
-            if (pendingErr) console.error("Failed to create pending item request:", pendingErr.message);
+            if (pendingErr) toast.warning("Could not save pending item request");
           }
-        } catch (e) { console.error("Pending item request error:", e); }
+        } catch { /* non-blocking */ }
       }
 
       try {

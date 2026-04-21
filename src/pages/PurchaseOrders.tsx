@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "sonner";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -237,6 +238,7 @@ export default function PurchaseOrders() {
   const [rows, setRows] = useState<PoRow[]>([]);
 
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [searchParams] = useSearchParams();
 
@@ -338,7 +340,7 @@ export default function PurchaseOrders() {
   const eligibleRfqsOptions = eligibleRfqs;
 
   const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     const list = rows.filter((r) => {
       // "pending_approval" filter matches both explicit status and draft-awaiting-founder flow
       const matchesStatus =
@@ -360,7 +362,7 @@ export default function PurchaseOrders() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirPO === "asc" ? cmp : -cmp;
     });
-  }, [rows, search, statusFilter, sortFieldPO, sortDirPO]);
+  }, [rows, debouncedSearch, statusFilter, sortFieldPO, sortDirPO]);
 
   const fetchPoRows = async () => {
     setLoading(true);
@@ -1281,7 +1283,7 @@ export default function PurchaseOrders() {
               delivery_terms: po.delivery_terms || "",
               ship_to_address: po.ship_to_address || "",
             }),
-          }).catch(e => console.error("PO webhook error:", e));
+          }).catch(() => toast.warning("PO approved but dispatch webhook may have failed"));
         }
       });
 
@@ -1453,7 +1455,7 @@ export default function PurchaseOrders() {
           phone: editSupplierPhone.trim() || null,
           email: editSupplierEmail.trim() || null,
         }).eq("id", viewPo.supplier_id);
-        if (supErr) console.error("Supplier update error:", supErr);
+        if (supErr) toast.warning("PO saved but supplier details update failed");
       }
 
       toast.success("PO updated successfully");

@@ -246,8 +246,7 @@ Rules:
 
       setAiParsed(true);
       toast.success("PO details extracted automatically — please verify before saving");
-    } catch (err) {
-      console.error("AI parse error:", err);
+    } catch {
       setAiParseWarning(true);
       toast.warning("Could not auto-read PO — please fill details manually");
     }
@@ -310,8 +309,7 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
         poNumber: result.po_number,
         rejectionReason: result.rejection_reason,
       };
-    } catch (err) {
-      console.error("Format validation error:", err);
+    } catch {
       // On API error, allow through (don't block user)
       return { isValid: true };
     }

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useDebounce } from "@/hooks/useDebounce";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -98,6 +99,7 @@ export default function AuditLog() {
   const [page, setPage] = useState(0);
 
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [actionFilter, setActionFilter] = useState("all");
@@ -154,7 +156,7 @@ export default function AuditLog() {
       if (error) throw error;
 
       let filtered = (data ?? []) as AuditRow[];
-      const q = search.trim().toLowerCase();
+      const q = debouncedSearch.trim().toLowerCase();
       if (q) {
         filtered = filtered.filter((r) =>
           (r.description ?? "").toLowerCase().includes(q) ||
@@ -187,7 +189,7 @@ export default function AuditLog() {
 
   useEffect(() => {
     setPage(0);
-  }, [actionFilter, severityFilter, entityFilter, dateFrom, dateTo, search, sortFieldAudit, sortDirAudit]);
+  }, [actionFilter, severityFilter, entityFilter, dateFrom, dateTo, debouncedSearch, sortFieldAudit, sortDirAudit]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 

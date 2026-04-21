@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useDebounce } from "@/hooks/useDebounce";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -197,6 +198,7 @@ export default function Quotes() {
   const [rfqs, setRfqs] = useState<Rfq[]>([]);
 
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search);
   const [rfqFilter, setRfqFilter] = useState<string>("all");
   const [parseStatusFilter, setParseStatusFilter] = useState<QuoteParseStatus | "all">("all");
   const [sortFieldQ, setSortFieldQ] = useState("received_at");
@@ -342,7 +344,6 @@ export default function Quotes() {
       setLoading(false);
     } catch (e: any) {
       const msg = e?.message || "Failed to load quotes";
-      console.error("Quotes load error:", e);
       toast.error(msg);
       setLoadError(msg);
       setQuotes([]);
@@ -359,7 +360,7 @@ export default function Quotes() {
   }, []);
 
   const filteredQuotes = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     const list = quotes.filter((row) => {
       const matchesSearch = !q
         ? true
@@ -374,7 +375,7 @@ export default function Quotes() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirQ === "asc" ? cmp : -cmp;
     });
-  }, [quotes, search, rfqFilter, parseStatusFilter, sortFieldQ, sortDirQ]);
+  }, [quotes, debouncedSearch, rfqFilter, parseStatusFilter, sortFieldQ, sortDirQ]);
 
   const stats = useMemo(() => {
     const total = quotes.length;
@@ -734,13 +735,10 @@ Rules:
       if (data?.error) throw new Error("Claude API error: " + data.error);
 
       const text = data?.content?.[0]?.text ?? "";
-      console.log("Claude raw response:", text);
-
       const clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
       return JSON.parse(clean);
 
     } catch (err: any) {
-      console.error("AI parse error:", err);
       toast.error("AI parse failed: " + (err.message || "Unknown error"));
       return null;
     }
@@ -790,7 +788,7 @@ Rules:
         reviewed_by: user.id,
         reviewed_at: new Date().toISOString(),
       }).eq("id", reviewQuote.id);
-      if (quoteErr) { console.error("Quote update error:", quoteErr); toast.error("Failed to save review"); setSavingReview(false); return; }
+      if (quoteErr) { toast.error("Failed to save review"); setSavingReview(false); return; }
 
       await supabase.from("cps_quote_line_items").delete().eq("quote_id", reviewQuote.id);
 
@@ -815,7 +813,7 @@ Rules:
       }));
       if (lineItems.length > 0) {
         const { error: liErr } = await supabase.from("cps_quote_line_items").insert(lineItems);
-        if (liErr) console.error("Line items insert error:", liErr);
+        if (liErr) toast.error("Failed to insert line items");
       }
 
       if (reviewQuote.supplier_id) {
@@ -851,7 +849,6 @@ Rules:
       setReviewOpen(false);
       await fetchQuotes();
     } catch (e: any) {
-      console.error("Save review error:", e);
       toast.error("Failed to save review: " + e?.message);
     }
     setSavingReview(false);
@@ -1148,13 +1145,12 @@ Rules:
       .single();
 
     if (error) {
-      console.error("Log quote error:", error);
       toast.error("Failed to log quote: " + error.message);
       return;
     }
 
     // Insert line items if we have per-item data
-    const quoteId = (quoteInsert as any).id as string;
+    const quoteId = (quoteInsert as { id: string; blind_quote_ref: string }).id;
     if (logRfqItems.length > 0) {
       const linePayload = logRfqItems.map((it, idx) => {
         const entry = logItemEntries[it.line_item_id] ?? { rate: "0", gst_percent: "18", brand: "" };
@@ -1179,10 +1175,10 @@ Rules:
         };
       });
       const { error: liErr } = await supabase.from("cps_quote_line_items").insert(linePayload);
-      if (liErr) console.error("Line items insert error:", liErr.message);
+      if (liErr) toast.error("Failed to insert line items");
     }
 
-    toast.success(`Quote ${(quoteInsert as any).blind_quote_ref} logged — ${logRfqItems.length} items`);
+    toast.success(`Quote ${(quoteInsert as { id: string; blind_quote_ref: string }).blind_quote_ref} logged — ${logRfqItems.length} items`);
     setLogDialogOpen(false);
     await fetchQuotes();
   };

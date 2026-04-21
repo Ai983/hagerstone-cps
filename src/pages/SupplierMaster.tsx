@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { useDebounce } from "@/hooks/useDebounce";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -106,9 +107,12 @@ export default function SupplierMaster() {
   const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search);
   const [statusFilter, setStatusFilter] = useState<SupplierStatus | "all">("all");
   const [sortFieldSup, setSortFieldSup] = useState("name");
   const [sortDirSup, setSortDirSup] = useState<"asc" | "desc">("asc");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 25;
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -277,7 +281,7 @@ export default function SupplierMaster() {
   };
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     const list = allSuppliers.filter((s) => {
       const matchesStatus = statusFilter === "all" ? true : s.status === statusFilter;
       const matchesSearch = !q
@@ -294,7 +298,13 @@ export default function SupplierMaster() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirSup === "asc" ? cmp : -cmp;
     });
-  }, [allSuppliers, search, statusFilter, categoryFilter, sortFieldSup, sortDirSup]);
+  }, [allSuppliers, debouncedSearch, statusFilter, categoryFilter, sortFieldSup, sortDirSup]);
+
+  // Reset page when filters change
+  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, categoryFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginatedFiltered = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const openAdd = () => {
     setEditingId(null);
@@ -347,6 +357,27 @@ export default function SupplierMaster() {
     }
     if (!form.gstin.trim()) {
       toast.error("GSTIN is required");
+      return;
+    }
+    // GSTIN format: 2 digits + 5 alpha + 4 digits + 1 alpha + 1 alphanum + Z + 1 alphanum
+    const gstinRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/;
+    if (!gstinRegex.test(form.gstin.trim().toUpperCase())) {
+      toast.error("Invalid GSTIN format — must be 15 characters (e.g. 09AAECH3768B1ZM)");
+      return;
+    }
+    // PAN format: 5 alpha + 4 digits + 1 alpha
+    if (form.pan.trim() && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(form.pan.trim().toUpperCase())) {
+      toast.error("Invalid PAN format — must be 10 characters (e.g. ABCDE1234F)");
+      return;
+    }
+    // Phone: 10-digit Indian number (optional +91 prefix)
+    if (form.phone.trim() && !/^(\+91)?[6-9]\d{9}$/.test(form.phone.trim().replace(/[\s-]/g, ""))) {
+      toast.error("Invalid phone number — enter 10-digit Indian mobile number");
+      return;
+    }
+    // Email: basic format check
+    if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      toast.error("Invalid email address format");
       return;
     }
 
@@ -447,8 +478,15 @@ export default function SupplierMaster() {
             </SelectContent>
           </Select>
         </div>
-        <div className="text-sm text-muted-foreground">
-          Showing {filtered.length} of {allSuppliers.length} suppliers
+        <div className="text-sm text-muted-foreground flex items-center gap-3">
+          <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of {filtered.length} suppliers</span>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Prev</Button>
+              <span className="text-xs px-2">Page {page + 1}/{totalPages}</span>
+              <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next</Button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -482,7 +520,7 @@ export default function SupplierMaster() {
                   <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">No suppliers found</TableCell>
                 </TableRow>
               ) : (
-                filtered.map((s) => {
+                paginatedFiltered.map((s) => {
                   const sb = statusConfig[s.status];
                   return (
                     <TableRow key={s.id} className={s.profile_complete === false ? "bg-amber-50/30 hover:bg-amber-50/50" : "hover:bg-muted/30"}>
@@ -576,7 +614,7 @@ export default function SupplierMaster() {
         ) : filtered.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">No suppliers found</div>
         ) : (
-          filtered.map((s) => {
+          paginatedFiltered.map((s) => {
             const sb = statusConfig[s.status];
             return (
               <Card key={s.id} className="p-4">

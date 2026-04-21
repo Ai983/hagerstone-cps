@@ -127,7 +127,7 @@ export default function ApprovePoPage() {
       ]);
 
       if (poRes.error || !poRes.data) { setError("Could not load purchase order details."); setLoading(false); return; }
-      const poData = poRes.data as any;
+      const poData = poRes.data as PoSummary & { supplier_id: string | null };
 
       /* get supplier name */
       let supplierName: string | null = null;
@@ -137,7 +137,7 @@ export default function ApprovePoPage() {
           .select("name")
           .eq("id", poData.supplier_id)
           .maybeSingle();
-        supplierName = (sup as any)?.name ?? null;
+        supplierName = (sup as { name: string } | null)?.name ?? null;
       }
 
       setPo({ ...poData, supplier_name: supplierName });

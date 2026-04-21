@@ -505,7 +505,7 @@ export function LegacyQuoteUploadModal({
         const { error: liErr } = await supabase
           .from("cps_quote_line_items")
           .insert(lineItems);
-        if (liErr) console.error("Line items error:", liErr);
+        if (liErr) toast.error("Failed to insert line items");
       }
 
       await supabase

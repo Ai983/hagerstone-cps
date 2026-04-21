@@ -208,8 +208,7 @@ export default function VendorUploadQuote() {
       setSupplierInfo((supplierRes.data as SupplierInfo) ?? null);
       setLineItems((itemsRes.data as LineItem[]) ?? []);
       setStatus("valid");
-    } catch (e) {
-      console.error("Token validation exception:", e);
+    } catch {
       setStatus("invalid");
     }
   };
@@ -283,8 +282,7 @@ export default function VendorUploadQuote() {
       });
       setAiStatus("done");
       setTimeout(goNext, 1200);
-    } catch (e) {
-      console.error("AI extraction error:", e);
+    } catch {
       setAiStatus("error");
       setTimeout(goNext, 500);
     }
@@ -413,7 +411,6 @@ export default function VendorUploadQuote() {
         });
         const { error: lineErr } = await supabase.from("cps_quote_line_items").insert(lineItemsPayload);
         if (lineErr) {
-          console.error("Line items insert error:", lineErr);
           toast.error("Failed to save line item details: " + lineErr.message);
         }
       }
@@ -462,15 +459,14 @@ export default function VendorUploadQuote() {
                 supplier_name: supplierInfo?.name ?? null,
                 line_items: lineItems.map((li) => ({ line_item_id: li.line_item_id, description: li.item_description ?? li.item_name, quantity: li.quantity, unit: li.unit })),
               }),
-            }).catch((err) => console.error("Parse webhook error:", err));
+            }).catch(() => { /* non-blocking webhook */ });
           }
         } catch { /* non-blocking */ }
       }
 
       setBlindRef(blindQuoteRef);
       setStatus("submitted");
-    } catch (e) {
-      console.error("Submit exception:", e);
+    } catch {
       toast.error("Something went wrong. Please try again.");
     } finally {
       setSubmitting(false);

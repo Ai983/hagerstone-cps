@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { useDebounce } from "@/hooks/useDebounce";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -101,10 +102,13 @@ export default function ItemMaster() {
   const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search);
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [activeOnly, setActiveOnly] = useState(true);
   const [sortFieldItem, setSortFieldItem] = useState("name");
   const [sortDirItem, setSortDirItem] = useState<"asc" | "desc">("asc");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 25;
 
   const [activeTab, setActiveTab] = useState("items");
 
@@ -265,7 +269,7 @@ export default function ItemMaster() {
   };
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     const list = items.filter((i) => {
       const matchesSearch = !q
         ? true
@@ -282,7 +286,12 @@ export default function ItemMaster() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirItem === "asc" ? cmp : -cmp;
     });
-  }, [items, search, categoryFilter, activeOnly, sortFieldItem, sortDirItem]);
+  }, [items, debouncedSearch, categoryFilter, activeOnly, sortFieldItem, sortDirItem]);
+
+  useEffect(() => { setPage(0); }, [debouncedSearch, categoryFilter, activeOnly]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginatedFiltered = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const stats = useMemo(() => {
     const total = items.length;
@@ -492,11 +501,16 @@ export default function ItemMaster() {
             );
           })}
         </div>
-        {categoryFilter !== "all" && (
-          <div className="text-sm text-muted-foreground">
-            Showing {filtered.length} items in &quot;{categoryFilter}&quot;
-          </div>
-        )}
+        <div className="text-sm text-muted-foreground flex items-center gap-3">
+          <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of {filtered.length} items{categoryFilter !== "all" ? ` in "${categoryFilter}"` : ""}</span>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Prev</Button>
+              <span className="text-xs px-2">Page {page + 1}/{totalPages}</span>
+              <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next</Button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="hidden lg:block">
@@ -534,7 +548,7 @@ export default function ItemMaster() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filtered.map((it) => {
+                paginatedFiltered.map((it) => {
                   const benchBadge = computeBenchmarkBadge(it.last_purchase_rate, it.benchmark_rate);
                   const status = it.active ? "active" : "inactive";
                   return (
@@ -608,7 +622,7 @@ export default function ItemMaster() {
         ) : filtered.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">No items found</div>
         ) : (
-          filtered.map((it) => (
+          paginatedFiltered.map((it) => (
             <Card key={it.id} className="p-4">
               <div className="flex items-start justify-between gap-2">
                 <div>

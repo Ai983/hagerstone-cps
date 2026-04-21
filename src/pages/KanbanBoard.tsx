@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -264,7 +265,7 @@ export default function KanbanBoard() {
 
       setCards(next);
     } catch (e: any) {
-      console.error("Kanban load error:", e);
+      toast.error(e?.message || "Failed to load Kanban data");
     }
     setLoading(false);
   };

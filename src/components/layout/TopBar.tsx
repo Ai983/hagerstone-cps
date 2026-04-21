@@ -54,14 +54,14 @@ export function TopBar() {
       .limit(10);
 
     const { data } = await query;
-    const rows = (data ?? []) as any[];
+    const rows = (data ?? []) as Array<NotifPR & { requested_by: string }>;
 
     // Resolve requester names
     const ids = Array.from(new Set(rows.map((r) => r.requested_by).filter(Boolean)));
     const nameMap: Record<string, string> = {};
     if (ids.length) {
       const { data: users } = await supabase.from("cps_users").select("id,name").in("id", ids);
-      (users ?? []).forEach((u: any) => { nameMap[u.id] = u.name; });
+      (users ?? []).forEach((u: { id: string; name: string }) => { nameMap[u.id] = u.name; });
     }
 
     const items: NotifPR[] = rows.map((r) => ({ ...r, requester_name: nameMap[r.requested_by] ?? "—" }));
@@ -73,7 +73,7 @@ export function TopBar() {
     fetchNotifs();
 
     // Real-time subscription
-    if (!showBell) return;
+    if (!showBell) return undefined;
     const channel = supabase
       .channel("topbar-pr-notifs")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "cps_purchase_requisitions" }, () => {
@@ -82,7 +82,8 @@ export function TopBar() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [user?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, showBell]);
 
   // Close on outside click
   useEffect(() => {

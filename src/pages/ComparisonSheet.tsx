@@ -273,7 +273,7 @@ export default function ComparisonSheetPage() {
         .maybeSingle();
 
       if (sheetErr) {
-        console.error("Comparison sheet load error:", sheetErr);
+        toast.error("Failed to load comparison sheet");
       }
 
       if (!sheetRow) {
@@ -498,7 +498,6 @@ export default function ComparisonSheetPage() {
         }
       }
     } catch (e: any) {
-      console.error("Comparison sheet fetch error:", e);
       toast.error(e?.message || "Failed to load comparison sheet");
       setSheet(null);
     } finally {
@@ -554,7 +553,6 @@ export default function ComparisonSheetPage() {
       toast.success("Comparison Sheet generated");
       await fetchAll();
     } catch (e: any) {
-      console.error("Comparison sheet generate error:", e);
       toast.error(e?.message || "Failed to generate comparison sheet");
     } finally {
       setGenerating(false);
@@ -659,7 +657,6 @@ export default function ComparisonSheetPage() {
       setConfirmDialogOpen(false);
       await fetchAll();
     } catch (e: any) {
-      console.error("Manual review update error:", e);
       toast.error(e?.message || "Failed to update manual review");
     }
   };
@@ -1330,14 +1327,12 @@ export default function ComparisonSheetPage() {
         approval_notes: approvalNotes.trim() || null,
       }).eq("id", sheet.id);
       if (error) {
-        console.error("Approval error:", error);
         toast.error("Failed to approve: " + error.message);
         return;
       }
       toast.success("Comparison sheet approved — PO creation enabled");
       await fetchAll();
     } catch (e: any) {
-      console.error("Approval exception:", e);
       toast.error(e?.message || "Failed to approve");
     } finally {
       setApproving(false);
@@ -1359,14 +1354,12 @@ export default function ComparisonSheetPage() {
         approval_notes: approvalNotes.trim(),
       }).eq("id", sheet.id);
       if (error) {
-        console.error("Rejection error:", error);
         toast.error("Failed to reject: " + error.message);
         return;
       }
       toast.success("Comparison sheet rejected");
       await fetchAll();
     } catch (e: any) {
-      console.error("Rejection exception:", e);
       toast.error(e?.message || "Failed to reject");
     } finally {
       setApproving(false);
@@ -1552,7 +1545,6 @@ Rules:
       }
       toast.success("AI comparison analysis generated");
     } catch (e: any) {
-      console.error("AI recommendation error:", e);
       toast.error(e?.message || "Failed to generate AI analysis");
     } finally {
       setAiLoading(false);
@@ -1744,7 +1736,7 @@ Rules:
             ])
             .select("token,founder_name");
           if (tokErr || !insertedTokens) {
-            console.error("Token insert failed:", tokErr?.message);
+            toast.error("Failed to create approval tokens");
             return;
           }
 
@@ -1759,9 +1751,9 @@ Rules:
             .select("value")
             .eq("key", "webhook_po_founder_approval")
             .maybeSingle();
-          const webhookUrl = (cfgRow as any)?.value as string | undefined;
+          const webhookUrl = (cfgRow as { value: string } | null)?.value;
           if (!webhookUrl) {
-            console.error("webhook_po_founder_approval not found in cps_config");
+            toast.error("Founder approval webhook not configured");
             return;
           }
 
@@ -1815,8 +1807,8 @@ Rules:
               lineItems: calcLineItems,
             });
             poPdfUrl = await uploadPoPdf(supabase, poId, poNumber, pdfBlob);
-          } catch (pdfErr) {
-            console.warn("PDF generation skipped:", pdfErr);
+          } catch {
+            /* PDF generation non-fatal — PO still created */
           }
 
           /* mark PO pending */
@@ -1847,12 +1839,11 @@ Rules:
               bhaskar_whatsapp: "919953001048",
             }),
           });
-        } catch (err) {
-          console.error("Founder approval dispatch failed:", err);
+        } catch {
+          toast.warning("PO created but founder approval dispatch may have failed");
         }
       })();
     } catch (e: any) {
-      console.error("Create PO error:", e);
       toast.error(e?.message || "Failed to create PO");
     } finally {
       setCreatingPO(false);
