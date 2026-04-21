@@ -43,6 +43,10 @@ type Supplier = {
   name: string;
   categories: string[] | null;
   profile_complete: boolean | null;
+  phone: string | null;
+  email: string | null;
+  gstin: string | null;
+  address_text: string | null;
 };
 
 type ExtractedLineItem = {
@@ -213,6 +217,8 @@ export function LegacyQuoteUploadModal({
   const [suppliersLoading, setSuppliersLoading] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
   const [newVendorAdded, setNewVendorAdded] = useState(false);
+  const [rfqVendors, setRfqVendors] = useState<Supplier[]>([]);
+  const [rfqVendorsLoading, setRfqVendorsLoading] = useState(false);
 
   const [newVendorForm, setNewVendorForm] = useState({
     name: "",
@@ -302,6 +308,27 @@ export function LegacyQuoteUploadModal({
       });
   }, [selectedRfqId, rfqs]);
 
+  // ── Load RFQ-assigned vendors when RFQ is selected ─────────────────────────
+  useEffect(() => {
+    if (!selectedRfqId) { setRfqVendors([]); return; }
+    setRfqVendorsLoading(true);
+    (async () => {
+      const { data: rfqSups } = await supabase
+        .from("cps_rfq_suppliers")
+        .select("supplier_id")
+        .eq("rfq_id", selectedRfqId);
+      const supIds = (rfqSups ?? []).map((r: { supplier_id: string }) => r.supplier_id).filter(Boolean);
+      if (supIds.length === 0) { setRfqVendors([]); setRfqVendorsLoading(false); return; }
+      const { data: sups } = await supabase
+        .from("cps_suppliers")
+        .select("id,name,categories,profile_complete,phone,email,gstin,address_text")
+        .in("id", supIds)
+        .eq("status", "active");
+      setRfqVendors((sups ?? []) as Supplier[]);
+      setRfqVendorsLoading(false);
+    })();
+  }, [selectedRfqId]);
+
   // ── Search suppliers ────────────────────────────────────────────────────────
   useEffect(() => {
     const q = supplierSearch.trim();
@@ -309,7 +336,7 @@ export function LegacyQuoteUploadModal({
     setSuppliersLoading(true);
     supabase
       .from("cps_suppliers")
-      .select("id,name,categories,profile_complete")
+      .select("id,name,categories,profile_complete,phone,email,gstin,address_text")
       .ilike("name", `%${q}%`)
       .eq("status", "active")
       .limit(10)
@@ -368,6 +395,10 @@ export function LegacyQuoteUploadModal({
         name: newSupplier.name,
         categories: ["General"],
         profile_complete: false,
+        phone: newVendorForm.phone.trim() || null,
+        email: newVendorForm.email.trim() || null,
+        gstin: newVendorForm.gstin.trim() || null,
+        address_text: null,
       });
       setNewVendorAdded(true);
       toast.success("New vendor added");
@@ -513,6 +544,23 @@ export function LegacyQuoteUploadModal({
         .update({ response_status: "responded" })
         .eq("rfq_id", selectedRfqId)
         .eq("supplier_id", selectedSupplier.id);
+
+      // Save vendor details back to cps_suppliers if profile is incomplete
+      if (selectedSupplier.profile_complete === false && editedExtracted) {
+        const updates: Record<string, string | boolean | null> = {};
+        if (editedExtracted.vendor_phone && !selectedSupplier.phone) updates.phone = editedExtracted.vendor_phone;
+        if (editedExtracted.vendor_email && !selectedSupplier.email) updates.email = editedExtracted.vendor_email;
+        if (editedExtracted.vendor_gstin && !selectedSupplier.gstin) updates.gstin = editedExtracted.vendor_gstin;
+        if (editedExtracted.vendor_address && !selectedSupplier.address_text) updates.address_text = editedExtracted.vendor_address;
+        if (editedExtracted.vendor_name && editedExtracted.vendor_name !== selectedSupplier.name) updates.name = editedExtracted.vendor_name;
+        // Mark profile as complete if key fields are now filled
+        const hasPhone = updates.phone || selectedSupplier.phone;
+        const hasGstin = updates.gstin || selectedSupplier.gstin;
+        if (hasPhone && hasGstin) updates.profile_complete = true;
+        if (Object.keys(updates).length > 0) {
+          await supabase.from("cps_suppliers").update(updates).eq("id", selectedSupplier.id);
+        }
+      }
 
       await supabase.from("cps_audit_log").insert({
         user_id: user.id,
@@ -714,6 +762,52 @@ export function LegacyQuoteUploadModal({
 
                 {/* Tab A — Existing */}
                 <TabsContent value="existing" className="space-y-3 pt-2">
+                  {/* RFQ-assigned vendors — shown first */}
+                  {rfqVendors.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Vendors assigned to this RFQ</p>
+                      <div className="space-y-2">
+                        {rfqVendors.map((s) => (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => setSelectedSupplier(s)}
+                            className={`w-full text-left rounded-lg border px-4 py-3 text-sm transition-colors ${
+                              selectedSupplier?.id === s.id
+                                ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                                : "border-border hover:bg-muted/40"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="font-medium text-foreground">{s.name}</div>
+                              {s.profile_complete === false && (
+                                <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border">Incomplete</Badge>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-2 mt-1 text-xs text-muted-foreground">
+                              {s.gstin && <span>GSTIN: {s.gstin}</span>}
+                              {s.phone && <span>Ph: {s.phone}</span>}
+                            </div>
+                            {s.categories && s.categories.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {s.categories.map((c) => (
+                                  <Badge key={c} className="text-xs border bg-blue-50 text-blue-700 border-blue-200">{c}</Badge>
+                                ))}
+                              </div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="border-t border-border pt-2">
+                        <p className="text-xs text-muted-foreground mb-2">Or search for a different vendor:</p>
+                      </div>
+                    </div>
+                  )}
+                  {rfqVendorsLoading && (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Loading RFQ vendors…
+                    </div>
+                  )}
                   <Input
                     placeholder="Search by vendor name…"
                     value={supplierSearch}
@@ -730,7 +824,9 @@ export function LegacyQuoteUploadModal({
                     </p>
                   )}
                   <div className="space-y-2">
-                    {suppliers.map((s) => (
+                    {suppliers
+                      .filter((s) => !rfqVendors.some((rv) => rv.id === s.id))
+                      .map((s) => (
                       <button
                         key={s.id}
                         type="button"
