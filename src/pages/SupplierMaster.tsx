@@ -27,6 +27,9 @@ import {
   Search,
   Star,
   Building2,
+  ShoppingCart,
+  IndianRupee,
+  Calendar,
 } from "lucide-react";
 
 type SupplierStatus = "active" | "inactive" | "blacklisted";
@@ -126,6 +129,26 @@ export default function SupplierMaster() {
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<VendorRegistration | null>(null);
   const [rejectReason, setRejectReason] = useState("");
+
+  // Supplier detail + PO history
+  type SupplierPO = { id: string; po_number: string; status: string; grand_total: number | null; created_at: string | null; delivery_date: string | null; payment_terms_type: string | null };
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailSupplier, setDetailSupplier] = useState<Supplier | null>(null);
+  const [detailPOs, setDetailPOs] = useState<SupplierPO[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const openSupplierDetail = async (s: Supplier) => {
+    setDetailSupplier(s);
+    setDetailOpen(true);
+    setDetailLoading(true);
+    const { data } = await supabase
+      .from("cps_purchase_orders")
+      .select("id, po_number, status, grand_total, created_at, delivery_date, payment_terms_type")
+      .eq("supplier_id", s.id)
+      .order("created_at", { ascending: false });
+    setDetailPOs((data ?? []) as SupplierPO[]);
+    setDetailLoading(false);
+  };
 
   const [form, setForm] = useState<SupplierForm>({
     name: "",
@@ -527,7 +550,7 @@ export default function SupplierMaster() {
                 paginatedFiltered.map((s) => {
                   const sb = statusConfig[s.status];
                   return (
-                    <TableRow key={s.id} className={s.profile_complete === false ? "bg-amber-50/30 hover:bg-amber-50/50" : "hover:bg-muted/30"}>
+                    <TableRow key={s.id} className={`cursor-pointer ${s.profile_complete === false ? "bg-amber-50/30 hover:bg-amber-50/50" : "hover:bg-muted/30"}`} onClick={() => openSupplierDetail(s)}>
                       <TableCell>
                         <div>
                           <div className="flex items-center gap-2">
@@ -588,7 +611,7 @@ export default function SupplierMaster() {
                         </div>
                       </TableCell>
                       {canManageSuppliers && (
-                        <TableCell className="text-right">
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
                             {s.profile_complete === false && (
                               <Button variant="outline" size="sm" onClick={() => openEdit(s)} className="text-xs text-amber-700 border-amber-300 hover:bg-amber-50">
@@ -797,6 +820,144 @@ export default function SupplierMaster() {
             <Button variant="outline" onClick={() => setApproveConfirmOpen(false)}>Cancel</Button>
             <Button className="bg-green-600 hover:bg-green-700" onClick={approveRegistration}>Approve</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Supplier Detail + PO History Dialog */}
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Building2 className="h-5 w-5 text-primary" />
+              {detailSupplier?.name ?? "Supplier"}
+            </DialogTitle>
+            <DialogDescription>Supplier profile and purchase order history</DialogDescription>
+          </DialogHeader>
+
+          {detailSupplier && (
+            <div className="space-y-4">
+              {/* Profile summary */}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <span className="text-muted-foreground">GSTIN: </span>
+                  <span className="font-mono font-medium">{detailSupplier.gstin ?? "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Location: </span>
+                  <span>{[detailSupplier.city, detailSupplier.state].filter(Boolean).join(", ") || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Phone: </span>
+                  <span>{detailSupplier.phone ?? "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Email: </span>
+                  <span>{detailSupplier.email ?? "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Performance: </span>
+                  <span className="inline-flex items-center gap-1"><Star className="h-3.5 w-3.5 text-amber-500 fill-amber-500" /> {detailSupplier.performance_score ?? "—"}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Win Rate: </span>
+                  <span>{formatPct(detailSupplier.win_rate)}</span>
+                </div>
+                {detailSupplier.categories && detailSupplier.categories.length > 0 && (
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground">Categories: </span>
+                    <span className="inline-flex gap-1 flex-wrap mt-1">
+                      {detailSupplier.categories.map((c) => (
+                        <Badge key={c} variant="outline" className="text-xs">{c}</Badge>
+                      ))}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* PO History */}
+              <div className="border-t pt-3">
+                <div className="flex items-center gap-2 mb-3">
+                  <ShoppingCart className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold">Purchase Order History</h3>
+                  <Badge variant="outline" className="text-xs">{detailPOs.length} POs</Badge>
+                </div>
+
+                {detailLoading ? (
+                  <div className="space-y-2">
+                    {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
+                  </div>
+                ) : detailPOs.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground text-sm">No purchase orders with this supplier yet</div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {/* Summary */}
+                    <div className="grid grid-cols-3 gap-3 mb-3">
+                      <div className="text-center p-2 bg-muted/30 rounded-md">
+                        <div className="text-lg font-bold text-foreground">{detailPOs.length}</div>
+                        <div className="text-[10px] text-muted-foreground">Total POs</div>
+                      </div>
+                      <div className="text-center p-2 bg-muted/30 rounded-md">
+                        <div className="text-lg font-bold text-foreground">
+                          {(() => {
+                            const total = detailPOs.reduce((s, p) => s + (p.grand_total ?? 0), 0);
+                            if (total >= 10000000) return `${(total / 10000000).toFixed(1)} Cr`;
+                            if (total >= 100000) return `${(total / 100000).toFixed(1)} L`;
+                            if (total >= 1000) return `${(total / 1000).toFixed(0)} K`;
+                            return total.toLocaleString("en-IN");
+                          })()}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">Total Value</div>
+                      </div>
+                      <div className="text-center p-2 bg-muted/30 rounded-md">
+                        <div className="text-lg font-bold text-foreground">
+                          {detailPOs.filter((p) => ["delivered", "closed"].includes(p.status)).length}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">Completed</div>
+                      </div>
+                    </div>
+
+                    {/* PO rows */}
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>PO Number</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Delivery</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {detailPOs.map((po) => (
+                          <TableRow key={po.id}>
+                            <TableCell className="font-mono text-primary text-xs">{po.po_number}</TableCell>
+                            <TableCell className="text-right text-sm">
+                              {po.grand_total != null ? `₹${po.grand_total.toLocaleString("en-IN")}` : "—"}
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={`text-[10px] border-0 ${
+                                po.status === "approved" || po.status === "sent" ? "bg-green-100 text-green-800" :
+                                po.status === "draft" ? "bg-muted text-muted-foreground" :
+                                po.status === "delivered" || po.status === "closed" ? "bg-emerald-100 text-emerald-800" :
+                                po.status === "cancelled" || po.status === "rejected" ? "bg-red-100 text-red-800" :
+                                "bg-blue-100 text-blue-800"
+                              }`}>{po.status}</Badge>
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {po.created_at ? new Date(po.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" }) : "—"}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {po.delivery_date ? new Date(po.delivery_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" }) : "—"}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
