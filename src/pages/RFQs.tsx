@@ -159,6 +159,8 @@ export default function RFQs() {
   const [statusFilter, setStatusFilter] = useState<RfqStatus | "all">("all");
   const [sortFieldRfq, setSortFieldRfq] = useState("created_at");
   const [sortDirRfq, setSortDirRfq] = useState<"asc" | "desc">("desc");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const [submittedPRs, setSubmittedPRs] = useState<Array<PurchaseRequisition & { itemsCount: number }>>([]);
   const [submittedPRLoading, setSubmittedPRLoading] = useState(false);
@@ -367,6 +369,8 @@ export default function RFQs() {
     const list = rfqs.filter((r) => {
       const matchesStatus = statusFilter === "all" ? true : r.status === statusFilter;
       if (!matchesStatus) return false;
+      if (dateFrom && r.created_at && r.created_at < dateFrom) return false;
+      if (dateTo && r.created_at && r.created_at > dateTo + "T23:59:59") return false;
       if (!q) return true;
       const prDisplay = (prDisplayById[r.pr_id] ?? "").toLowerCase();
       const fieldsMatch = r.rfq_number.toLowerCase().includes(q) || r.title.toLowerCase().includes(q);
@@ -378,7 +382,7 @@ export default function RFQs() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirRfq === "asc" ? cmp : -cmp;
     });
-  }, [rfqs, debouncedSearch, statusFilter, prDisplayById, sortFieldRfq, sortDirRfq]);
+  }, [rfqs, debouncedSearch, statusFilter, dateFrom, dateTo, prDisplayById, sortFieldRfq, sortDirRfq]);
 
   const openDialog = async () => {
     setDialogOpen(true);
@@ -845,6 +849,14 @@ export default function RFQs() {
             <SelectItem value="cancelled">Cancelled</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex items-center gap-2">
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" title="From date" />
+          <span className="text-xs text-muted-foreground">to</span>
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" title="To date" />
+          {(dateFrom || dateTo) && (
+            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs px-2">Clear</Button>
+          )}
+        </div>
       </div>
 
       <Card>

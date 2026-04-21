@@ -210,6 +210,8 @@ export default function PurchaseRequisitions() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sortField, setSortFieldPR] = useState("created_at");
   const [sortDir, setSortDirPR] = useState<"asc" | "desc">("desc");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   // Wizard state
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -387,7 +389,9 @@ export default function PurchaseRequisitions() {
         p.project_site.toLowerCase().includes(q) ||
         (p.project_code ?? "").toLowerCase().includes(q) ||
         p.requested_by_name.toLowerCase().includes(q);
-      return matchesStatus && matchesPriority && matchesQ;
+      const matchesDateFrom = !dateFrom || (p.created_at && p.created_at >= dateFrom);
+      const matchesDateTo = !dateTo || (p.created_at && p.created_at <= dateTo + "T23:59:59");
+      return matchesStatus && matchesPriority && matchesQ && matchesDateFrom && matchesDateTo;
     });
     // Sort: urgent first when sorting by priority; otherwise default sort
     const priorityRank: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -402,7 +406,7 @@ export default function PurchaseRequisitions() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [prList, debouncedSearch, statusFilter, priorityFilter, sortField, sortDir]);
+  }, [prList, debouncedSearch, statusFilter, priorityFilter, dateFrom, dateTo, sortField, sortDir]);
 
   const openWizard = () => {
     setWizardStep(1);
@@ -828,6 +832,14 @@ export default function PurchaseRequisitions() {
             <SelectItem value="low">↓ Low</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex items-center gap-2">
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" title="From date" />
+          <span className="text-xs text-muted-foreground">to</span>
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" title="To date" />
+          {(dateFrom || dateTo) && (
+            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs px-2">Clear</Button>
+          )}
+        </div>
       </div>
 
       {/* Table — desktop */}

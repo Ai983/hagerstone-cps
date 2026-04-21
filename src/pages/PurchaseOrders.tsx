@@ -246,6 +246,8 @@ export default function PurchaseOrders() {
     const s = searchParams.get("status");
     if (s) setStatusFilter(s);
   }, [searchParams]);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [sortFieldPO, setSortFieldPO] = useState("created_at");
   const [sortDirPO, setSortDirPO] = useState<"asc" | "desc">("desc");
 
@@ -351,6 +353,8 @@ export default function PurchaseOrders() {
              (String(r.status) === "draft" && ["sent", "pending"].includes(String((r as any).founder_approval_status ?? ""))))
           : String(r.status) === statusFilter;
       if (!matchesStatus) return false;
+      if (dateFrom && r.created_at && r.created_at < dateFrom) return false;
+      if (dateTo && r.created_at && r.created_at > dateTo + "T23:59:59") return false;
       if (!q) return true;
       return (
         String(r.po_number ?? "").toLowerCase().includes(q) ||
@@ -363,7 +367,7 @@ export default function PurchaseOrders() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirPO === "asc" ? cmp : -cmp;
     });
-  }, [rows, debouncedSearch, statusFilter, sortFieldPO, sortDirPO]);
+  }, [rows, debouncedSearch, statusFilter, dateFrom, dateTo, sortFieldPO, sortDirPO]);
 
   const fetchPoRows = async () => {
     setLoading(true);
@@ -1562,6 +1566,14 @@ export default function PurchaseOrders() {
             <SelectItem value="closed">Closed</SelectItem>
           </SelectContent>
         </Select>
+        <div className="flex items-center gap-2">
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" title="From date" />
+          <span className="text-xs text-muted-foreground">to</span>
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" title="To date" />
+          {(dateFrom || dateTo) && (
+            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs px-2">Clear</Button>
+          )}
+        </div>
       </div>
 
       <Card>
