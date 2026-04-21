@@ -33,6 +33,9 @@ type POMini = {
   created_at: string | null;
   delivery_date: string | null;
   pr_id: string | null;
+  payment_terms_type: string | null;
+  payment_due_date: string | null;
+  supplier_name_text: string | null;
 };
 
 type Supplier = { id: string; name: string; performance_score: number | null; status: string };
@@ -121,7 +124,7 @@ export default function Analytics() {
         { data: prLineData },
         { data: itemData },
       ] = await Promise.all([
-        supabase.from("cps_purchase_orders").select("id, po_number, supplier_id, project_code, status, grand_total, total_value, gst_amount, created_at, delivery_date, pr_id"),
+        supabase.from("cps_purchase_orders").select("id, po_number, supplier_id, project_code, status, grand_total, total_value, gst_amount, created_at, delivery_date, pr_id, payment_terms_type, payment_due_date, supplier_name_text"),
         supabase.from("cps_suppliers").select("id, name, performance_score, status"),
         supabase.from("cps_purchase_requisitions").select("id, project_site, project_code, created_at"),
         supabase.from("cps_grns").select("id, po_id, status, created_at"),
@@ -582,6 +585,9 @@ export default function Analytics() {
           <TabsTrigger value="trend">
             <BarChart3 className="h-3.5 w-3.5 mr-1.5" /> Monthly Trend
           </TabsTrigger>
+          <TabsTrigger value="payments">
+            Payments Due
+          </TabsTrigger>
           <TabsTrigger value="status">
             <FileText className="h-3.5 w-3.5 mr-1.5" /> PO Status
           </TabsTrigger>
@@ -740,6 +746,115 @@ export default function Analytics() {
                   ))}
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Payments Due */}
+        <TabsContent value="payments">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">Payment Schedule</CardTitle>
+              <p className="text-xs text-muted-foreground">POs with payment due dates — overdue, upcoming, and completed</p>
+            </CardHeader>
+            <CardContent className="p-0">
+              {loading ? (
+                <div className="p-4 space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}</div>
+              ) : (() => {
+                const today = new Date().toISOString().slice(0, 10);
+                const paymentPos = filteredPos
+                  .filter((p) => p.payment_due_date || p.payment_terms_type)
+                  .sort((a, b) => {
+                    if (!a.payment_due_date) return 1;
+                    if (!b.payment_due_date) return -1;
+                    return a.payment_due_date.localeCompare(b.payment_due_date);
+                  });
+                const overdue = paymentPos.filter((p) => p.payment_due_date && p.payment_due_date < today && !["closed", "cancelled"].includes(p.status));
+                const upcoming = paymentPos.filter((p) => p.payment_due_date && p.payment_due_date >= today && !["closed", "cancelled"].includes(p.status));
+                const completed = paymentPos.filter((p) => ["closed", "cancelled"].includes(p.status));
+                const supName = (p: POMini) => {
+                  const s = suppliers.find((s) => s.id === p.supplier_id);
+                  return s?.name ?? p.supplier_name_text ?? "—";
+                };
+                const fmtDueDate = (d: string | null) => {
+                  if (!d) return "Not set";
+                  const dt = new Date(d);
+                  return dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+                };
+
+                if (paymentPos.length === 0) return (
+                  <div className="text-center text-muted-foreground py-10">No POs with payment terms yet</div>
+                );
+
+                return (
+                  <div className="divide-y divide-border">
+                    {/* Summary cards */}
+                    <div className="grid grid-cols-3 gap-4 p-4">
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-red-600">{overdue.length}</div>
+                        <div className="text-xs text-muted-foreground">Overdue</div>
+                        <div className="text-xs font-medium text-red-600">{fmtCurrency(overdue.reduce((s, p) => s + (p.grand_total ?? 0), 0), true)}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-amber-600">{upcoming.length}</div>
+                        <div className="text-xs text-muted-foreground">Upcoming</div>
+                        <div className="text-xs font-medium text-amber-600">{fmtCurrency(upcoming.reduce((s, p) => s + (p.grand_total ?? 0), 0), true)}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-green-600">{completed.length}</div>
+                        <div className="text-xs text-muted-foreground">Closed</div>
+                        <div className="text-xs font-medium text-green-600">{fmtCurrency(completed.reduce((s, p) => s + (p.grand_total ?? 0), 0), true)}</div>
+                      </div>
+                    </div>
+
+                    {/* Table */}
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>PO Number</TableHead>
+                          <TableHead>Supplier</TableHead>
+                          <TableHead>Amount</TableHead>
+                          <TableHead>Payment Terms</TableHead>
+                          <TableHead>Due Date</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {overdue.map((p) => (
+                          <TableRow key={p.id} className="bg-red-50/50">
+                            <TableCell className="font-mono text-primary text-xs">{p.po_number}</TableCell>
+                            <TableCell className="text-sm">{supName(p)}</TableCell>
+                            <TableCell className="text-sm">{fmtCurrency(p.grand_total)}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{p.payment_terms_type ?? "—"}</TableCell>
+                            <TableCell className="text-xs font-medium text-red-600">{fmtDueDate(p.payment_due_date)}</TableCell>
+                            <TableCell><Badge className="text-[10px] bg-red-100 text-red-800 border-0">Overdue</Badge></TableCell>
+                          </TableRow>
+                        ))}
+                        {upcoming.map((p) => (
+                          <TableRow key={p.id}>
+                            <TableCell className="font-mono text-primary text-xs">{p.po_number}</TableCell>
+                            <TableCell className="text-sm">{supName(p)}</TableCell>
+                            <TableCell className="text-sm">{fmtCurrency(p.grand_total)}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{p.payment_terms_type ?? "—"}</TableCell>
+                            <TableCell className="text-xs font-medium text-amber-600">{fmtDueDate(p.payment_due_date)}</TableCell>
+                            <TableCell><Badge className="text-[10px] bg-amber-100 text-amber-800 border-0">Upcoming</Badge></TableCell>
+                          </TableRow>
+                        ))}
+                        {completed.map((p) => (
+                          <TableRow key={p.id} className="opacity-60">
+                            <TableCell className="font-mono text-primary text-xs">{p.po_number}</TableCell>
+                            <TableCell className="text-sm">{supName(p)}</TableCell>
+                            <TableCell className="text-sm">{fmtCurrency(p.grand_total)}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{p.payment_terms_type ?? "—"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{fmtDueDate(p.payment_due_date)}</TableCell>
+                            <TableCell><Badge className="text-[10px] bg-green-100 text-green-800 border-0">Closed</Badge></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         </TabsContent>

@@ -17,7 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight, ClipboardCheck } from "lucide-react";
+import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight, ChevronDown, ClipboardCheck } from "lucide-react";
 
 // DB CHECK constraint allows: pending, pending_design, validated, duplicate_flagged, rfq_created, po_issued, delivered, cancelled
 type PRStatus = "pending" | "pending_design" | "validated" | "duplicate_flagged" | "rfq_created" | "po_issued" | "delivered" | "cancelled";
@@ -212,6 +212,25 @@ export default function PurchaseRequisitions() {
   const [sortDir, setSortDirPR] = useState<"asc" | "desc">("desc");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+
+  // Quick preview expand
+  const [expandedPrId, setExpandedPrId] = useState<string | null>(null);
+  const [expandedItems, setExpandedItems] = useState<Array<{ description: string; quantity: number | null; unit: string | null; specs: string | null }>>([]);
+  const [expandLoading, setExpandLoading] = useState(false);
+
+  const toggleExpand = async (prId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (expandedPrId === prId) { setExpandedPrId(null); return; }
+    setExpandedPrId(prId);
+    setExpandLoading(true);
+    const { data } = await supabase
+      .from("cps_pr_line_items")
+      .select("description, quantity, unit, specs")
+      .eq("pr_id", prId)
+      .order("sort_order", { ascending: true });
+    setExpandedItems((data ?? []) as Array<{ description: string; quantity: number | null; unit: string | null; specs: string | null }>);
+    setExpandLoading(false);
+  };
 
   // Wizard state
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -895,8 +914,16 @@ export default function PurchaseRequisitions() {
                 filtered.map((pr) => {
                   const badge = statusBadge(pr.status);
                   return (
-                    <TableRow key={pr.id} className="hover:bg-muted/50 cursor-pointer" onClick={() => openDetail(pr)}>
-                      <TableCell className="font-mono text-primary">{pr.pr_number}</TableCell>
+                    <React.Fragment key={pr.id}>
+                    <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => openDetail(pr)}>
+                      <TableCell className="font-mono text-primary">
+                        <div className="flex items-center gap-1">
+                          <button onClick={(e) => toggleExpand(pr.id, e)} className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
+                            {expandedPrId === pr.id ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                          </button>
+                          {pr.pr_number}
+                        </div>
+                      </TableCell>
                       <TableCell className="font-medium">{pr.project_code ?? "—"}</TableCell>
                       <TableCell className="text-muted-foreground text-sm">{pr.project_site}</TableCell>
                       <TableCell className="text-muted-foreground">{pr.requested_by_name}</TableCell>
@@ -937,6 +964,31 @@ export default function PurchaseRequisitions() {
                         </div>
                       </TableCell>
                     </TableRow>
+                    {/* Expanded preview row */}
+                    {expandedPrId === pr.id && (
+                      <TableRow className="bg-muted/20">
+                        <TableCell colSpan={10} className="py-2 px-6">
+                          {expandLoading ? (
+                            <div className="flex items-center gap-2 py-2"><Skeleton className="h-4 w-48" /><Skeleton className="h-4 w-32" /></div>
+                          ) : expandedItems.length === 0 ? (
+                            <p className="text-xs text-muted-foreground py-2">No line items</p>
+                          ) : (
+                            <div className="space-y-1">
+                              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Line Items</p>
+                              {expandedItems.map((item, idx) => (
+                                <div key={idx} className="flex items-center gap-4 text-xs py-1 border-b border-border/30 last:border-0">
+                                  <span className="text-muted-foreground w-5 shrink-0">{idx + 1}.</span>
+                                  <span className="flex-1 font-medium">{item.description}</span>
+                                  <span className="text-muted-foreground shrink-0">{item.quantity ?? "—"} {item.unit ?? ""}</span>
+                                  {item.specs && <span className="text-muted-foreground/70 truncate max-w-[200px]" title={item.specs}>{item.specs}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    </React.Fragment>
                   );
                 })
               )}

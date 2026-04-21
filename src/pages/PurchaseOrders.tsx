@@ -27,7 +27,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-import { Info, PenLine, Plus, Search, Trash2, Upload } from "lucide-react";
+import { Info, PenLine, Plus, Search, Trash2, Upload, ChevronRight, ChevronDown } from "lucide-react";
 
 import LegacyPOUploadModal from "@/components/pos/LegacyPOUploadModal";
 import { PaymentTermsModal } from "@/components/procurement/PaymentTermsModal";
@@ -2694,6 +2694,23 @@ function PoTableRows({
   const [prById, setPrById] = useState<Record<string, PrRow>>({});
   const [usersById, setUsersById] = useState<Record<string, UserRow>>({});
   const [loading, setLoading] = useState(true);
+  const [expandedPoId, setExpandedPoId] = useState<string | null>(null);
+  const [expandedLineItems, setExpandedLineItems] = useState<Array<{ description: string; quantity: number; unit: string | null; rate: number; total_value: number }>>([]);
+  const [expandLineLoading, setExpandLineLoading] = useState(false);
+
+  const toggleExpandPo = async (poId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (expandedPoId === poId) { setExpandedPoId(null); return; }
+    setExpandedPoId(poId);
+    setExpandLineLoading(true);
+    const { data } = await supabase
+      .from("cps_po_line_items")
+      .select("description, quantity, unit, rate, total_value")
+      .eq("po_id", poId)
+      .order("sort_order", { ascending: true });
+    setExpandedLineItems((data ?? []) as Array<{ description: string; quantity: number; unit: string | null; rate: number; total_value: number }>);
+    setExpandLineLoading(false);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -2775,9 +2792,13 @@ function PoTableRows({
         const canApproveByAntiCorruption = !(r.created_by && userId && r.created_by === userId);
 
         return (
-          <TableRow key={r.id} className={r.source === "legacy" ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-muted/30"}>
+          <React.Fragment key={r.id}>
+          <TableRow className={r.source === "legacy" ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-muted/30"}>
             <TableCell className="font-mono text-primary">
               <div className="flex items-center gap-1.5 flex-wrap">
+                <button onClick={(e) => toggleExpandPo(r.id, e)} className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
+                  {expandedPoId === r.id ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                </button>
                 {r.po_number}
                 {r.source === "legacy" && (
                   <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 leading-none">📄 LEGACY</span>
@@ -2861,6 +2882,32 @@ function PoTableRows({
               </div>
             </TableCell>
           </TableRow>
+          {/* Expanded preview row */}
+          {expandedPoId === r.id && (
+            <TableRow className="bg-muted/20">
+              <TableCell colSpan={9} className="py-2 px-6">
+                {expandLineLoading ? (
+                  <div className="flex items-center gap-2 py-2"><Skeleton className="h-4 w-48" /><Skeleton className="h-4 w-32" /></div>
+                ) : expandedLineItems.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-2">No line items</p>
+                ) : (
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Line Items</p>
+                    {expandedLineItems.map((item, idx) => (
+                      <div key={idx} className="flex items-center gap-4 text-xs py-1 border-b border-border/30 last:border-0">
+                        <span className="text-muted-foreground w-5 shrink-0">{idx + 1}.</span>
+                        <span className="flex-1 font-medium">{item.description}</span>
+                        <span className="text-muted-foreground shrink-0">{item.quantity} {item.unit ?? ""}</span>
+                        <span className="text-muted-foreground shrink-0">@ {item.rate.toLocaleString("en-IN")}</span>
+                        <span className="font-medium shrink-0">{item.total_value.toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 })}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </TableCell>
+            </TableRow>
+          )}
+          </React.Fragment>
         );
       })}
     </>
