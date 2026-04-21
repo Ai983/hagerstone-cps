@@ -100,7 +100,7 @@ type SupplierRow = {
 };
 
 type RfqRow = { id: string; rfq_number: string };
-type PrRow = { id: string; project_site: string | null; project_code: string | null };
+type PrRow = { id: string; pr_number: string | null; project_site: string | null; project_code: string | null };
 
 type PoLineItemRow = {
   id: string;
@@ -266,6 +266,7 @@ export default function PurchaseOrders() {
   const [recommendedSupplierId, setRecommendedSupplierId] = useState<string>("");
   const [prProjectSite, setPrProjectSite] = useState<string>("");
   const [prProjectCode, setPrProjectCode] = useState<string>("");
+  const [createPrNumber, setCreatePrNumber] = useState<string>("");
 
   const [createSupplierId, setCreateSupplierId] = useState<string>("");
   const [createShipTo, setCreateShipTo] = useState<string>("");
@@ -500,12 +501,13 @@ export default function PurchaseOrders() {
 
       const { data: prRow, error: prErr } = await supabase
         .from("cps_purchase_requisitions")
-        .select("id,project_site,project_code")
+        .select("id,pr_number,project_site,project_code")
         .eq("id", prId)
         .single();
       if (prErr) throw prErr;
       setPrProjectSite((prRow as any).project_site ?? "");
       setPrProjectCode((prRow as any).project_code ?? "");
+      setCreatePrNumber((prRow as any).pr_number ?? "");
       setCreateShipTo((prRow as any).project_site ?? "");
 
       // Try to load comparison sheet (may not exist for single-quote RFQs)
@@ -841,6 +843,7 @@ export default function PurchaseOrders() {
           /* generate PDF */
           const pdfBlob = buildPoPdf({
             poNumber: _poNumber,
+            prNumber: createPrNumber || null,
             supplierName,
             supplierGstin,
             supplierPhone,
@@ -963,7 +966,7 @@ export default function PurchaseOrders() {
       const [supplierRes, rfqRes, prRes, userRes, lineRes, configRes, scheduleRes, tokensRes] = await Promise.all([
         supplierId ? supabase.from("cps_suppliers").select("id,name,gstin,phone,email,address_text,city,state").eq("id", supplierId).single() : Promise.resolve({ data: null, error: null }),
         rfqId ? supabase.from("cps_rfqs").select("id,rfq_number").eq("id", rfqId).single() : Promise.resolve({ data: null, error: null }),
-        prId ? supabase.from("cps_purchase_requisitions").select("id,project_site,project_code").eq("id", prId).single() : Promise.resolve({ data: null, error: null }),
+        prId ? supabase.from("cps_purchase_requisitions").select("id,pr_number,project_site,project_code").eq("id", prId).single() : Promise.resolve({ data: null, error: null }),
         approvedBy ? supabase.from("cps_users").select("id,name").eq("id", approvedBy).single() : Promise.resolve({ data: null, error: null }),
         supabase
           .from("cps_po_line_items")
@@ -1322,6 +1325,7 @@ export default function PurchaseOrders() {
 
       const blob = buildPoPdf({
         poNumber: viewPo.po_number,
+        prNumber: viewPr?.pr_number ?? null,
         poDate: viewPo.created_at,
         supplierName: viewSupplier.name ?? "",
         supplierGstin: viewSupplier.gstin,
@@ -2141,6 +2145,12 @@ export default function PurchaseOrders() {
 
                   {/* Project Details */}
                   <div className="grid grid-cols-1 gap-3">
+                    {viewPr?.pr_number && (
+                      <div className="text-sm">
+                        <span className="text-muted-foreground">PR Reference: </span>
+                        <span className="font-medium font-mono text-primary">{viewPr.pr_number}</span>
+                      </div>
+                    )}
                     <div className="text-sm">
                       <span className="text-muted-foreground">Project Code: </span>
                       <span className="font-medium">{viewPo.project_code ?? viewPr?.project_code ?? "—"}</span>
@@ -2688,7 +2698,7 @@ function PoTableRows({
             ? supabase.from("cps_suppliers").select("id,name,gstin,phone,email,address_text,city,state").in("id", supplierIds)
             : Promise.resolve({ data: [], error: null }),
           rfqIds.length ? supabase.from("cps_rfqs").select("id,rfq_number").in("id", rfqIds) : Promise.resolve({ data: [], error: null }),
-          prIds.length ? supabase.from("cps_purchase_requisitions").select("id,project_site,project_code").in("id", prIds) : Promise.resolve({ data: [], error: null }),
+          prIds.length ? supabase.from("cps_purchase_requisitions").select("id,pr_number,project_site,project_code").in("id", prIds) : Promise.resolve({ data: [], error: null }),
           approvedByIds.length ? supabase.from("cps_users").select("id,name").in("id", approvedByIds) : Promise.resolve({ data: [], error: null }),
         ]);
 

@@ -1571,10 +1571,10 @@ Rules:
       if (poNumErr) throw poNumErr;
       const poNumber = typeof poNumberData === "string" ? poNumberData : String((poNumberData as any)?.result ?? poNumberData ?? "");
 
-      // Fetch PR details for ship_to and delivery_date
+      // Fetch PR details for ship_to, delivery_date, and PR number
       const { data: prData } = await supabase
         .from("cps_purchase_requisitions")
-        .select("project_site, project_code, required_by")
+        .select("pr_number, project_site, project_code, required_by")
         .eq("id", rfq.pr_id)
         .maybeSingle();
 
@@ -1790,6 +1790,7 @@ Rules:
 
             const pdfBlob = buildPoPdf({
               poNumber,
+              prNumber: (prData as any)?.pr_number ?? null,
               supplierName,
               supplierGstin,
               supplierState,

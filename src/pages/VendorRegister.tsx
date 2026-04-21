@@ -65,7 +65,8 @@ export default function VendorRegister() {
     if (!/^(\+91)?[6-9]\d{9}$/.test(phone.trim().replace(/[\s-]/g, ""))) { toast.error("Invalid phone — enter 10-digit Indian mobile number"); return; }
     if (!gstin.trim()) { toast.error("GSTIN is required"); return; }
     if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/.test(gstin.trim().toUpperCase())) { toast.error("Invalid GSTIN format — must be 15 characters (e.g. 09AAECH3768B1ZM)"); return; }
-    if (pan.trim() && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.trim().toUpperCase())) { toast.error("Invalid PAN format — must be 10 characters (e.g. ABCDE1234F)"); return; }
+    if (!pan.trim()) { toast.error("PAN number is required"); return; }
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.trim().toUpperCase())) { toast.error("Invalid PAN format — must be 10 characters (e.g. ABCDE1234F)"); return; }
     if (!declaration) { toast.error("Please confirm the declaration"); return; }
 
     setSubmitting(true);

@@ -365,8 +365,12 @@ export default function SupplierMaster() {
       toast.error("Invalid GSTIN format — must be 15 characters (e.g. 09AAECH3768B1ZM)");
       return;
     }
-    // PAN format: 5 alpha + 4 digits + 1 alpha
-    if (form.pan.trim() && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(form.pan.trim().toUpperCase())) {
+    // PAN: mandatory + format check
+    if (!form.pan.trim()) {
+      toast.error("PAN number is required");
+      return;
+    }
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(form.pan.trim().toUpperCase())) {
       toast.error("Invalid PAN format — must be 10 characters (e.g. ABCDE1234F)");
       return;
     }

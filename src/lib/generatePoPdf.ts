@@ -17,6 +17,7 @@ export interface PoPdfLineItem {
 
 export interface PoPdfData {
   poNumber: string;
+  prNumber?: string | null;
   poDate?: string | null;
 
   /* supplier */
@@ -263,6 +264,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   /* PO meta */
   const metaRows: [string, string][] = [
     ["PO No", data.poNumber],
+    ...(data.prNumber ? [["PR Ref", data.prNumber] as [string, string]] : []),
     ["Po Issue Date", poDate],
     ["Po upto", poUpto],
     ["Valid Upto", validUpto],
