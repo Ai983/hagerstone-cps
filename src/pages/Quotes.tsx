@@ -248,7 +248,7 @@ export default function Quotes() {
     benchmark_rate: number | null;
     sort_order: number;
   };
-  type LogItemEntry = { rate: string; gst_percent: string; brand: string };
+  type LogItemEntry = { rate: string; gst_percent: string; brand: string; quantity: string };
 
   const [logRfqItems, setLogRfqItems] = useState<LogRfqItem[]>([]);
   const [logItemEntries, setLogItemEntries] = useState<Record<string, LogItemEntry>>({});
@@ -1057,7 +1057,7 @@ Rules:
       // init entries with empty values
       const init: Record<string, LogItemEntry> = {};
       items.forEach((it) => {
-        init[it.line_item_id] = { rate: "", gst_percent: "18", brand: "" };
+        init[it.line_item_id] = { rate: "", gst_percent: "18", brand: "", quantity: String(it.quantity ?? 1) };
       });
       setLogItemEntries(init);
     } catch {
@@ -1594,10 +1594,11 @@ Rules:
                           </TableHeader>
                           <TableBody>
                             {logRfqItems.map((it, idx) => {
-                              const entry = logItemEntries[it.line_item_id] ?? { rate: "", gst_percent: "18", brand: "" };
+                              const entry = logItemEntries[it.line_item_id] ?? { rate: "", gst_percent: "18", brand: "", quantity: String(it.quantity ?? 1) };
                               const rate = parseFloat(entry.rate) || 0;
                               const gstPct = parseFloat(entry.gst_percent) || 0;
-                              const amount = rate * (it.quantity ?? 1);
+                              const qty = parseFloat(entry.quantity) || it.quantity || 1;
+                              const amount = rate * qty;
                               const gstAmt = amount * (gstPct / 100);
                               const total = amount + gstAmt;
                               const updateEntry = (patch: Partial<LogItemEntry>) =>
@@ -1611,7 +1612,14 @@ Rules:
                                       <div className="text-[10px] text-muted-foreground">Benchmark: ₹{it.benchmark_rate}</div>
                                     )}
                                   </TableCell>
-                                  <TableCell className="text-right text-sm">{it.quantity}</TableCell>
+                                  <TableCell>
+                                    <Input
+                                      type="number" min="0.001" step="any"
+                                      className="h-8 text-sm text-right w-20"
+                                      value={entry.quantity}
+                                      onChange={(e) => updateEntry({ quantity: e.target.value })}
+                                    />
+                                  </TableCell>
                                   <TableCell className="text-sm text-muted-foreground">{it.unit}</TableCell>
                                   <TableCell>
                                     <Input
@@ -1655,10 +1663,10 @@ Rules:
                       {(() => {
                         let subtotal = 0, totalGstAmt = 0;
                         logRfqItems.forEach((it) => {
-                          const e = logItemEntries[it.line_item_id] ?? { rate: "0", gst_percent: "18", brand: "" };
+                          const e = logItemEntries[it.line_item_id] ?? { rate: "0", gst_percent: "18", brand: "", quantity: String(it.quantity ?? 1) };
                           const r = parseFloat(e.rate) || 0;
                           const g = parseFloat(e.gst_percent) || 0;
-                          const amt = r * (it.quantity ?? 1);
+                          const amt = r * (parseFloat(e.quantity) || it.quantity || 1);
                           subtotal += amt;
                           totalGstAmt += amt * (g / 100);
                         });
@@ -1867,6 +1875,14 @@ Rules:
                                 <Input className="h-7 text-xs" value={item.description ?? ""} onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, description: e.target.value } : it))} />
                               </div>
                               <div className="space-y-0.5">
+                                <Label className="text-[10px] text-muted-foreground">Quantity</Label>
+                                <Input className="h-7 text-xs" type="number" min="0.001" step="any" value={item.quantity ?? 1} onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, quantity: e.target.value } : it))} />
+                              </div>
+                              <div className="space-y-0.5">
+                                <Label className="text-[10px] text-muted-foreground">Unit</Label>
+                                <Input className="h-7 text-xs" value={item.unit ?? ""} onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, unit: e.target.value } : it))} />
+                              </div>
+                              <div className="space-y-0.5">
                                 <Label className="text-[10px] text-muted-foreground">Brand</Label>
                                 <Input className="h-7 text-xs" value={item.brand ?? ""} onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, brand: e.target.value } : it))} />
                               </div>
@@ -1895,6 +1911,12 @@ Rules:
                               <div className="space-y-0.5">
                                 <Label className="text-[10px] text-muted-foreground">Lead Time (days)</Label>
                                 <Input className="h-7 text-xs" type="number" value={item.lead_time_days ?? ""} onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, lead_time_days: e.target.value } : it))} />
+                              </div>
+                              <div className="col-span-2 bg-primary/5 rounded-md px-2 py-1.5 flex items-center justify-between">
+                                <span className="text-[10px] text-muted-foreground">{parseFloat(item.quantity)||1} {item.unit || "units"} × ₹{((parseFloat(item.rate)||0) * (1+(parseFloat(item.gst_percent)||18)/100) + (parseFloat(item.freight)||0) + (parseFloat(item.packing)||0)).toFixed(2)} landed</span>
+                                <span className="text-xs font-bold text-primary">
+                                  Total: ₹{((parseFloat(item.quantity)||1) * ((parseFloat(item.rate)||0) * (1+(parseFloat(item.gst_percent)||18)/100) + (parseFloat(item.freight)||0) + (parseFloat(item.packing)||0))).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                </span>
                               </div>
                             </div>
                           </Card>
