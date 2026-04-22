@@ -273,12 +273,9 @@ export default function ComparisonSheetPage() {
   };
 
   const confirmBankAndCreatePO = async () => {
-    if (!bankHolderName.trim() || !bankName.trim() || !bankIfsc.trim() || !bankAccountNumber.trim()) {
-      toast.error("All supplier bank details are required — these appear on the PO PDF sent to founders");
-      return;
-    }
-    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(bankIfsc.trim().toUpperCase())) {
-      toast.error("Invalid IFSC code — must be 11 characters (e.g. HDFC0001234)");
+    // Bank details are optional — but IF IFSC is entered, it must be valid
+    if (bankIfsc.trim() && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(bankIfsc.trim().toUpperCase())) {
+      toast.error("Invalid IFSC code — must be 11 characters (e.g. HDFC0001234) or leave blank");
       return;
     }
     setBankDialogOpen(false);
@@ -3288,30 +3285,32 @@ Rules:
           <DialogHeader>
             <DialogTitle>Supplier Bank Account Details</DialogTitle>
             <DialogDescription>
-              These details will appear on the PO PDF that gets sent to the founder (Bhaskar sir) for approval. Fill them correctly before proceeding.
+              Optional — if filled, these appear on the PO PDF sent to the founder for approval. You can skip and add later via the PO Edit page.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-2">
             <div className="space-y-1 sm:col-span-2">
-              <Label className="text-xs">A/c Holder Name *</Label>
-              <Input value={bankHolderName} onChange={(e) => setBankHolderName(e.target.value)} placeholder="Account holder name" className="h-9" />
+              <Label className="text-xs">A/c Holder Name</Label>
+              <Input value={bankHolderName} onChange={(e) => setBankHolderName(e.target.value)} placeholder="Account holder name (optional)" className="h-9" />
             </div>
             <div className="space-y-1 sm:col-span-2">
-              <Label className="text-xs">Bank Name *</Label>
-              <Input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="e.g. HDFC Bank, Noida" className="h-9" />
+              <Label className="text-xs">Bank Name</Label>
+              <Input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="e.g. HDFC Bank, Noida (optional)" className="h-9" />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">IFSC Code *</Label>
-              <Input value={bankIfsc} onChange={(e) => setBankIfsc(e.target.value.toUpperCase())} placeholder="HDFC0001234" className="h-9 font-mono" maxLength={11} />
+              <Label className="text-xs">IFSC Code</Label>
+              <Input value={bankIfsc} onChange={(e) => setBankIfsc(e.target.value.toUpperCase())} placeholder="HDFC0001234 (optional)" className="h-9 font-mono" maxLength={11} />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Account Number *</Label>
-              <Input value={bankAccountNumber} onChange={(e) => setBankAccountNumber(e.target.value)} placeholder="Bank account number" className="h-9 font-mono" />
+              <Label className="text-xs">Account Number</Label>
+              <Input value={bankAccountNumber} onChange={(e) => setBankAccountNumber(e.target.value)} placeholder="Account number (optional)" className="h-9 font-mono" />
             </div>
           </div>
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            Once confirmed, the PO will be created and the approval request will be sent to the founder via WhatsApp with the complete PO PDF (including these bank details).
-          </div>
+          {(!bankHolderName.trim() || !bankName.trim() || !bankIfsc.trim() || !bankAccountNumber.trim()) && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              ⚠ Bank details are incomplete. The PO will still be created, but the founder will receive a PDF without bank details. You can add them later via the PO Edit page.
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setBankDialogOpen(false)} disabled={creatingPO}>
               Cancel

@@ -730,13 +730,9 @@ export default function PurchaseOrders() {
       toast.error("At least one line item is required");
       return;
     }
-    // Bank details required — they appear on the PDF sent to founder for approval
-    if (!createBankHolderName.trim() || !createBankName.trim() || !createBankIfsc.trim() || !createBankAccountNumber.trim()) {
-      toast.error("All supplier bank details are required — these appear on the PO PDF sent to founders");
-      return;
-    }
-    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(createBankIfsc.trim().toUpperCase())) {
-      toast.error("Invalid IFSC code — must be 11 characters (e.g. HDFC0001234)");
+    // Bank details are optional — but IF IFSC is entered, it must be in valid format
+    if (createBankIfsc.trim() && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(createBankIfsc.trim().toUpperCase())) {
+      toast.error("Invalid IFSC code — must be 11 characters (e.g. HDFC0001234) or leave blank");
       return;
     }
 
@@ -2044,33 +2040,38 @@ export default function PurchaseOrders() {
                 </div>
               )}
 
-              {/* Supplier Bank Details — must be filled before founder approval so PDF contains them */}
+              {/* Supplier Bank Details — optional, appears on PDF if filled */}
               <Card className="border-primary/30 bg-primary/5">
                 <CardHeader className="py-3">
                   <CardTitle className="text-sm flex items-center gap-2">
                     Supplier Bank Account Details
-                    <span className="text-[10px] font-normal text-muted-foreground">(required — appears on PO PDF sent to founder)</span>
+                    <span className="text-[10px] font-normal text-muted-foreground">(optional — appears on PO PDF if filled, can be added later via Edit)</span>
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pb-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1">
                       <Label className="text-xs">A/c Holder Name</Label>
-                      <Input value={createBankHolderName} onChange={(e) => setCreateBankHolderName(e.target.value)} placeholder="Account holder name" className="h-9" />
+                      <Input value={createBankHolderName} onChange={(e) => setCreateBankHolderName(e.target.value)} placeholder="Account holder name (optional)" className="h-9" />
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">Bank Name</Label>
-                      <Input value={createBankName} onChange={(e) => setCreateBankName(e.target.value)} placeholder="e.g. HDFC Bank, Noida" className="h-9" />
+                      <Input value={createBankName} onChange={(e) => setCreateBankName(e.target.value)} placeholder="e.g. HDFC Bank, Noida (optional)" className="h-9" />
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">IFSC Code</Label>
-                      <Input value={createBankIfsc} onChange={(e) => setCreateBankIfsc(e.target.value.toUpperCase())} placeholder="e.g. HDFC0001234" className="h-9 font-mono" maxLength={11} />
+                      <Input value={createBankIfsc} onChange={(e) => setCreateBankIfsc(e.target.value.toUpperCase())} placeholder="HDFC0001234 (optional)" className="h-9 font-mono" maxLength={11} />
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">Account Number</Label>
-                      <Input value={createBankAccountNumber} onChange={(e) => setCreateBankAccountNumber(e.target.value)} placeholder="Bank account number" className="h-9 font-mono" />
+                      <Input value={createBankAccountNumber} onChange={(e) => setCreateBankAccountNumber(e.target.value)} placeholder="Account number (optional)" className="h-9 font-mono" />
                     </div>
                   </div>
+                  {(!createBankHolderName.trim() || !createBankName.trim() || !createBankIfsc.trim() || !createBankAccountNumber.trim()) && (
+                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      ⚠ Bank details are incomplete — founder will receive a PDF without bank details. You can add them later via the PO Edit page.
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
