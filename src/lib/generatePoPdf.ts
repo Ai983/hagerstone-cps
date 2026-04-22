@@ -141,13 +141,42 @@ export async function loadCompanyConfig(supabaseClient: SupabaseClient): Promise
 
 // Aliases for use in buildPoPdf — read from mutable config
 const CO_NAME  = () => companyConfig.CO_NAME;
-const CO_GST   = () => companyConfig.CO_GST;
 const CO_ADDR  = () => companyConfig.CO_ADDR;
 const CO_TEL   = () => companyConfig.CO_TEL;
 const CO_EMAIL = () => companyConfig.CO_EMAIL;
 const PREPARED = () => companyConfig.PREPARED;
 const CHK      = () => companyConfig.CHK;
 const AUTH_SIG = () => companyConfig.AUTH_SIG;
+
+// ──────────────────────────────── Hagerstone multi-state GSTINs ──
+// Hagerstone is registered in 3 states. For intra-state invoices (vendor in same state),
+// use the matching GSTIN and charge CGST+SGST. For inter-state, use the primary UP GSTIN
+// and charge IGST only.
+const HAGERSTONE_GSTIN_BY_STATE_CODE: Record<string, string> = {
+  "09": "09AAECH3768B1ZM", // Uttar Pradesh
+  "07": "07AAECH3768B1ZQ", // Delhi
+  "06": "06AAECH3768B1ZS", // Haryana
+};
+const PRIMARY_HAGERSTONE_GSTIN = "09AAECH3768B1ZM"; // UP — fallback for inter-state
+
+/** Decide which Hagerstone GSTIN applies and whether tax is intra-state (CGST+SGST) or inter-state (IGST). */
+function resolveHagerstoneGstin(vendorGstin?: string | null, vendorState?: string | null): { gstin: string; isIntraState: boolean } {
+  // Primary: vendor's GSTIN first 2 digits = their state code (authoritative)
+  if (vendorGstin && vendorGstin.trim().length >= 2) {
+    const stateCode = vendorGstin.trim().substring(0, 2);
+    const match = HAGERSTONE_GSTIN_BY_STATE_CODE[stateCode];
+    if (match) return { gstin: match, isIntraState: true };
+  }
+  // Fallback: match vendor's state name (if GSTIN missing/invalid)
+  if (vendorState) {
+    const s = vendorState.trim().toUpperCase();
+    if (s === "UTTAR PRADESH" || s === "UP") return { gstin: HAGERSTONE_GSTIN_BY_STATE_CODE["09"], isIntraState: true };
+    if (s === "DELHI" || s === "NEW DELHI" || s === "DELHI NCR") return { gstin: HAGERSTONE_GSTIN_BY_STATE_CODE["07"], isIntraState: true };
+    if (s === "HARYANA") return { gstin: HAGERSTONE_GSTIN_BY_STATE_CODE["06"], isIntraState: true };
+  }
+  // Inter-state transaction — use primary GSTIN, IGST applies
+  return { gstin: PRIMARY_HAGERSTONE_GSTIN, isIntraState: false };
+}
 
 const TERMS: string[] = [
   "Please strictly mention PO number, packing detail & complete description of the item in your invoice, otherwise material will not be accepted.",
@@ -175,6 +204,10 @@ export function buildPoPdf(data: PoPdfData): Blob {
   const poUpto     = addDays(data.deliveryDate, 5);
   const validUpto  = addDays(data.deliveryDate, 13);
 
+  /* Resolve which Hagerstone GSTIN to use + whether this is intra-state (CGST+SGST) or inter-state (IGST) */
+  const { gstin: hagerstoneGstin, isIntraState } = resolveHagerstoneGstin(data.supplierGstin, data.supplierState);
+  const hagerstoneGstLine = "GST NO: " + hagerstoneGstin;
+
   let y = ML;
 
   /* ── 1. Company header ── */
@@ -198,7 +231,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(60, 60, 60);
-  doc.text(CO_GST(), ML, y + 14);
+  doc.text(hagerstoneGstLine, ML, y + 14);
 
   /* Address + contact — left side, below GST (so they don't clash with logo) */
   doc.setFontSize(7);
@@ -353,35 +386,64 @@ export function buildPoPdf(data: PoPdfData): Blob {
 
   /* ── 4. Line items table ── */
   const halfGst = (li: PoPdfLineItem) => (li.gst_percent / 2).toFixed(0) + "%";
+  const fullGst = (li: PoPdfLineItem) => li.gst_percent.toFixed(0) + "%";
   // Plain INR (no ₹ symbol — helvetica font breaks on that char, widths miscalculate, values overflow cells)
   const fmtPlainNum = (n: number | null | undefined) => {
     if (n == null || isNaN(n)) return "—";
     return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
-  const tableBody = data.lineItems.map((li, i) => [
-    i + 1,
-    li.hsn_code ?? "",
-    li.description,
-    "",                  /* Image */
-    delivSch,            /* Delivery Date */
-    li.quantity,
-    li.unit ?? "",
-    fmtPlainNum(li.rate),
-    "",                  /* Disc% */
-    fmtPlainNum(li.total_value),
-    halfGst(li),         /* SGST */
-    halfGst(li),         /* CGST */
-    "",                  /* IGST */
-  ]);
+
+  // Build table head + body dynamically based on intra/inter-state
+  // Intra-state (vendor in UP/DL/HR): SGST + CGST columns (no IGST)
+  // Inter-state (vendor elsewhere):    IGST column only (no SGST/CGST)
+  const baseHead = [
+    "Sr.\nNo.", "HSN /\nSAC\nCode", "Description of Goods or Services",
+    "Image", "Delivery\nDate", "Qty", "Unit", "Rate", "Disc\n%",
+    "Total Value\nof Order",
+  ];
+  const taxHead = isIntraState ? ["SGST%", "CGST%"] : ["IGST%"];
+  const tableHead = [...baseHead, ...taxHead];
+
+  const tableBody = data.lineItems.map((li, i) => {
+    const baseRow = [
+      i + 1,
+      li.hsn_code ?? "",
+      li.description,
+      "",                  /* Image */
+      delivSch,            /* Delivery Date */
+      li.quantity,
+      li.unit ?? "",
+      fmtPlainNum(li.rate),
+      "",                  /* Disc% */
+      fmtPlainNum(li.total_value),
+    ];
+    const taxRow = isIntraState ? [halfGst(li), halfGst(li)] : [fullGst(li)];
+    return [...baseRow, ...taxRow];
+  });
+
+  // Column widths also change based on tax column count
+  const baseColStyles: Record<number, any> = {
+    0:  { cellWidth: 6,  halign: "center" },                         /* Sr No */
+    1:  { cellWidth: 12, halign: "center" },                         /* HSN */
+    2:  { cellWidth: 36, halign: "left",  overflow: "linebreak" },   /* Description — wraps */
+    3:  { cellWidth: 6,  halign: "center" },                         /* Image */
+    4:  { cellWidth: 13, halign: "center" },                         /* Delivery Date */
+    5:  { cellWidth: 7,  halign: "right" },                          /* Qty */
+    6:  { cellWidth: 7,  halign: "center" },                         /* Unit */
+    7:  { cellWidth: 22, halign: "right", overflow: "visible" },     /* Rate */
+    8:  { cellWidth: 6,  halign: "center" },                         /* Disc% */
+    9:  { cellWidth: 26, halign: "right", overflow: "visible" },     /* Total Value */
+  };
+  // Intra-state: SGST (col 10) + CGST (col 11) — 12mm each
+  // Inter-state: IGST (col 10) — wider (~20mm) since it's single column
+  const taxColStyles: Record<number, any> = isIntraState
+    ? { 10: { cellWidth: 12, halign: "center" }, 11: { cellWidth: 12, halign: "center" } }
+    : { 10: { cellWidth: 20, halign: "center" } };
 
   autoTable(doc, {
     startY: y,
     margin: { left: ML, right: MR },
-    head: [[
-      "Sr.\nNo.", "HSN /\nSAC\nCode", "Description of Goods or Services",
-      "Image", "Delivery\nDate", "Qty", "Unit", "Rate", "Disc\n%",
-      "Total Value\nof Order", "SGST%", "CGST%", "IGST%",
-    ]],
+    head: [tableHead],
     body: tableBody,
     styles: { fontSize: 6.5, cellPadding: 1.5, lineColor: [0, 0, 0], lineWidth: 0.2, overflow: "linebreak" },
     headStyles: {
@@ -392,22 +454,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
       halign: "center",
       valign: "middle",
     },
-    /* Total widths sum: 6+12+36+6+13+7+7+22+6+26+12+12+12 = 177 mm  (page width 210, margins 6+6 → CW = 198, fits with breathing room) */
-    columnStyles: {
-      0:  { cellWidth: 6,  halign: "center" },                 /* Sr No */
-      1:  { cellWidth: 12, halign: "center" },                 /* HSN */
-      2:  { cellWidth: 36, halign: "left", overflow: "linebreak" }, /* Description — wraps */
-      3:  { cellWidth: 6,  halign: "center" },                 /* Image */
-      4:  { cellWidth: 13, halign: "center" },                 /* Delivery Date */
-      5:  { cellWidth: 7,  halign: "right" },                  /* Qty */
-      6:  { cellWidth: 7,  halign: "center" },                 /* Unit */
-      7:  { cellWidth: 22, halign: "right", overflow: "visible" },  /* Rate — widened */
-      8:  { cellWidth: 6,  halign: "center" },                 /* Disc% */
-      9:  { cellWidth: 26, halign: "right", overflow: "visible" },  /* Total Value of Order — widened */
-      10: { cellWidth: 12, halign: "center" },                 /* SGST */
-      11: { cellWidth: 12, halign: "center" },                 /* CGST */
-      12: { cellWidth: 12, halign: "center" },                 /* IGST */
-    },
+    columnStyles: { ...baseColStyles, ...taxColStyles },
     didParseCell: (data) => {
       if (data.section === "head" && data.column.index >= 10) {
         data.cell.styles.fillColor = [220, 230, 241];
@@ -473,9 +520,14 @@ export function buildPoPdf(data: PoPdfData): Blob {
 
   drawTotalRow("Total", fmtPlain(data.subTotal));
   drawTotalRow("Freight / Loading", "");
-  drawTotalRow("CGST", fmtPlain(data.gstAmount / 2));
-  drawTotalRow("SGST", fmtPlain(data.gstAmount / 2));
-  drawTotalRow("IGST", "");
+  if (isIntraState) {
+    // Intra-state: tax split as CGST + SGST
+    drawTotalRow("CGST", fmtPlain(data.gstAmount / 2));
+    drawTotalRow("SGST", fmtPlain(data.gstAmount / 2));
+  } else {
+    // Inter-state: full GST charged as IGST
+    drawTotalRow("IGST", fmtPlain(data.gstAmount));
+  }
   drawTotalRow("Grand Total", fmtPlain(data.grandTotal), true);
 
   y = Math.max(y, ty) + 3;
