@@ -516,6 +516,18 @@ export default function ComparisonSheetPage() {
   useEffect(() => {
     if (autoAITried || aiLoading || loading) return;
     if (!sheet || suppliers.length === 0) return;
+
+    // Skip auto-AI if ALL suppliers have no usable data (0 items AND 0 header totals)
+    // This prevents wasting Claude API calls on empty data and misleading "zero line items" output
+    const hasAnyUsableData = suppliers.some((s) => {
+      const lines = allQuoteLinesBySupplierId[s.id] ?? [];
+      const q = quoteBySupplierId[s.id];
+      return lines.length > 0 ||
+        Number(q?.total_quoted_value ?? 0) > 0 ||
+        Number(q?.total_landed_value ?? 0) > 0;
+    });
+    if (!hasAnyUsableData) return;
+
     const existing = aiRecommendation as any;
     const isOldSchema = existing && !existing.comparison_approach;
     if (!existing || isOldSchema) {
@@ -523,7 +535,7 @@ export default function ComparisonSheetPage() {
       getAIRecommendation();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheet, suppliers, aiRecommendation, loading]);
+  }, [sheet, suppliers, aiRecommendation, loading, allQuoteLinesBySupplierId, quoteBySupplierId]);
 
   const canSeeMatrix = useMemo(() => {
     if (!sheet) return false;
@@ -1387,11 +1399,22 @@ export default function ComparisonSheetPage() {
           const quote = quoteBySupplierId[s.id];
           const allLines = allQuoteLinesBySupplierId[s.id] ?? [];
           const extras = extraChargesBySupplierId[s.id] ?? [];
-          const subtotal = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
-          const gst = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
-          const freight = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
+          const subtotalFromLines = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
+          const gstFromLines = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
+          const freightFromLines = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
           const extraTotal = extras.reduce((acc, c) => acc + c.amount * (c.taxable ? 1.18 : 1), 0);
-          const landed = subtotal + gst + freight + extraTotal;
+          const landedFromLines = subtotalFromLines + gstFromLines + freightFromLines + extraTotal;
+
+          // Fallback to quote-header stored totals when line items are missing/empty
+          const headerLanded = Number(quote?.total_landed_value ?? 0);
+          const headerQuoted = Number(quote?.total_quoted_value ?? 0);
+          const useHeaderFallback = allLines.length === 0 && (headerLanded > 0 || headerQuoted > 0);
+
+          const subtotal = useHeaderFallback ? headerQuoted : subtotalFromLines;
+          const gst = useHeaderFallback ? Math.max(0, headerLanded - headerQuoted) : gstFromLines;
+          const freight = useHeaderFallback ? 0 : freightFromLines;
+          const landed = useHeaderFallback ? (headerLanded || headerQuoted) : landedFromLines;
+
           return {
             name: s.name,
             items: allLines.map((li) => ({
@@ -1405,6 +1428,8 @@ export default function ComparisonSheetPage() {
               lead_time_days: li.lead_time_days,
             })),
             extra_charges: extras.map((c) => ({ name: c.name, amount: c.amount, taxable: c.taxable })),
+            data_source: useHeaderFallback ? "header_totals_only" : "line_items",
+            items_count: allLines.length,
             commercial: {
               subtotal_excl_gst: Number(subtotal.toFixed(2)),
               gst_amount: Number(gst.toFixed(2)),
@@ -2003,6 +2028,38 @@ Rules:
           </CardContent>
         </Card>
       )}
+
+      {/* Incomplete Data Warning — shown when quotes have no line items and no totals */}
+      {canSeeMatrix && suppliers.length > 0 && (() => {
+        const emptySuppliers = suppliers.filter((s) => {
+          const lines = allQuoteLinesBySupplierId[s.id] ?? [];
+          const q = quoteBySupplierId[s.id];
+          return lines.length === 0 &&
+            Number(q?.total_quoted_value ?? 0) === 0 &&
+            Number(q?.total_landed_value ?? 0) === 0;
+        });
+        if (emptySuppliers.length === 0) return null;
+        return (
+          <Card className="border-amber-300 bg-amber-50">
+            <CardContent className="py-4 flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-1">
+                <p className="text-sm font-semibold text-amber-900">
+                  Incomplete quote data detected
+                </p>
+                <p className="text-xs text-amber-800">
+                  {emptySuppliers.length} of {suppliers.length} suppliers have no itemised prices or totals in the system:
+                  {" "}
+                  <span className="font-medium">{emptySuppliers.map((s) => s.name).join(", ")}</span>.
+                </p>
+                <p className="text-xs text-amber-800">
+                  This happens when a quote was uploaded as a file but AI parsing did not complete. The comparison below will be inaccurate for these suppliers. Go to the <span className="font-medium">Quotes page</span>, open each quote, and click <span className="font-medium">"Parse with AI"</span> or manually enter line items, then return here and regenerate the analysis.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* AI Comparison Analysis — comprehensive, dynamically structured by Claude */}
       {canSeeMatrix && (aiRecommendation || aiLoading) && (

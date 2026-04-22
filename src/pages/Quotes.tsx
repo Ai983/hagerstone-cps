@@ -857,12 +857,22 @@ Rules:
   // Approve a manually-entered quote (no AI parse needed — data already exists in line items or header)
   const approveManualQuote = async () => {
     if (!user || !reviewQuote) return;
+
+    // Block approval when quote has no line items AND no header totals.
+    // Otherwise downstream comparison sheet shows ₹0 for this supplier.
+    const headerQuoted = Number(reviewQuote.total_quoted_value ?? 0);
+    const headerLanded = Number(reviewQuote.total_landed_value ?? 0);
+    if (reviewItems.length === 0 && headerQuoted === 0 && headerLanded === 0) {
+      toast.error("Cannot approve — this quote has no line items and no totals. Click 'Parse with AI' to extract data from the file, or add line items manually.");
+      return;
+    }
+
     setSavingReview(true);
     try {
       // Use computed totals from line items if available, otherwise fall back to quote header totals
       const totalQuoted = reviewItems.length > 0
         ? reviewItems.reduce((s, li) => s + (Number(li.rate) || 0) * (Number(li.quantity) || 0), 0)
-        : (reviewQuote.total_quoted_value ?? 0);
+        : headerQuoted;
       const totalLanded = reviewItems.length > 0
         ? reviewItems.reduce((s, li) => {
             const r = Number(li.rate) || 0;
@@ -872,7 +882,7 @@ Rules:
             const p = Number(li.packing) || 0;
             return s + q * (r * (1 + g / 100) + f + p);
           }, 0)
-        : (reviewQuote.total_landed_value ?? reviewQuote.total_quoted_value ?? 0);
+        : (headerLanded || headerQuoted);
 
       const hasRates = reviewItems.length > 0
         ? reviewItems.some((li) => Number(li.rate) > 0)
@@ -1356,6 +1366,9 @@ Rules:
                             {q.parse_status === "needs_review" && (
                               <Badge className="text-xs border bg-red-100 text-red-800 border-red-300">⚠️ REVIEW</Badge>
                             )}
+                            {Number(q.total_quoted_value ?? 0) === 0 && Number(q.total_landed_value ?? 0) === 0 && q.parse_status !== "failed" && (
+                              <Badge className="text-xs border bg-red-100 text-red-800 border-red-300" title="Quote has no extracted items or totals — click Review to parse with AI">⚠️ NO DATA</Badge>
+                            )}
                           </div>
                         </div>
                       </TableCell>
@@ -1744,7 +1757,7 @@ Rules:
                 <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30 shrink-0">
                   <span className="text-sm font-semibold">AI Quote Analysis</span>
                   <div className="flex gap-2">
-                    {(reviewQuote.parse_status === "pending" || reviewQuote.parse_status === "needs_review" || reviewQuote.parse_status === "parsed" || aiResult) && fileUrl && (
+                    {fileUrl && (
                       <Button
                         size="sm"
                         variant="outline"
