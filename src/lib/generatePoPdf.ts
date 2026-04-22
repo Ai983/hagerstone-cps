@@ -275,14 +275,16 @@ export function buildPoPdf(data: PoPdfData): Blob {
   ];
 
   doc.setFontSize(7);
+  const valueMaxW = rightW - 30;   // available width for wrapped values
   for (const [label, val] of metaRows) {
     doc.setFont("helvetica", "bold");
     doc.setTextColor(60, 60, 60);
     doc.text(label + ":", rightX, ry);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(20, 20, 20);
-    doc.text(String(val), rightX + 30, ry);
-    ry += 4;
+    const wrapped = doc.splitTextToSize(String(val), valueMaxW);
+    doc.text(wrapped, rightX + 30, ry);
+    ry += wrapped.length > 1 ? wrapped.length * 3.5 + 0.5 : 4;
   }
 
   y = Math.max(sy, ry) + 2;
@@ -317,6 +319,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   const cellW = CW / 4;
   for (const row of termCells) {
     let cx = ML;
+    let maxLines = 1;
     for (const [label, val] of row) {
       if (label) {
         doc.setFont("helvetica", "bold");
@@ -325,11 +328,14 @@ export function buildPoPdf(data: PoPdfData): Blob {
         doc.text(label + " :", cx, y + 3.5);
         doc.setFont("helvetica", "normal");
         doc.setTextColor(20, 20, 20);
-        doc.text(String(val), cx, y + 7);
+        // Wrap long values across lines so they don't spill into neighbor cells
+        const wrapped = doc.splitTextToSize(String(val), cellW - 2);
+        doc.text(wrapped, cx, y + 7);
+        if (wrapped.length > maxLines) maxLines = wrapped.length;
       }
       cx += cellW;
     }
-    y += 9;
+    y += 7 + maxLines * 3;
     doc.setLineWidth(0.2);
     doc.setDrawColor(180, 180, 180);
     doc.line(ML, y, W - MR, y);
@@ -347,6 +353,11 @@ export function buildPoPdf(data: PoPdfData): Blob {
 
   /* ── 4. Line items table ── */
   const halfGst = (li: PoPdfLineItem) => (li.gst_percent / 2).toFixed(0) + "%";
+  // Plain INR (no ₹ symbol — helvetica font breaks on that char, widths miscalculate, values overflow cells)
+  const fmtPlainNum = (n: number | null | undefined) => {
+    if (n == null || isNaN(n)) return "—";
+    return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
   const tableBody = data.lineItems.map((li, i) => [
     i + 1,
     li.hsn_code ?? "",
@@ -355,9 +366,9 @@ export function buildPoPdf(data: PoPdfData): Blob {
     delivSch,            /* Delivery Date */
     li.quantity,
     li.unit ?? "",
-    INR(li.rate),        /* Rate — number only, ₹ prefix; unit shown in its own column */
+    fmtPlainNum(li.rate),
     "",                  /* Disc% */
-    INR(li.total_value),
+    fmtPlainNum(li.total_value),
     halfGst(li),         /* SGST */
     halfGst(li),         /* CGST */
     "",                  /* IGST */
@@ -369,7 +380,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
     head: [[
       "Sr.\nNo.", "HSN /\nSAC\nCode", "Description of Goods or Services",
       "Image", "Delivery\nDate", "Qty", "Unit", "Rate", "Disc\n%",
-      "Total Value\nof Order", "SGST\n%Rate", "CGST\n%Rate", "IGST\n%Rate",
+      "Total Value\nof Order", "SGST%", "CGST%", "IGST%",
     ]],
     body: tableBody,
     styles: { fontSize: 6.5, cellPadding: 1.5, lineColor: [0, 0, 0], lineWidth: 0.2, overflow: "linebreak" },
@@ -381,21 +392,21 @@ export function buildPoPdf(data: PoPdfData): Blob {
       halign: "center",
       valign: "middle",
     },
-    /* Total widths sum: 7+14+38+8+15+8+8+18+7+24+9+9+9 = 174 mm  (page width 210, margins 6+6 → CW = 198, fits with breathing room) */
+    /* Total widths sum: 6+12+36+6+13+7+7+22+6+26+12+12+12 = 177 mm  (page width 210, margins 6+6 → CW = 198, fits with breathing room) */
     columnStyles: {
-      0:  { cellWidth: 7,  halign: "center" },                 /* Sr No */
-      1:  { cellWidth: 14, halign: "center" },                 /* HSN */
-      2:  { cellWidth: 38, halign: "left", overflow: "linebreak" }, /* Description — wraps */
-      3:  { cellWidth: 8,  halign: "center" },                 /* Image */
-      4:  { cellWidth: 15, halign: "center" },                 /* Delivery Date */
-      5:  { cellWidth: 8,  halign: "right" },                  /* Qty */
-      6:  { cellWidth: 8,  halign: "center" },                 /* Unit */
-      7:  { cellWidth: 18, halign: "right" },                  /* Rate */
-      8:  { cellWidth: 7,  halign: "center" },                 /* Disc% */
-      9:  { cellWidth: 24, halign: "right" },                  /* Total Value of Order — widened */
-      10: { cellWidth: 9,  halign: "center" },                 /* SGST */
-      11: { cellWidth: 9,  halign: "center" },                 /* CGST */
-      12: { cellWidth: 9,  halign: "center" },                 /* IGST */
+      0:  { cellWidth: 6,  halign: "center" },                 /* Sr No */
+      1:  { cellWidth: 12, halign: "center" },                 /* HSN */
+      2:  { cellWidth: 36, halign: "left", overflow: "linebreak" }, /* Description — wraps */
+      3:  { cellWidth: 6,  halign: "center" },                 /* Image */
+      4:  { cellWidth: 13, halign: "center" },                 /* Delivery Date */
+      5:  { cellWidth: 7,  halign: "right" },                  /* Qty */
+      6:  { cellWidth: 7,  halign: "center" },                 /* Unit */
+      7:  { cellWidth: 22, halign: "right", overflow: "visible" },  /* Rate — widened */
+      8:  { cellWidth: 6,  halign: "center" },                 /* Disc% */
+      9:  { cellWidth: 26, halign: "right", overflow: "visible" },  /* Total Value of Order — widened */
+      10: { cellWidth: 12, halign: "center" },                 /* SGST */
+      11: { cellWidth: 12, halign: "center" },                 /* CGST */
+      12: { cellWidth: 12, halign: "center" },                 /* IGST */
     },
     didParseCell: (data) => {
       if (data.section === "head" && data.column.index >= 10) {
@@ -454,12 +465,18 @@ export function buildPoPdf(data: PoPdfData): Blob {
   doc.text("Remarks :", totX + 2, ty + 4);
   ty += 7;
 
-  drawTotalRow("Total", INR(data.subTotal));
+  // Plain INR formatter (no ₹ symbol — that char breaks jsPDF width calc and overflows the cell)
+  const fmtPlain = (n: number | null | undefined) => {
+    if (n == null || isNaN(n)) return "—";
+    return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  drawTotalRow("Total", fmtPlain(data.subTotal));
   drawTotalRow("Freight / Loading", "");
-  drawTotalRow("CGST", INR(data.gstAmount / 2));
-  drawTotalRow("SGST", INR(data.gstAmount / 2));
+  drawTotalRow("CGST", fmtPlain(data.gstAmount / 2));
+  drawTotalRow("SGST", fmtPlain(data.gstAmount / 2));
   drawTotalRow("IGST", "");
-  drawTotalRow("Grand Total", INR(data.grandTotal), true);
+  drawTotalRow("Grand Total", fmtPlain(data.grandTotal), true);
 
   y = Math.max(y, ty) + 3;
 
