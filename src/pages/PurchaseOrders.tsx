@@ -1065,6 +1065,11 @@ export default function PurchaseOrders() {
       toast.error("PO is not pending approval");
       return;
     }
+    // Anti-corruption rule: no PO can be approved without founder approval first
+    if (viewPo.founder_approval_status !== "approved") {
+      toast.error("Cannot approve — founder approval is required first. Wait for founder response on WhatsApp.");
+      return;
+    }
     const creatorId = viewPo.created_by ?? null;
     if (creatorId && creatorId === user.id) {
       toast.error("You cannot approve a PO you created");
@@ -1634,7 +1639,7 @@ export default function PurchaseOrders() {
                 <TableHead className="text-right cursor-pointer select-none" onClick={() => toggleSortPO("grand_total")}>Grand Total {canViewPrices ? "(₹)" : ""} {sortFieldPO==="grand_total"?(sortDirPO==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPO("delivery_date")}>Delivery Date {sortFieldPO==="delivery_date"?(sortDirPO==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPO("status")}>Status {sortFieldPO==="status"?(sortDirPO==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
-                <TableHead>Approved By</TableHead>
+                <TableHead>Created By</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -2796,7 +2801,8 @@ function PoTableRows({
         const supplierIds = Array.from(new Set(poRows.map((r) => String(r.supplier_id ?? "")).filter(Boolean)));
         const rfqIds = Array.from(new Set(poRows.map((r) => String(r.rfq_id ?? "")).filter(Boolean)));
         const prIds = Array.from(new Set(poRows.map((r) => String(r.pr_id ?? "")).filter(Boolean)));
-        const approvedByIds = Array.from(new Set(poRows.map((r) => String(r.approved_by ?? "")).filter(Boolean)));
+        // Column now shows PO creator's name (not approver) — resolve user names for created_by
+        const createdByIds = Array.from(new Set(poRows.map((r) => String(r.created_by ?? "")).filter(Boolean)));
 
         const [supRes, rfqRes, prRes, userRes] = await Promise.all([
           supplierIds.length
@@ -2804,7 +2810,7 @@ function PoTableRows({
             : Promise.resolve({ data: [], error: null }),
           rfqIds.length ? supabase.from("cps_rfqs").select("id,rfq_number").in("id", rfqIds) : Promise.resolve({ data: [], error: null }),
           prIds.length ? supabase.from("cps_purchase_requisitions").select("id,pr_number,project_site,project_code").in("id", prIds) : Promise.resolve({ data: [], error: null }),
-          approvedByIds.length ? supabase.from("cps_users").select("id,name").in("id", approvedByIds) : Promise.resolve({ data: [], error: null }),
+          createdByIds.length ? supabase.from("cps_users").select("id,name").in("id", createdByIds) : Promise.resolve({ data: [], error: null }),
         ]);
 
         if (!mounted) return;
@@ -2863,7 +2869,7 @@ function PoTableRows({
         const supplier = r.supplier_id ? suppliersById[String(r.supplier_id)] : undefined;
         const rfq = r.rfq_id ? rfqsById[String(r.rfq_id)] : undefined;
         const pr = r.pr_id ? prById[String(r.pr_id)] : undefined;
-        const approvedBy = r.approved_by ? usersById[String(r.approved_by)] : undefined;
+        const createdBy = r.created_by ? usersById[String(r.created_by)] : undefined;
         const canApproveThis = r.status === "pending_approval" && canApprove;
         const canApproveByAntiCorruption = !(r.created_by && userId && r.created_by === userId);
 
@@ -2912,7 +2918,7 @@ function PoTableRows({
                 );
               })()}
             </TableCell>
-            <TableCell className="text-muted-foreground">{approvedBy?.name ?? "—"}</TableCell>
+            <TableCell className="text-muted-foreground">{createdBy?.name ?? "—"}</TableCell>
             <TableCell className="text-right">
               <div className="flex items-center justify-end gap-2 flex-wrap">
                 <Button variant="ghost" size="sm" onClick={() => onView(r.id)}>

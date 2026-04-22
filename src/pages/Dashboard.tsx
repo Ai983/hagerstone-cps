@@ -57,7 +57,6 @@ export default function Dashboard() {
   const [pendingApprovals, setPendingApprovals] = useState<PendingPO[]>([]);
   const [notifications, setNotifications] = useState<NotifItem[]>([]);
   const [prImages, setPrImages] = useState<Array<{ pr_number: string; description: string; url: string; ts: string }>>([]);
-  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   const [legacyPOCount, setLegacyPOCount] = useState(0);
   const [legacyQuoteCount, setLegacyQuoteCount] = useState(0);
@@ -240,22 +239,6 @@ export default function Dashboard() {
       toast.error("Failed to load dashboard data");
     }
     setLoading(false);
-  };
-
-  const quickApprove = async (po: PendingPO) => {
-    if (!user) return;
-    setApprovingId(po.id);
-    const { error } = await supabase
-      .from("cps_purchase_orders")
-      .update({ status: "approved", approved_by: user.id, approved_at: new Date().toISOString() })
-      .eq("id", po.id);
-    if (error) {
-      toast.error("Failed to approve PO");
-    } else {
-      toast.success(`${po.po_number} approved`);
-      setPendingApprovals((prev) => prev.filter((p) => p.id !== po.id));
-    }
-    setApprovingId(null);
   };
 
   const h = new Date().getHours();
@@ -453,11 +436,10 @@ export default function Dashboard() {
                     <TableCell className="text-right">
                       <Button
                         size="sm"
-                        className="bg-green-600 hover:bg-green-700 text-white"
-                        disabled={approvingId === po.id}
-                        onClick={() => quickApprove(po)}
+                        variant="outline"
+                        onClick={() => navigate(`/purchase-orders?status=pending_approval`)}
                       >
-                        {approvingId === po.id ? t("Approving...", "Ho raha hai...") : t("Approve", "Approve Karo")}
+                        {t("View", "Dekho")}
                       </Button>
                     </TableCell>
                   </TableRow>
