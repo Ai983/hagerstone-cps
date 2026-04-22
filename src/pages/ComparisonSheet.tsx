@@ -28,6 +28,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 type ManualReviewStatus = "pending" | "in_review" | "reviewed" | "sent_for_approval";
 
@@ -231,6 +233,57 @@ export default function ComparisonSheetPage() {
   const [aiRecommendation, setAiRecommendation] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [creatingPO, setCreatingPO] = useState(false);
+
+  // Bank details dialog — opens before PO creation so PDF/WhatsApp to founder has bank info
+  const [bankDialogOpen, setBankDialogOpen] = useState(false);
+  const [bankHolderName, setBankHolderName] = useState("");
+  const [bankName, setBankName] = useState("");
+  const [bankIfsc, setBankIfsc] = useState("");
+  const [bankAccountNumber, setBankAccountNumber] = useState("");
+
+  const openBankDialogForCreate = async () => {
+    if (!sheet || !rfq || !user) return;
+    const supplierId = sheet.reviewer_recommendation;
+    if (!supplierId) {
+      toast.error("No recommended supplier selected");
+      return;
+    }
+    const supplier = suppliers.find((s) => s.id === supplierId);
+    // Pre-fill from supplier's most recent PO (if any)
+    const { data: prevPo } = await supabase
+      .from("cps_purchase_orders")
+      .select("bank_account_holder_name,bank_name,bank_ifsc,bank_account_number")
+      .eq("supplier_id", supplierId)
+      .not("bank_account_number", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (prevPo) {
+      setBankHolderName((prevPo as any).bank_account_holder_name ?? supplier?.name ?? "");
+      setBankName((prevPo as any).bank_name ?? "");
+      setBankIfsc((prevPo as any).bank_ifsc ?? "");
+      setBankAccountNumber((prevPo as any).bank_account_number ?? "");
+    } else {
+      setBankHolderName(supplier?.name ?? "");
+      setBankName("");
+      setBankIfsc("");
+      setBankAccountNumber("");
+    }
+    setBankDialogOpen(true);
+  };
+
+  const confirmBankAndCreatePO = async () => {
+    if (!bankHolderName.trim() || !bankName.trim() || !bankIfsc.trim() || !bankAccountNumber.trim()) {
+      toast.error("All supplier bank details are required — these appear on the PO PDF sent to founders");
+      return;
+    }
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(bankIfsc.trim().toUpperCase())) {
+      toast.error("Invalid IFSC code — must be 11 characters (e.g. HDFC0001234)");
+      return;
+    }
+    setBankDialogOpen(false);
+    await createPO();
+  };
 
   const reviewerName = useMemo(() => {
     if (!sheet?.manual_review_by) return "—";
@@ -1684,6 +1737,10 @@ Rules:
           total_value: poSubTotal,
           gst_amount:  poGstTotal,
           grand_total: poGrandTotal,
+          bank_account_holder_name: bankHolderName.trim() || null,
+          bank_name: bankName.trim() || null,
+          bank_ifsc: bankIfsc.trim().toUpperCase() || null,
+          bank_account_number: bankAccountNumber.trim() || null,
         },
       ]).select("id").single();
       if (poInsertErr) throw poInsertErr;
@@ -1830,6 +1887,10 @@ Rules:
               gstAmount: gstTotal,
               grandTotal,
               logoBase64,
+              bankAccountHolderName: bankHolderName.trim() || null,
+              bankName: bankName.trim() || null,
+              bankIfsc: bankIfsc.trim().toUpperCase() || null,
+              bankAccountNumber: bankAccountNumber.trim() || null,
               lineItems: calcLineItems,
             });
             poPdfUrl = await uploadPoPdf(supabase, poId, poNumber, pdfBlob);
@@ -3118,7 +3179,7 @@ Rules:
                 <p className="text-xs text-amber-700 mt-0.5">Only 1 quote was received for this RFQ. You can bypass the standard comparison and proceed directly to PO creation.</p>
               </div>
               <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
-                onClick={createPO} disabled={creatingPO}>
+                onClick={openBankDialogForCreate} disabled={creatingPO}>
                 {creatingPO ? "Creating PO..." : "Proceed Directly to PO →"}
               </Button>
             </div>
@@ -3185,7 +3246,7 @@ Rules:
                 <Button
                   size="sm"
                   className="ml-auto bg-green-600 hover:bg-green-700 text-white"
-                  onClick={createPO}
+                  onClick={openBankDialogForCreate}
                   disabled={creatingPO}
                 >
                   {creatingPO ? "Creating PO..." : "Create PO →"}
@@ -3217,6 +3278,47 @@ Rules:
               Cancel
             </Button>
             <Button onClick={commitManualUpdate}>Confirm</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Supplier Bank Details dialog — opens before PO creation to ensure PDF + founder WhatsApp have bank info */}
+      <Dialog open={bankDialogOpen} onOpenChange={setBankDialogOpen}>
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Supplier Bank Account Details</DialogTitle>
+            <DialogDescription>
+              These details will appear on the PO PDF that gets sent to the founder (Bhaskar sir) for approval. Fill them correctly before proceeding.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-2">
+            <div className="space-y-1 sm:col-span-2">
+              <Label className="text-xs">A/c Holder Name *</Label>
+              <Input value={bankHolderName} onChange={(e) => setBankHolderName(e.target.value)} placeholder="Account holder name" className="h-9" />
+            </div>
+            <div className="space-y-1 sm:col-span-2">
+              <Label className="text-xs">Bank Name *</Label>
+              <Input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="e.g. HDFC Bank, Noida" className="h-9" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">IFSC Code *</Label>
+              <Input value={bankIfsc} onChange={(e) => setBankIfsc(e.target.value.toUpperCase())} placeholder="HDFC0001234" className="h-9 font-mono" maxLength={11} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Account Number *</Label>
+              <Input value={bankAccountNumber} onChange={(e) => setBankAccountNumber(e.target.value)} placeholder="Bank account number" className="h-9 font-mono" />
+            </div>
+          </div>
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Once confirmed, the PO will be created and the approval request will be sent to the founder via WhatsApp with the complete PO PDF (including these bank details).
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBankDialogOpen(false)} disabled={creatingPO}>
+              Cancel
+            </Button>
+            <Button onClick={confirmBankAndCreatePO} disabled={creatingPO} className="bg-green-600 hover:bg-green-700 text-white">
+              {creatingPO ? "Creating PO..." : "Confirm & Create PO"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

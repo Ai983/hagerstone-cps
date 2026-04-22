@@ -281,6 +281,12 @@ export default function PurchaseOrders() {
     "Penalty of 0.5% per week for delay beyond agreed delivery date, max 5%",
   );
 
+  // Supplier bank details (filled at PO creation so PDF + founder approval WhatsApp contains them)
+  const [createBankHolderName, setCreateBankHolderName] = useState<string>("");
+  const [createBankName, setCreateBankName] = useState<string>("");
+  const [createBankIfsc, setCreateBankIfsc] = useState<string>("");
+  const [createBankAccountNumber, setCreateBankAccountNumber] = useState<string>("");
+
   const [lineItems, setLineItems] = useState<CreateLine[]>([]);
 
   const [viewOpen, setViewOpen] = useState(false);
@@ -455,6 +461,10 @@ export default function PurchaseOrders() {
     setCreatePaymentTerms("");
     setCreatePenaltyClause("Penalty of 0.5% per week for delay beyond agreed delivery date, max 5%");
     setCreateSupplierName("");
+    setCreateBankHolderName("");
+    setCreateBankName("");
+    setCreateBankIfsc("");
+    setCreateBankAccountNumber("");
     setLineItems([]);
     setRejectReason("");
     setApprovalNotes("");
@@ -566,6 +576,24 @@ export default function PurchaseOrders() {
       // Fetch supplier name for preview
       const { data: supRow } = await supabase.from("cps_suppliers").select("name").eq("id", recSupplierId).maybeSingle();
       setCreateSupplierName((supRow as any)?.name ?? "");
+
+      // Pre-fill bank details from supplier's most recent PO (if any previous PO has bank details saved)
+      const { data: prevPo } = await supabase
+        .from("cps_purchase_orders")
+        .select("bank_account_holder_name,bank_name,bank_ifsc,bank_account_number")
+        .eq("supplier_id", recSupplierId)
+        .not("bank_account_number", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (prevPo) {
+        setCreateBankHolderName((prevPo as any).bank_account_holder_name ?? (supRow as any)?.name ?? "");
+        setCreateBankName((prevPo as any).bank_name ?? "");
+        setCreateBankIfsc((prevPo as any).bank_ifsc ?? "");
+        setCreateBankAccountNumber((prevPo as any).bank_account_number ?? "");
+      } else {
+        setCreateBankHolderName((supRow as any)?.name ?? "");
+      }
 
       const { data: prLineRows, error: prLinesErr } = await supabase
         .from("cps_pr_line_items")
@@ -702,6 +730,15 @@ export default function PurchaseOrders() {
       toast.error("At least one line item is required");
       return;
     }
+    // Bank details required — they appear on the PDF sent to founder for approval
+    if (!createBankHolderName.trim() || !createBankName.trim() || !createBankIfsc.trim() || !createBankAccountNumber.trim()) {
+      toast.error("All supplier bank details are required — these appear on the PO PDF sent to founders");
+      return;
+    }
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(createBankIfsc.trim().toUpperCase())) {
+      toast.error("Invalid IFSC code — must be 11 characters (e.g. HDFC0001234)");
+      return;
+    }
 
     const normalizedLineItems = lineItems.map((li) => {
       const qty = Number(li.quantity ?? 0);
@@ -748,6 +785,10 @@ export default function PurchaseOrders() {
             total_value: subTotal,
             gst_amount: gstTotal,
             grand_total: grandTotal,
+            bank_account_holder_name: createBankHolderName.trim() || null,
+            bank_name: createBankName.trim() || null,
+            bank_ifsc: createBankIfsc.trim().toUpperCase() || null,
+            bank_account_number: createBankAccountNumber.trim() || null,
             created_by: user.id,
           },
         ])
@@ -858,6 +899,10 @@ export default function PurchaseOrders() {
             gstAmount: _gstTotal,
             grandTotal: _grandTotal,
             logoBase64: _logoBase64,
+            bankAccountHolderName: createBankHolderName.trim() || null,
+            bankName: createBankName.trim() || null,
+            bankIfsc: createBankIfsc.trim().toUpperCase() || null,
+            bankAccountNumber: createBankAccountNumber.trim() || null,
             lineItems: _lineItemsForPdf.map((li) => ({
               description: li.description,
               brand: li.brand,
@@ -1998,6 +2043,36 @@ export default function PurchaseOrders() {
                   </div>
                 </div>
               )}
+
+              {/* Supplier Bank Details — must be filled before founder approval so PDF contains them */}
+              <Card className="border-primary/30 bg-primary/5">
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    Supplier Bank Account Details
+                    <span className="text-[10px] font-normal text-muted-foreground">(required — appears on PO PDF sent to founder)</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pb-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs">A/c Holder Name</Label>
+                      <Input value={createBankHolderName} onChange={(e) => setCreateBankHolderName(e.target.value)} placeholder="Account holder name" className="h-9" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Bank Name</Label>
+                      <Input value={createBankName} onChange={(e) => setCreateBankName(e.target.value)} placeholder="e.g. HDFC Bank, Noida" className="h-9" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">IFSC Code</Label>
+                      <Input value={createBankIfsc} onChange={(e) => setCreateBankIfsc(e.target.value.toUpperCase())} placeholder="e.g. HDFC0001234" className="h-9 font-mono" maxLength={11} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Account Number</Label>
+                      <Input value={createBankAccountNumber} onChange={(e) => setCreateBankAccountNumber(e.target.value)} placeholder="Bank account number" className="h-9 font-mono" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
 
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 Once confirmed, this PO will be created and approval requests will be sent to the founders via WhatsApp. You cannot edit it after this point.
