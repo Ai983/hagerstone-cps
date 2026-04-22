@@ -30,6 +30,9 @@ import {
   ShoppingCart,
   IndianRupee,
   Calendar,
+  Upload,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
 
 type SupplierStatus = "active" | "inactive" | "blacklisted";
@@ -119,6 +122,96 @@ export default function SupplierMaster() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  // Visiting card upload — AI auto-fill
+  const [cardUploading, setCardUploading] = useState(false);
+  const [cardPreview, setCardPreview] = useState<string | null>(null);
+
+  const handleVisitingCardUpload = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please upload an image file (JPG, PNG, etc.)");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("Image too large — max 10 MB");
+      return;
+    }
+
+    // Show preview
+    const reader = new FileReader();
+    reader.onload = () => setCardPreview(reader.result as string);
+    reader.readAsDataURL(file);
+
+    setCardUploading(true);
+    try {
+      // Convert to base64
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve((r.result as string).split(",")[1]);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+
+      const { data, error } = await supabase.functions.invoke("claude-proxy", {
+        body: {
+          model: "claude-opus-4-5",
+          max_tokens: 1000,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: file.type, data: base64 } },
+              {
+                type: "text",
+                text: `Extract business details from this visiting card / business card image. Return ONLY valid JSON (no markdown fences):
+{
+  "company_name": "full company name",
+  "contact_person": "person name if shown",
+  "phone": "10-digit Indian number with +91 if shown, else empty",
+  "whatsapp": "usually same as phone, else empty",
+  "email": "email if shown",
+  "gstin": "15-char GSTIN if shown, else empty",
+  "pan": "10-char PAN if shown, else empty",
+  "address": "full address line",
+  "city": "city",
+  "state": "state",
+  "pincode": "6-digit pincode",
+  "categories": "business type / trade like 'Plumbing, Sanitary' or 'Electrical'"
+}
+For any field not found on the card, use empty string. For phone, if the card shows multiple numbers, pick the most prominent one.`,
+              },
+            ],
+          }],
+        },
+      });
+
+      if (error) throw new Error(error.message);
+      const raw = data?.content?.[0]?.text || "{}";
+      const cleanJson = raw.replace(/```json|```/g, "").trim();
+      const extracted = JSON.parse(cleanJson);
+
+      // Pre-fill form with extracted data
+      setForm((prev) => ({
+        ...prev,
+        name: extracted.company_name || prev.name,
+        gstin: extracted.gstin || prev.gstin,
+        pan: extracted.pan || prev.pan,
+        email: extracted.email || prev.email,
+        phone: extracted.phone || prev.phone,
+        whatsapp: extracted.whatsapp || extracted.phone || prev.whatsapp,
+        address_text: extracted.address || prev.address_text,
+        city: extracted.city || prev.city,
+        state: extracted.state || prev.state,
+        pincode: extracted.pincode || prev.pincode,
+        categoriesText: extracted.categories || prev.categoriesText,
+      }));
+
+      toast.success("Details extracted from visiting card — review and save");
+    } catch (e: any) {
+      toast.error("Failed to read visiting card: " + (e?.message || "Unknown error"));
+    } finally {
+      setCardUploading(false);
+    }
+  };
 
   const [pendingRegs, setPendingRegs] = useState<VendorRegistration[]>([]);
   const [pendingLoading, setPendingLoading] = useState(false);
@@ -346,6 +439,7 @@ export default function SupplierMaster() {
       notes: "",
       status: "active",
     });
+    setCardPreview(null);
     setDialogOpen(true);
   };
 
@@ -771,6 +865,47 @@ export default function SupplierMaster() {
             <DialogDescription>{editingId ? "Update supplier details." : "Create a new supplier record."}</DialogDescription>
           </DialogHeader>
           <div className="overflow-y-auto max-h-[80vh] pr-2">
+          {/* Visiting Card Upload — AI auto-fill (only for new suppliers, not edit) */}
+          {!editingId && (
+            <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="h-4 w-4 text-primary" />
+                <span className="text-sm font-semibold text-foreground">Quick Add via Visiting Card</span>
+                <span className="text-[10px] text-muted-foreground">(optional — AI extracts details from photo)</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <label className="cursor-pointer">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    disabled={cardUploading}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleVisitingCardUpload(f);
+                      e.target.value = "";
+                    }}
+                  />
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-md border border-border bg-background hover:bg-muted/40 text-sm font-medium transition-colors">
+                    {cardUploading ? (
+                      <><Loader2 className="h-4 w-4 animate-spin" />Reading card…</>
+                    ) : (
+                      <><Upload className="h-4 w-4" />{cardPreview ? "Upload different card" : "Upload visiting card photo"}</>
+                    )}
+                  </div>
+                </label>
+                {cardPreview && (
+                  <div className="flex items-center gap-2">
+                    <img src={cardPreview} alt="Visiting card" className="h-14 w-auto rounded border border-border object-cover" />
+                    <button type="button" onClick={() => setCardPreview(null)} className="text-xs text-muted-foreground hover:text-foreground">✕</button>
+                  </div>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-2">
+                Take a clear photo of the vendor's card. AI will extract name, phone, email, GSTIN, address, etc. You can review and edit below before saving.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
             <div className="md:col-span-2 space-y-1">
               <Label>Supplier name *</Label>
