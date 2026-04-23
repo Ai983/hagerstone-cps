@@ -187,6 +187,387 @@ const rpcResultToString = (data: unknown) => {
   return String(data);
 };
 
+// ── Kanban Stage Tracker (shared helper) ─────────────────────────────────
+
+export type KanbanStage = {
+  key: string;
+  icon: string;
+  label: string;
+  state: "done" | "current" | "pending" | "skipped";
+  date: string | null;
+  detail?: string;
+};
+
+// Output of buildKanbanStagesForPr — stages + useful IDs for action buttons
+export type KanbanResult = {
+  stages: KanbanStage[];
+  poId: string | null;
+  poNumber: string | null;
+  supplierId: string | null;
+  hasGrn: boolean;
+  hasInvoice: boolean;
+  allPaid: boolean;
+  isDelivered: boolean;
+};
+
+// Fetch all lifecycle data for a PR and return computed Kanban stages + context
+async function buildKanbanStagesForPr(pr: { id: string; status: string; created_at: string }, lang: 'en' | 'hi'): Promise<KanbanResult> {
+  const { data: rfqRow } = await supabase
+    .from("cps_rfqs")
+    .select("id,rfq_number,created_at")
+    .eq("pr_id", pr.id)
+    .maybeSingle();
+
+  const { data: poRow } = await supabase
+    .from("cps_purchase_orders")
+    .select("id,po_number,created_at,status,delivery_date,founder_approval_status,founder_approval_sent_at,sent_at,finance_dispatch_sent_at,supplier_id")
+    .eq("pr_id", pr.id)
+    .maybeSingle();
+
+  let quotesCount = 0;
+  let quotesReceivedAt: string | null = null;
+  let approvedQuotesCount = 0;
+  if (rfqRow) {
+    const { data: q } = await supabase.from("cps_quotes").select("created_at,parse_status").eq("rfq_id", (rfqRow as any).id);
+    quotesCount = (q ?? []).length;
+    approvedQuotesCount = (q ?? []).filter((qq: any) => qq.parse_status === "approved").length;
+    if (quotesCount > 0) quotesReceivedAt = ((q ?? []) as any[]).map((qq) => qq.created_at).sort()[0];
+  }
+
+  let grnRow: { created_at: string; grn_number: string; is_partial: boolean | null } | null = null;
+  let paymentSchedules: Array<{ id: string; milestone_name: string; amount: number; status: string; paid_at: string | null; payment_reference: string | null }> = [];
+  let invoiceRow: { id: string; invoice_number: string; invoice_date: string; total_amount: number; created_at: string } | null = null;
+  if (poRow) {
+    const { data: grn } = await supabase.from("cps_grns").select("grn_number,created_at,is_partial").eq("po_id", (poRow as any).id).maybeSingle();
+    grnRow = grn as any;
+    const { data: schedules } = await supabase.from("cps_po_payment_schedules").select("id,milestone_name,amount,status,paid_at,payment_reference,milestone_order").eq("po_id", (poRow as any).id).order("milestone_order", { ascending: true });
+    paymentSchedules = (schedules ?? []) as any[];
+    // Fetch invoice linked to this PO (via po_reference matching po_number)
+    if ((poRow as any).po_number) {
+      const { data: inv } = await supabase
+        .from("invoices")
+        .select("id,invoice_number,invoice_date,total_amount,created_at")
+        .eq("po_reference", (poRow as any).po_number)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      invoiceRow = inv as any;
+    }
+  }
+
+  const po = poRow as any;
+  const hasFounderApproved = po?.founder_approval_status === "approved";
+  const hasSentToFinance = !!(po?.sent_at || po?.finance_dispatch_sent_at);
+  const totalPayable = paymentSchedules.reduce((s, p) => s + Number(p.amount), 0);
+  const paidAmount = paymentSchedules.filter((p) => p.status === "paid").reduce((s, p) => s + Number(p.amount), 0);
+  const allPaid = paymentSchedules.length > 0 && paymentSchedules.every((p) => p.status === "paid");
+  // "Delivered" is green whenever a GRN has been recorded, OR PO status shows delivered/closed.
+  // This handles partial deliveries — PO status only becomes "delivered" when ALL items are fully received,
+  // but once any GRN is confirmed the site team has physically received material at site.
+  const isDelivered = po?.status === "delivered" || po?.status === "closed" || !!grnRow;
+  const isPartialDelivery = !!grnRow && po?.status !== "delivered" && po?.status !== "closed";
+
+  const stages: KanbanStage[] = [
+    { key: "pr_raised", icon: "📝", label: lang === 'hi' ? "Raise Kiya" : "Raised", state: "done", date: pr.created_at },
+    {
+      key: "pr_validated", icon: "✅", label: lang === 'hi' ? "Approve Hua" : "Validated",
+      state: ["validated", "rfq_created", "po_issued", "delivered"].includes(pr.status) || !!rfqRow ? "done" : (pr.status === "pending" || pr.status === "pending_design" ? "current" : "pending"),
+      date: rfqRow ? (rfqRow as any).created_at : null,
+    },
+    {
+      key: "rfq_sent", icon: "📧", label: lang === 'hi' ? "RFQ Bheja" : "RFQ Sent",
+      state: rfqRow ? "done" : (pr.status === "validated" ? "current" : "pending"),
+      date: rfqRow ? (rfqRow as any).created_at : null,
+      detail: rfqRow ? (rfqRow as any).rfq_number : undefined,
+    },
+    {
+      key: "quotes_received", icon: "💬", label: lang === 'hi' ? "Quotes Mili" : "Quotes In",
+      state: quotesCount > 0 ? "done" : (rfqRow ? "current" : "pending"),
+      date: quotesReceivedAt,
+      detail: quotesCount > 0 ? `${quotesCount} quotes${approvedQuotesCount > 0 ? ` (${approvedQuotesCount} ✓)` : ""}` : undefined,
+    },
+    {
+      key: "po_created", icon: "📋", label: lang === 'hi' ? "PO Bana" : "PO Created",
+      state: po ? "done" : (approvedQuotesCount >= 1 ? "current" : "pending"),
+      date: po?.created_at ?? null, detail: po?.po_number,
+    },
+    {
+      key: "founder_approved", icon: "👤", label: lang === 'hi' ? "Founder OK" : "Founder OK",
+      state: hasFounderApproved ? "done" : (po ? "current" : "pending"),
+      date: hasFounderApproved ? (po?.founder_approval_sent_at ?? null) : null,
+    },
+    {
+      key: "finance_dispatch", icon: "💳", label: lang === 'hi' ? "Finance Ko" : "To Finance",
+      state: hasSentToFinance ? "done" : (hasFounderApproved ? "current" : "pending"),
+      date: po?.finance_dispatch_sent_at ?? po?.sent_at ?? null,
+      detail: paymentSchedules.length > 0 ? `${paymentSchedules.length} payment${paymentSchedules.length > 1 ? "s" : ""}` : undefined,
+    },
+    // Single consolidated "Payment Done" stage — green only when ALL payment schedules are paid
+    {
+      key: "payment_done", icon: allPaid ? "💰" : "💸",
+      label: lang === 'hi' ? "Payment Hogyi" : "Payment Done",
+      state: allPaid ? "done" : (hasSentToFinance ? "current" : "pending"),
+      date: allPaid && paymentSchedules.length > 0
+        ? paymentSchedules.map((p) => p.paid_at).filter(Boolean).sort().reverse()[0] ?? null
+        : null,
+      detail: paymentSchedules.length > 0
+        ? (allPaid
+            ? `₹${Number(totalPayable).toLocaleString("en-IN")} paid`
+            : `₹${Number(paidAmount).toLocaleString("en-IN")} / ₹${Number(totalPayable).toLocaleString("en-IN")} paid`)
+        : (hasSentToFinance ? (lang === 'hi' ? "Finance team process kar rahi" : "Finance processing") : undefined),
+    },
+    // Invoice stage — enabled (clickable) only AFTER payment is done
+    // Green when supplier's invoice has been uploaded and linked to PO
+    {
+      key: "invoice", icon: "📄", label: lang === 'hi' ? "Invoice" : "Invoice Added",
+      state: invoiceRow ? "done" : (allPaid ? "current" : "pending"),
+      date: invoiceRow?.created_at ?? null,
+      detail: invoiceRow
+        ? `${(invoiceRow as any).invoice_number}${(invoiceRow as any).total_amount ? ` · ₹${Number((invoiceRow as any).total_amount).toLocaleString("en-IN")}` : ""}`
+        : (allPaid ? (lang === 'hi' ? "Upload karo" : "Upload needed") : undefined),
+    },
+    {
+      key: "closed", icon: "✓", label: lang === 'hi' ? "PR Band" : "PR Closed",
+      // PR closes when payment done + invoice uploaded — OR PO status is closed
+      state: (allPaid && !!invoiceRow) || po?.status === "closed" ? "done" : "pending",
+      date: po?.status === "closed" ? po?.created_at : null,
+      detail: po?.status === "closed"
+        ? (lang === 'hi' ? "Band" : "Closed")
+        : (allPaid && invoiceRow
+            ? (lang === 'hi' ? "Ready to close" : "Ready to close")
+            : undefined),
+    },
+  ];
+  if (pr.status === "cancelled") {
+    for (let i = 1; i < stages.length; i++) stages[i].state = "skipped";
+  }
+  return {
+    stages,
+    poId: po?.id ?? null,
+    poNumber: po?.po_number ?? null,
+    supplierId: po?.supplier_id ?? null,
+    hasGrn: !!grnRow,
+    hasInvoice: !!invoiceRow,
+    allPaid,
+    isDelivered,
+  };
+}
+
+// Compact inline Kanban tracker for list cards
+function PrKanbanTracker({ pr, lang, onUploadInvoice }: { pr: { id: string; status: string; created_at: string }; lang: 'en' | 'hi'; onUploadInvoice?: (ctx: { poId: string; poNumber: string; supplierId: string | null; prId: string }) => void }) {
+  const [result, setResult] = useState<KanbanResult | null>(null);
+  const loadStages = React.useCallback(async () => {
+    const r = await buildKanbanStagesForPr(pr, lang);
+    setResult(r);
+  }, [pr, lang]);
+  useEffect(() => {
+    let active = true;
+    loadStages();
+    return () => { active = false; void active; };
+  }, [pr.id, pr.status, lang, loadStages]);
+
+  if (!result) {
+    return <div className="flex gap-1 py-2">{[...Array(8)].map((_, i) => <Skeleton key={i} className="h-14 w-24 shrink-0" />)}</div>;
+  }
+  const { stages } = result;
+  // Invoice upload unlocks after all payments are done — site team uploads invoice to close PR
+  const canUploadInvoice = !!onUploadInvoice && result.allPaid && !result.hasInvoice && result.poId && result.poNumber;
+
+  return (
+    <div className="overflow-x-auto pb-1">
+      <div className="flex items-stretch gap-1 min-w-fit">
+        {stages.map((stage, idx) => {
+          const isLast = idx === stages.length - 1;
+          const bg =
+            stage.state === "done" ? "bg-green-50 border-green-300"
+            : stage.state === "current" ? "bg-primary/10 border-primary ring-1 ring-primary/30"
+            : stage.state === "skipped" ? "bg-red-50/50 border-red-200 opacity-40"
+            : "bg-muted/30 border-border/50";
+          const iconBg =
+            stage.state === "done" ? "bg-green-600 text-white"
+            : stage.state === "current" ? "bg-primary text-primary-foreground"
+            : stage.state === "skipped" ? "bg-red-400 text-white"
+            : "bg-muted-foreground/20 text-muted-foreground";
+          const labelColor =
+            stage.state === "done" ? "text-green-800"
+            : stage.state === "current" ? "text-primary"
+            : stage.state === "skipped" ? "text-red-700"
+            : "text-muted-foreground";
+          // Invoice stage is clickable for site team when it's current (delivered but no invoice yet)
+          const isInvoiceClickable = stage.key === "invoice" && canUploadInvoice && stage.state === "current";
+          const StageCard = isInvoiceClickable ? "button" : "div";
+          return (
+            <React.Fragment key={stage.key}>
+              <StageCard
+                type={isInvoiceClickable ? "button" : undefined}
+                onClick={isInvoiceClickable
+                  ? () => onUploadInvoice!({ poId: result.poId!, poNumber: result.poNumber!, supplierId: result.supplierId, prId: pr.id })
+                  : undefined}
+                className={`min-w-[96px] rounded-md border px-2 py-1.5 transition-all text-left ${bg} ${isInvoiceClickable ? "cursor-pointer hover:bg-primary/20 hover:shadow-md ring-2 ring-primary/50 animate-pulse" : ""}`}
+              >
+                <div className="flex items-center gap-1 mb-0.5">
+                  <div className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] ${iconBg}`}>
+                    {stage.state === "done" ? "✓" : stage.state === "skipped" ? "✕" : stage.icon}
+                  </div>
+                  <span className={`text-[10px] font-semibold ${labelColor} leading-tight flex-1`}>{stage.label}</span>
+                </div>
+                {stage.detail && <div className="text-[9px] text-muted-foreground truncate" title={stage.detail}>{stage.detail}</div>}
+                {stage.date && <div className="text-[9px] text-muted-foreground/80">{new Date(stage.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</div>}
+                {isInvoiceClickable && <div className="text-[9px] font-semibold text-primary mt-0.5">👆 Click to upload</div>}
+              </StageCard>
+              {!isLast && <div className="flex items-center"><div className={`w-2 h-0.5 ${stage.state === "done" ? "bg-green-400" : "bg-muted-foreground/30"}`} /></div>}
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Site Team Invoice Upload Dialog ─────────────────────────────────────────
+
+function UploadInvoiceDialog({
+  open, onOpenChange, poId, poNumber, supplierId, prId, onSaved, lang,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  poId: string | null;
+  poNumber: string | null;
+  supplierId: string | null;
+  prId: string | null;
+  onSaved: () => void;
+  lang: 'en' | 'hi';
+}) {
+  const { user } = useAuth();
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [invoiceDate, setInvoiceDate] = useState("");
+  const [totalAmount, setTotalAmount] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setInvoiceNumber("");
+      setInvoiceDate(new Date().toISOString().slice(0, 10));
+      setTotalAmount("");
+      setFile(null);
+    }
+  }, [open]);
+
+  const handleSave = async () => {
+    if (!user || !poNumber || !poId) return;
+    if (!invoiceNumber.trim()) { toast.error(lang === 'hi' ? "Invoice number dalo" : "Invoice number is required"); return; }
+    if (!invoiceDate) { toast.error(lang === 'hi' ? "Invoice date dalo" : "Invoice date is required"); return; }
+    if (!totalAmount || parseFloat(totalAmount) <= 0) { toast.error(lang === 'hi' ? "Amount dalo" : "Total amount is required"); return; }
+    if (!file) { toast.error(lang === 'hi' ? "Invoice PDF/image upload karo" : "Please attach the invoice file"); return; }
+    if (file.size > 15 * 1024 * 1024) { toast.error("File too large (max 15 MB)"); return; }
+
+    setSaving(true);
+    try {
+      // Upload file to storage
+      const ext = file.name.split(".").pop() ?? "pdf";
+      const path = `pr-invoices/${prId}/${invoiceNumber.replace(/[^a-z0-9-]/gi, "_")}-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("cps-quotes")
+        .upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: pubData } = supabase.storage.from("cps-quotes").getPublicUrl(path);
+      const fileUrl = pubData?.publicUrl ?? path;
+
+      // Insert invoice row
+      const { error: insErr } = await supabase.from("invoices").insert({
+        invoice_number: invoiceNumber.trim(),
+        invoice_date: invoiceDate,
+        total_amount: parseFloat(totalAmount),
+        file_path: fileUrl,
+        po_reference: poNumber,
+        supplier_id: supplierId,
+        uploaded_by: user.id,
+        document_type: "invoice",
+        status: "uploaded",
+      });
+      if (insErr) throw insErr;
+
+      // Auto-close check: all payments paid + invoice just uploaded → close PR
+      const { data: schedules } = await supabase.from("cps_po_payment_schedules").select("status").eq("po_id", poId);
+      const schedulesList = (schedules ?? []) as Array<{ status: string }>;
+      const allPaid = schedulesList.length === 0 || schedulesList.every((s) => s.status === "paid");
+
+      if (allPaid && prId) {
+        // Payment done + invoice uploaded → auto-close PR
+        await supabase.from("cps_purchase_requisitions").update({ status: "delivered" }).eq("id", prId);
+        await supabase.from("cps_purchase_orders").update({ status: "closed" }).eq("id", poId);
+
+        // Audit log
+        await supabase.from("cps_audit_log").insert({
+          user_id: user.id, user_name: user.name, user_role: user.role,
+          action_type: "PR_AUTO_CLOSED",
+          entity_type: "purchase_requisition", entity_id: prId, entity_number: null,
+          description: `PR auto-closed: invoice ${invoiceNumber} uploaded + all payments done.`,
+          severity: "info", logged_at: new Date().toISOString(),
+        });
+
+        toast.success(lang === 'hi' ? "Invoice upload ho gaya aur PR band ho gayi ✓" : "Invoice uploaded — PR auto-closed ✓");
+      } else {
+        toast.success(lang === 'hi' ? "Invoice upload ho gaya" : "Invoice uploaded successfully");
+      }
+
+      onOpenChange(false);
+      onSaved();
+    } catch (e: any) {
+      toast.error((lang === 'hi' ? "Upload fail: " : "Upload failed: ") + (e?.message ?? ""));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[calc(100vw-1rem)] max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{lang === 'hi' ? "Invoice Upload Karo" : "Upload Supplier Invoice"}</DialogTitle>
+          <DialogDescription>
+            {lang === 'hi'
+              ? `PO ${poNumber} ke liye supplier ka invoice upload karo. Upload hote hi PR automatic close ho jayegi.`
+              : `Upload supplier's invoice for PO ${poNumber}. Once uploaded, PR auto-closes (payment is already done).`}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="space-y-1">
+            <Label className="text-xs">{lang === 'hi' ? "Invoice Number *" : "Invoice Number *"}</Label>
+            <Input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="e.g. INV-2026-0123" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">{lang === 'hi' ? "Invoice Date *" : "Invoice Date *"}</Label>
+              <Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">{lang === 'hi' ? "Total Amount (₹) *" : "Total Amount (₹) *"}</Label>
+              <Input type="number" min={0} step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="e.g. 10000" />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">{lang === 'hi' ? "Invoice File (PDF / Image) *" : "Invoice File (PDF / Image) *"}</Label>
+            <Input
+              type="file"
+              accept="application/pdf,image/*"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+            {file && <p className="text-xs text-muted-foreground">📄 {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)</p>}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>{lang === 'hi' ? "Cancel" : "Cancel"}</Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? (lang === 'hi' ? "Upload ho raha..." : "Uploading...") : (lang === 'hi' ? "Upload Karo" : "Upload Invoice")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function PurchaseRequisitions() {
   const { user, canViewPrices } = useAuth();
   const navigate = useNavigate();
@@ -218,6 +599,10 @@ export default function PurchaseRequisitions() {
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 25;
+
+  // Site team invoice upload dialog (triggered from Kanban invoice stage)
+  const [invoiceUploadOpen, setInvoiceUploadOpen] = useState(false);
+  const [invoiceUploadCtx, setInvoiceUploadCtx] = useState<{ poId: string; poNumber: string; supplierId: string | null; prId: string } | null>(null);
 
   // Quick preview expand
   const [expandedPrId, setExpandedPrId] = useState<string | null>(null);
@@ -265,9 +650,20 @@ export default function PurchaseRequisitions() {
   const [editNotes, setEditNotes] = useState("");
   const [editRequiredBy, setEditRequiredBy] = useState("");
   const [editSaving, setEditSaving] = useState(false);
-  // Simple activity timeline for PR detail
+  // Activity timeline for PR detail
   type TimelineEvent = { icon: string; label: string; date: string | null; tone: "default" | "success" | "danger" };
   const [detailTimeline, setDetailTimeline] = useState<TimelineEvent[]>([]);
+
+  // Kanban-style full lifecycle stages
+  type KanbanStage = {
+    key: string;
+    icon: string;
+    label: string;
+    state: "done" | "current" | "pending" | "skipped";
+    date: string | null;
+    detail?: string;
+  };
+  const [detailKanban, setDetailKanban] = useState<KanbanStage[]>([]);
   const [detailPr, setDetailPr] = useState<PurchaseRequisition | null>(null);
   const [detailLines, setDetailLines] = useState<DetailLineItem[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -495,35 +891,187 @@ export default function PurchaseRequisitions() {
     setEditNotes(pr.notes ?? "");
     setEditRequiredBy(pr.required_by ?? "");
 
-    // Build a simple activity timeline from existing data
-    const events: TimelineEvent[] = [
-      { icon: "📝", label: lang === 'hi' ? 'PR Raise Kiya' : 'PR Raised', date: pr.created_at, tone: "default" },
-    ];
-    // Look up RFQ for this PR
+    // Fetch all related records to build the full lifecycle
     const { data: rfqRow } = await supabase
       .from("cps_rfqs")
       .select("rfq_number,created_at,status")
       .eq("pr_id", pr.id)
       .maybeSingle();
+
+    const { data: poRow } = await supabase
+      .from("cps_purchase_orders")
+      .select("id,po_number,created_at,status,delivery_date,founder_approval_status,founder_approval_sent_at,sent_at,finance_dispatch_sent_at,finance_dispatch_status")
+      .eq("pr_id", pr.id)
+      .maybeSingle();
+
+    // Fetch quotes (any received?)
+    let quotesCount = 0;
+    let quotesReceivedAt: string | null = null;
+    let approvedQuotesCount = 0;
+    if (rfqRow) {
+      const { data: quotes } = await supabase
+        .from("cps_quotes")
+        .select("created_at,parse_status")
+        .eq("rfq_id", (rfqRow as any).id ?? "");
+      // id not in select above — use rfq_number as fallback join. Actually we need rfq id.
+      const { data: rfqFull } = await supabase.from("cps_rfqs").select("id").eq("pr_id", pr.id).maybeSingle();
+      if (rfqFull) {
+        const { data: q } = await supabase.from("cps_quotes").select("created_at,parse_status").eq("rfq_id", (rfqFull as any).id);
+        quotesCount = (q ?? []).length;
+        approvedQuotesCount = (q ?? []).filter((qq: any) => qq.parse_status === "approved").length;
+        if (quotesCount > 0) quotesReceivedAt = (q ?? []).map((qq: any) => qq.created_at).sort()[0];
+      }
+      // Fetch comparison sheet status
+      // (not needed for kanban, but could be added)
+      void quotes;
+    }
+
+    // Fetch GRN + payment schedules if PO exists
+    let grnRow: { created_at: string; grn_number: string } | null = null;
+    let paymentSchedules: Array<{ id: string; milestone_name: string; amount: number; status: string; paid_at: string | null; payment_reference: string | null }> = [];
+    if (poRow) {
+      const { data: grn } = await supabase
+        .from("cps_grns")
+        .select("grn_number,created_at")
+        .eq("po_id", (poRow as any).id)
+        .maybeSingle();
+      grnRow = grn as any;
+
+      const { data: schedules } = await supabase
+        .from("cps_po_payment_schedules")
+        .select("id,milestone_name,amount,status,paid_at,payment_reference,milestone_order")
+        .eq("po_id", (poRow as any).id)
+        .order("milestone_order", { ascending: true });
+      paymentSchedules = (schedules ?? []) as any[];
+    }
+
+    // Simple activity timeline (top list of events with dates)
+    const events: TimelineEvent[] = [
+      { icon: "📝", label: lang === 'hi' ? 'PR Raise Kiya' : 'PR Raised', date: pr.created_at, tone: "default" },
+    ];
     if (rfqRow) {
       events.push({ icon: "📧", label: lang === 'hi' ? `RFQ Bheja (${(rfqRow as any).rfq_number})` : `RFQ Sent (${(rfqRow as any).rfq_number})`, date: (rfqRow as any).created_at, tone: "default" });
     }
-    // Look up PO for this PR
-    const { data: poRow } = await supabase
-      .from("cps_purchase_orders")
-      .select("po_number,created_at,status,delivery_date")
-      .eq("pr_id", pr.id)
-      .maybeSingle();
+    if (quotesCount > 0) {
+      events.push({ icon: "💬", label: lang === 'hi' ? `${quotesCount} Quotes Mili` : `${quotesCount} Quotes Received`, date: quotesReceivedAt, tone: "default" });
+    }
     if (poRow) {
-      events.push({ icon: "📋", label: lang === 'hi' ? `PO Bana (${(poRow as any).po_number})` : `PO Created (${(poRow as any).po_number})`, date: (poRow as any).created_at, tone: "default" });
-      if ((poRow as any).status === "delivered" || (poRow as any).status === "closed") {
-        events.push({ icon: "🚚", label: lang === 'hi' ? 'Deliver Ho Gaya' : 'Delivered', date: (poRow as any).delivery_date, tone: "success" });
+      const po = poRow as any;
+      events.push({ icon: "📋", label: lang === 'hi' ? `PO Bana (${po.po_number})` : `PO Created (${po.po_number})`, date: po.created_at, tone: "default" });
+      if (po.founder_approval_status === "approved") {
+        events.push({ icon: "👤", label: lang === 'hi' ? 'Founder ne Approve Kiya' : 'Founder Approved', date: po.founder_approval_sent_at, tone: "default" });
       }
+      if (po.sent_at || po.finance_dispatch_sent_at) {
+        events.push({ icon: "💳", label: lang === 'hi' ? 'Finance Ko Bheja' : 'Sent to Finance', date: po.finance_dispatch_sent_at ?? po.sent_at, tone: "default" });
+      }
+    }
+    paymentSchedules.filter((p) => p.status === "paid").forEach((p) => {
+      events.push({ icon: "💰", label: lang === 'hi' ? `${p.milestone_name} Paid` : `${p.milestone_name} Paid (₹${Number(p.amount).toLocaleString("en-IN")})`, date: p.paid_at, tone: "success" });
+    });
+    if (grnRow) {
+      events.push({ icon: "📦", label: lang === 'hi' ? `Saman Mila (${(grnRow as any).grn_number})` : `Goods Received (${(grnRow as any).grn_number})`, date: (grnRow as any).created_at, tone: "success" });
+    }
+    if (poRow && ((poRow as any).status === "delivered" || (poRow as any).status === "closed")) {
+      events.push({ icon: "🚚", label: lang === 'hi' ? 'Deliver Ho Gaya' : 'Delivered', date: (poRow as any).delivery_date, tone: "success" });
     }
     if (pr.status === "cancelled") {
       events.push({ icon: "❌", label: lang === 'hi' ? 'Cancel Kar Diya' : 'Cancelled', date: null, tone: "danger" });
     }
     setDetailTimeline(events);
+
+    // ── Build Kanban-style stages (all possible steps, with state) ──
+    const po = poRow as any;
+    const hasFounderApproved = po?.founder_approval_status === "approved";
+    const hasSentToFinance = po?.sent_at || po?.finance_dispatch_sent_at;
+    const totalPayable = paymentSchedules.reduce((s, p) => s + Number(p.amount), 0);
+    const paidAmount = paymentSchedules.filter((p) => p.status === "paid").reduce((s, p) => s + Number(p.amount), 0);
+    const allPaid = paymentSchedules.length > 0 && paymentSchedules.every((p) => p.status === "paid");
+    const isDelivered = po?.status === "delivered" || po?.status === "closed";
+
+    const kanban: KanbanStage[] = [
+      {
+        key: "pr_raised",
+        icon: "📝",
+        label: lang === 'hi' ? "Raise Kiya" : "Raised",
+        state: "done",
+        date: pr.created_at,
+      },
+      {
+        key: "pr_validated",
+        icon: "✅",
+        label: lang === 'hi' ? "Approve Hua" : "Validated",
+        state: ["validated", "rfq_created", "po_issued", "delivered"].includes(pr.status) || !!rfqRow ? "done" : (pr.status === "pending" || pr.status === "pending_design" ? "current" : "pending"),
+        date: rfqRow ? (rfqRow as any).created_at : null,
+      },
+      {
+        key: "rfq_sent",
+        icon: "📧",
+        label: lang === 'hi' ? "RFQ Bheja" : "RFQ Sent",
+        state: rfqRow ? "done" : (pr.status === "validated" ? "current" : "pending"),
+        date: rfqRow ? (rfqRow as any).created_at : null,
+        detail: rfqRow ? (rfqRow as any).rfq_number : undefined,
+      },
+      {
+        key: "quotes_received",
+        icon: "💬",
+        label: lang === 'hi' ? "Quotes Mili" : "Quotes In",
+        state: quotesCount > 0 ? "done" : (rfqRow ? "current" : "pending"),
+        date: quotesReceivedAt,
+        detail: quotesCount > 0 ? `${quotesCount} quotes (${approvedQuotesCount} approved)` : undefined,
+      },
+      {
+        key: "po_created",
+        icon: "📋",
+        label: lang === 'hi' ? "PO Bana" : "PO Created",
+        state: po ? "done" : (approvedQuotesCount >= 1 ? "current" : "pending"),
+        date: po?.created_at ?? null,
+        detail: po?.po_number,
+      },
+      {
+        key: "founder_approved",
+        icon: "👤",
+        label: lang === 'hi' ? "Founder OK" : "Founder Approved",
+        state: hasFounderApproved ? "done" : (po ? "current" : "pending"),
+        date: hasFounderApproved ? (po?.founder_approval_sent_at ?? null) : null,
+      },
+      {
+        key: "finance_dispatch",
+        icon: "💳",
+        label: lang === 'hi' ? "Finance Ko" : "Sent to Finance",
+        state: hasSentToFinance ? "done" : (hasFounderApproved ? "current" : "pending"),
+        date: po?.finance_dispatch_sent_at ?? po?.sent_at ?? null,
+        detail: paymentSchedules.length > 0 ? `${paymentSchedules.length} payment${paymentSchedules.length > 1 ? "s" : ""} scheduled` : undefined,
+      },
+      ...paymentSchedules.map((p) => ({
+        key: `pay_${p.id}`,
+        icon: p.status === "paid" ? "💰" : "💸",
+        label: p.milestone_name || (lang === 'hi' ? "Payment" : "Payment"),
+        state: (p.status === "paid" ? "done" : (hasSentToFinance ? "current" : "pending")) as KanbanStage["state"],
+        date: p.paid_at,
+        detail: `₹${Number(p.amount).toLocaleString("en-IN")}${p.status === "paid" && p.payment_reference ? ` · ${p.payment_reference}` : ""}`,
+      })),
+      {
+        key: "delivered",
+        icon: "🚚",
+        label: lang === 'hi' ? "Deliver Hua" : "Delivered",
+        state: isDelivered ? "done" : (po ? "current" : "pending"),
+        date: isDelivered ? (po?.delivery_date ?? null) : null,
+        detail: grnRow ? (grnRow as any).grn_number : undefined,
+      },
+      {
+        key: "closed",
+        icon: "✓",
+        label: lang === 'hi' ? "Band" : "Closed",
+        state: (allPaid && isDelivered) || po?.status === "closed" ? "done" : "pending",
+        date: po?.status === "closed" ? po?.created_at : null,
+        detail: totalPayable > 0 ? `${Math.round((paidAmount / totalPayable) * 100)}% paid` : undefined,
+      },
+    ];
+    if (pr.status === "cancelled") {
+      // Mark all as skipped except the first
+      for (let i = 1; i < kanban.length; i++) kanban[i].state = "skipped";
+    }
+    setDetailKanban(kanban);
     const { data, error } = await supabase
       .from("cps_pr_line_items")
       .select("id, pr_id, description, quantity, unit, specs, preferred_brands, sort_order")
@@ -982,20 +1530,22 @@ export default function PurchaseRequisitions() {
         ))}
       </div>
 
-      {/* Status Tabs */}
-      <Tabs value={statusFilter} onValueChange={setStatusFilter} className="w-full">
-        <TabsList className="w-full overflow-x-auto justify-start flex-nowrap h-auto p-1">
-          <TabsTrigger value="all" className="text-xs gap-1.5">{lang === 'hi' ? 'Sab' : 'All'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.all}</Badge></TabsTrigger>
-          <TabsTrigger value="review" className="text-xs gap-1.5">
-            <ClipboardCheck className="h-3 w-3" /> {lang === 'hi' ? 'Review Mein' : 'Pending Review'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.review}</Badge>
-          </TabsTrigger>
-          <TabsTrigger value="validated" className="text-xs gap-1.5">{lang === 'hi' ? 'Approved' : 'Validated'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.validated}</Badge></TabsTrigger>
-          <TabsTrigger value="rfq_created" className="text-xs gap-1.5">{lang === 'hi' ? 'Supplier Ko Bheja' : 'RFQ Created'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.rfq_created}</Badge></TabsTrigger>
-          <TabsTrigger value="duplicate_flagged" className="text-xs gap-1.5">Duplicate <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.duplicate_flagged}</Badge></TabsTrigger>
-          <TabsTrigger value="po_issued" className="text-xs gap-1.5">{lang === 'hi' ? 'PO Ban Gaya' : 'PO Issued'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.po_issued}</Badge></TabsTrigger>
-          <TabsTrigger value="cancelled" className="text-xs gap-1.5">{lang === 'hi' ? 'Cancel' : 'Cancelled'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.cancelled}</Badge></TabsTrigger>
-        </TabsList>
-      </Tabs>
+      {/* Status Tabs — hidden for requestor who sees the Kanban card view instead */}
+      {!isRequestor && (
+        <Tabs value={statusFilter} onValueChange={setStatusFilter} className="w-full">
+          <TabsList className="w-full overflow-x-auto justify-start flex-nowrap h-auto p-1">
+            <TabsTrigger value="all" className="text-xs gap-1.5">{lang === 'hi' ? 'Sab' : 'All'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.all}</Badge></TabsTrigger>
+            <TabsTrigger value="review" className="text-xs gap-1.5">
+              <ClipboardCheck className="h-3 w-3" /> {lang === 'hi' ? 'Review Mein' : 'Pending Review'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.review}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="validated" className="text-xs gap-1.5">{lang === 'hi' ? 'Approved' : 'Validated'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.validated}</Badge></TabsTrigger>
+            <TabsTrigger value="rfq_created" className="text-xs gap-1.5">{lang === 'hi' ? 'Supplier Ko Bheja' : 'RFQ Created'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.rfq_created}</Badge></TabsTrigger>
+            <TabsTrigger value="duplicate_flagged" className="text-xs gap-1.5">Duplicate <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.duplicate_flagged}</Badge></TabsTrigger>
+            <TabsTrigger value="po_issued" className="text-xs gap-1.5">{lang === 'hi' ? 'PO Ban Gaya' : 'PO Issued'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.po_issued}</Badge></TabsTrigger>
+            <TabsTrigger value="cancelled" className="text-xs gap-1.5">{lang === 'hi' ? 'Cancel' : 'Cancelled'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.cancelled}</Badge></TabsTrigger>
+          </TabsList>
+        </Tabs>
+      )}
 
       {/* Filters (search + priority only — status moved to tabs above) */}
       <div className="flex flex-wrap items-center gap-3">
@@ -1044,7 +1594,80 @@ export default function PurchaseRequisitions() {
         </div>
       )}
 
-      {/* Table — desktop */}
+      {/* Kanban Board View — REQUESTOR ONLY */}
+      {isRequestor && (
+        <div className="space-y-3">
+          {loading ? (
+            <>
+              <Skeleton className="h-48 w-full" />
+              <Skeleton className="h-48 w-full" />
+            </>
+          ) : paginatedFiltered.length === 0 ? (
+            <Card>
+              <CardContent className="py-12 text-center space-y-3">
+                <div className="mx-auto h-14 w-14 rounded-xl bg-primary/10 flex items-center justify-center">
+                  <FileText className="h-6 w-6 text-primary" />
+                </div>
+                <p className="text-muted-foreground">{lang === 'hi' ? 'Abhi koi request nahi hai' : 'No requests yet'}</p>
+                <Button onClick={() => openWizard()} className="mt-2">
+                  {lang === 'hi' ? 'Pehla Request Banao' : 'Raise your first PR'}
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            paginatedFiltered.map((pr) => {
+              const badge = statusBadge(pr.status);
+              const p = (pr.priority ?? "normal") as PRPriority;
+              const cfg = priorityConfig[p];
+              return (
+                <Card key={pr.id} className="hover:shadow-md transition-shadow">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-primary font-semibold">{pr.pr_number}</span>
+                          <Badge className={`text-[10px] border-0 ${badge.className}`}>{badge.label}</Badge>
+                          <Badge className={`text-[10px] border ${cfg.className}`}>{cfg.label}</Badge>
+                        </div>
+                        <p className="text-sm font-medium mt-1">{pr.project_code ?? pr.project_site}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {pr.project_site} · {pr.items_count} items · {lang === 'hi' ? 'Chahiye' : 'Required'}: {formatRequiredByDate(pr.required_by)}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button variant="ghost" size="sm" onClick={() => openDetail(pr)} title={lang === 'hi' ? "Details" : "Details"}>
+                          {lang === 'hi' ? "Details" : "View"}
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="Print">
+                          <Printer className="h-3.5 w-3.5" />
+                        </Button>
+                        {pr.status !== "cancelled" && pr.status !== "rfq_created" && pr.requested_by === user?.id && (
+                          <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-0">
+                    <PrKanbanTracker
+                      pr={pr}
+                      lang={lang}
+                      onUploadInvoice={(ctx) => {
+                        setInvoiceUploadCtx(ctx);
+                        setInvoiceUploadOpen(true);
+                      }}
+                    />
+                  </CardContent>
+                </Card>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* Table — desktop (hidden for requestor) */}
+      {!isRequestor && (
       <div className="hidden lg:block">
       <Card>
         <CardHeader>
@@ -1180,8 +1803,10 @@ export default function PurchaseRequisitions() {
         </CardContent>
       </Card>
       </div>
+      )}
 
-      {/* Cards — mobile */}
+      {/* Cards — mobile (hidden for requestor — they use Kanban card view above) */}
+      {!isRequestor && (
       <div className="lg:hidden space-y-3">
         {loading ? (
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)
@@ -1213,6 +1838,19 @@ export default function PurchaseRequisitions() {
           })
         )}
       </div>
+      )}
+
+      {/* Invoice upload dialog — site team uploads supplier invoice after delivery */}
+      <UploadInvoiceDialog
+        open={invoiceUploadOpen}
+        onOpenChange={(v) => { setInvoiceUploadOpen(v); if (!v) setInvoiceUploadCtx(null); }}
+        poId={invoiceUploadCtx?.poId ?? null}
+        poNumber={invoiceUploadCtx?.poNumber ?? null}
+        supplierId={invoiceUploadCtx?.supplierId ?? null}
+        prId={invoiceUploadCtx?.prId ?? null}
+        onSaved={() => { refresh(); }}
+        lang={lang}
+      />
 
       {/* Typeform Wizard Overlay */}
       {wizardOpen && (
@@ -1914,53 +2552,74 @@ export default function PurchaseRequisitions() {
                   )}
                 </DialogHeader>
 
-                {/* PR Status Pipeline — visual progress indicator */}
-                <div className="mt-4 rounded-lg border border-border bg-muted/20 p-3">
-                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">
-                    {lang === 'hi' ? 'Request Kahan Tak Pahucha' : 'PR Status Pipeline'}
-                  </div>
-                  {(() => {
-                    const stages = [
-                      { key: "pending", label: lang === 'hi' ? 'Raised' : 'Raised', icon: '📝' },
-                      { key: "validated", label: lang === 'hi' ? 'Approved' : 'Validated', icon: '✅' },
-                      { key: "rfq_created", label: lang === 'hi' ? 'RFQ Bheja' : 'RFQ Sent', icon: '📧' },
-                      { key: "po_issued", label: lang === 'hi' ? 'PO Bana' : 'PO Issued', icon: '📋' },
-                      { key: "delivered", label: lang === 'hi' ? 'Deliver Ho Gaya' : 'Delivered', icon: '🚚' },
-                    ];
-                    const order = ["pending", "pending_design", "validated", "duplicate_flagged", "rfq_created", "po_issued", "delivered", "cancelled"];
-                    const currentIdx = order.indexOf(detailPr.status);
-                    const isCancelled = detailPr.status === "cancelled";
-                    return (
-                      <div className="flex items-center gap-1 flex-wrap">
-                        {stages.map((stage, idx) => {
-                          const stageIdx = order.indexOf(stage.key);
-                          const done = !isCancelled && currentIdx >= stageIdx;
-                          const current = !isCancelled && (
-                            (stage.key === "pending" && (detailPr.status === "pending" || detailPr.status === "pending_design" || detailPr.status === "duplicate_flagged")) ||
-                            stage.key === detailPr.status
-                          );
-                          return (
-                            <React.Fragment key={stage.key}>
-                              <div className={`flex flex-col items-center gap-0.5 min-w-[56px] ${current ? "text-primary" : done ? "text-green-700" : "text-muted-foreground/50"}`}>
-                                <div className={`h-7 w-7 rounded-full flex items-center justify-center text-sm ${current ? "bg-primary/20 ring-2 ring-primary" : done ? "bg-green-100" : "bg-muted"}`}>
-                                  {done ? "✓" : stage.icon}
-                                </div>
-                                <span className="text-[10px] font-medium text-center leading-tight">{stage.label}</span>
-                              </div>
-                              {idx < stages.length - 1 && (
-                                <div className={`flex-1 h-0.5 min-w-[16px] ${done && currentIdx > stageIdx ? "bg-green-300" : "bg-muted"}`} />
-                              )}
-                            </React.Fragment>
-                          );
-                        })}
-                        {isCancelled && (
-                          <div className="ml-2 text-xs text-red-700 font-medium">
-                            ❌ {lang === 'hi' ? 'Cancel ho gaya' : 'Cancelled'}
-                          </div>
-                        )}
+                {/* Kanban-style full lifecycle stage tracker */}
+                <div className="mt-4 rounded-lg border border-border bg-gradient-to-br from-muted/20 to-muted/5 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                      {lang === 'hi' ? 'Request Ka Safar — PR Se Payment Tak' : 'Complete Journey — PR to Payment'}
+                    </div>
+                    {detailKanban.length > 0 && (
+                      <div className="text-xs text-muted-foreground">
+                        {detailKanban.filter((s) => s.state === "done").length} / {detailKanban.filter((s) => s.state !== "skipped").length} {lang === 'hi' ? 'stages poori' : 'stages complete'}
                       </div>
-                    );
-                  })()}
+                    )}
+                  </div>
+                  <div className="overflow-x-auto">
+                    <div className="flex items-stretch gap-1.5 min-w-fit pb-1">
+                      {detailKanban.map((stage, idx) => {
+                        const isLast = idx === detailKanban.length - 1;
+                        const bg =
+                          stage.state === "done" ? "bg-green-50 border-green-300"
+                          : stage.state === "current" ? "bg-primary/10 border-primary ring-2 ring-primary/30"
+                          : stage.state === "skipped" ? "bg-red-50/50 border-red-200 opacity-40"
+                          : "bg-muted/40 border-border/60";
+                        const iconBg =
+                          stage.state === "done" ? "bg-green-600 text-white"
+                          : stage.state === "current" ? "bg-primary text-primary-foreground"
+                          : stage.state === "skipped" ? "bg-red-400 text-white"
+                          : "bg-muted-foreground/20 text-muted-foreground";
+                        const labelColor =
+                          stage.state === "done" ? "text-green-800"
+                          : stage.state === "current" ? "text-primary"
+                          : stage.state === "skipped" ? "text-red-700"
+                          : "text-muted-foreground";
+                        return (
+                          <React.Fragment key={stage.key}>
+                            <div className={`min-w-[110px] rounded-md border-2 px-2.5 py-2 transition-all ${bg}`}>
+                              <div className="flex items-center gap-1.5 mb-1">
+                                <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs ${iconBg}`}>
+                                  {stage.state === "done" ? "✓" : stage.state === "skipped" ? "✕" : stage.icon}
+                                </div>
+                                <span className={`text-[11px] font-semibold ${labelColor} leading-tight flex-1`}>
+                                  {stage.label}
+                                </span>
+                              </div>
+                              {stage.detail && (
+                                <div className="text-[10px] text-muted-foreground truncate" title={stage.detail}>
+                                  {stage.detail}
+                                </div>
+                              )}
+                              {stage.date && (
+                                <div className="text-[9px] text-muted-foreground/80 mt-0.5">
+                                  {new Date(stage.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                                </div>
+                              )}
+                            </div>
+                            {!isLast && (
+                              <div className="flex items-center">
+                                <div className={`w-3 h-0.5 ${stage.state === "done" ? "bg-green-400" : "bg-muted-foreground/30"}`} />
+                              </div>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {detailPr.status === "cancelled" && (
+                    <div className="mt-2 text-xs text-red-700 font-medium">
+                      ❌ {lang === 'hi' ? 'Yeh request cancel ho gayi' : 'This request was cancelled'}
+                    </div>
+                  )}
                 </div>
 
                 {detailPr.duplicate_of_pr_id && (

@@ -14,7 +14,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 import {
   FileText, Send, MessageSquare, BarChart3, CheckCircle2, ShoppingCart,
-  Truck, PackageCheck, Archive, Search, RefreshCw, ArrowRight, Clock, User,
+  Archive, Search, RefreshCw, ArrowRight, Clock, User,
+  Landmark, Wallet, Receipt, XCircle, ExternalLink,
 } from "lucide-react";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -26,11 +27,12 @@ type StageKey =
   | "rfq_sent"
   | "quotes_in"
   | "review"
-  | "approval"
-  | "po_sent"
-  | "delivery"
-  | "delivered"
-  | "closed";
+  | "approval"       // awaiting founder approval
+  | "finance"        // sent to finance, awaiting payment
+  | "payment_done"   // payments complete, awaiting invoice
+  | "invoice_added"  // invoice uploaded by site team
+  | "closed"         // PR fully closed
+  | "cancelled";
 
 type Priority = "low" | "normal" | "high" | "urgent";
 
@@ -56,6 +58,16 @@ type PRCard = {
   supplier_name?: string;
   has_grn?: boolean;
   age_days: number;
+  // Payment + invoice lifecycle
+  payments_total?: number;
+  payments_paid?: number;
+  all_paid?: boolean;
+  founder_approval_status?: string | null;
+  finance_dispatch_sent_at?: string | null;
+  invoice_number?: string | null;
+  invoice_amount?: number | null;
+  invoice_file_url?: string | null;
+  is_cancelled?: boolean;
 };
 
 const priorityCardStyle: Record<Priority, string> = {
@@ -85,15 +97,16 @@ const STAGES: Array<{
   border: string;
   desc: string;
 }> = [
-  { key: "pr_raised",  label: "1. PR Raised",         icon: FileText,       color: "text-blue-700",    bg: "bg-blue-50",    border: "border-blue-200",    desc: "New requests from site" },
-  { key: "rfq_sent",   label: "2. RFQ Sent",          icon: Send,           color: "text-indigo-700",  bg: "bg-indigo-50",  border: "border-indigo-200",  desc: "Dispatched to vendors" },
-  { key: "quotes_in",  label: "3. Quotes Received",   icon: MessageSquare,  color: "text-violet-700",  bg: "bg-violet-50",  border: "border-violet-200",  desc: "Responses received" },
-  { key: "review",     label: "4. Comparison Review", icon: BarChart3,      color: "text-amber-700",   bg: "bg-amber-50",   border: "border-amber-200",   desc: "Procurement reviewing" },
-  { key: "approval",   label: "5. Pending Approval",  icon: CheckCircle2,   color: "text-orange-700",  bg: "bg-orange-50",  border: "border-orange-200",  desc: "Awaiting founder / head" },
-  { key: "po_sent",    label: "6. PO Sent",           icon: ShoppingCart,   color: "text-teal-700",    bg: "bg-teal-50",    border: "border-teal-200",    desc: "Dispatched to supplier" },
-  { key: "delivery",   label: "7. In Delivery",       icon: Truck,          color: "text-sky-700",     bg: "bg-sky-50",     border: "border-sky-200",     desc: "Shipped / in transit" },
-  { key: "delivered",  label: "8. Delivered",         icon: PackageCheck,   color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", desc: "Goods received" },
-  { key: "closed",     label: "9. Closed",            icon: Archive,        color: "text-slate-700",   bg: "bg-slate-50",   border: "border-slate-200",   desc: "GRN complete" },
+  { key: "pr_raised",     label: "1. PR Raised",         icon: FileText,      color: "text-blue-700",    bg: "bg-blue-50",    border: "border-blue-200",    desc: "New requests from site" },
+  { key: "rfq_sent",      label: "2. RFQ Sent",          icon: Send,          color: "text-indigo-700",  bg: "bg-indigo-50",  border: "border-indigo-200",  desc: "Dispatched to vendors" },
+  { key: "quotes_in",     label: "3. Quotes Received",   icon: MessageSquare, color: "text-violet-700",  bg: "bg-violet-50",  border: "border-violet-200",  desc: "Responses received" },
+  { key: "review",        label: "4. Comparison Review", icon: BarChart3,     color: "text-amber-700",   bg: "bg-amber-50",   border: "border-amber-200",   desc: "Procurement reviewing" },
+  { key: "approval",      label: "5. Pending Approval",  icon: CheckCircle2,  color: "text-orange-700",  bg: "bg-orange-50",  border: "border-orange-200",  desc: "Awaiting founder" },
+  { key: "finance",       label: "6. Sent to Finance",   icon: Landmark,      color: "text-teal-700",    bg: "bg-teal-50",    border: "border-teal-200",    desc: "Awaiting payment" },
+  { key: "payment_done",  label: "7. Payment Done",      icon: Wallet,        color: "text-sky-700",     bg: "bg-sky-50",     border: "border-sky-200",     desc: "All payments complete" },
+  { key: "invoice_added", label: "8. Invoice Added",     icon: Receipt,       color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", desc: "Site uploaded invoice" },
+  { key: "closed",        label: "9. Closed",            icon: Archive,       color: "text-slate-700",   bg: "bg-slate-50",   border: "border-slate-200",   desc: "PR fully closed" },
+  { key: "cancelled",     label: "Cancelled",            icon: XCircle,       color: "text-red-700",     bg: "bg-red-50",     border: "border-red-200",     desc: "Request cancelled" },
 ];
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -123,13 +136,35 @@ const daysBetween = (from: string, to: Date = new Date()) => {
 const deriveStage = (
   prStatus: string,
   rfq: { status?: string; quotes_count: number; has_approved_quote: boolean; comparison_status: string | null } | null,
-  po: { status: string; has_grn: boolean } | null,
+  po: {
+    status: string;
+    founder_approval_status: string | null;
+    finance_dispatch_sent_at: string | null;
+    sent_at: string | null;
+    all_paid: boolean;
+    has_payment_schedules: boolean;
+    has_invoice: boolean;
+  } | null,
 ): StageKey => {
+  if (prStatus === "cancelled") return "cancelled";
   if (po) {
-    if (po.has_grn || ["closed", "cancelled"].includes(po.status)) return "closed";
-    if (po.status === "delivered") return "delivered";
-    if (["dispatched", "acknowledged"].includes(po.status)) return "delivery";
-    if (["sent"].includes(po.status)) return "po_sent";
+    // PR fully closed (procurement marked PO closed OR auto-closed after invoice+payment)
+    if (["closed"].includes(po.status)) return "closed";
+    if (po.has_invoice && po.all_paid) return "closed";
+
+    // Invoice uploaded by site team (awaiting auto-close trigger)
+    if (po.has_invoice) return "invoice_added";
+
+    // Payment complete (all schedules paid), waiting for invoice
+    if (po.has_payment_schedules && po.all_paid) return "payment_done";
+
+    // Sent to finance (payment terms set, awaiting finance to pay)
+    if (po.finance_dispatch_sent_at || po.sent_at || po.status === "sent") return "finance";
+
+    // Founder approved but not yet sent to finance — still in approval stage
+    if (po.founder_approval_status === "approved") return "approval";
+
+    // Awaiting founder approval
     if (["pending_approval", "draft"].includes(po.status)) return "approval";
   }
   if (rfq) {
@@ -158,11 +193,10 @@ export default function KanbanBoard() {
   const fetchAll = async () => {
     setLoading(true);
     try {
-      // 1. PRs (exclude cancelled)
+      // 1. PRs (include cancelled — shown in "Cancelled" column so procurement sees everything)
       const { data: prs } = await supabase
         .from("cps_purchase_requisitions")
         .select("id, pr_number, project_code, project_site, requested_by, status, required_by, created_at, priority, duplicate_of_pr_id")
-        .neq("status", "cancelled")
         .order("created_at", { ascending: false });
 
       const prRows = (prs ?? []) as any[];
@@ -184,9 +218,20 @@ export default function KanbanBoard() {
         supabase.from("cps_rfqs").select("id, rfq_number, pr_id, status").in("pr_id", prIds),
         supabase.from("cps_quotes").select("id, rfq_id, parse_status"),
         supabase.from("cps_comparison_sheets").select("rfq_id, manual_review_status"),
-        supabase.from("cps_purchase_orders").select("id, po_number, pr_id, supplier_id, status, grand_total"),
+        supabase.from("cps_purchase_orders").select("id, po_number, pr_id, supplier_id, status, grand_total, founder_approval_status, finance_dispatch_sent_at, sent_at"),
         supabase.from("cps_grns").select("po_id"),
         supabase.from("cps_suppliers").select("id, name"),
+      ]);
+
+      // Fetch payment schedules + invoices per PO
+      const poIdList = ((posData ?? []) as any[]).map((p) => p.id);
+      const poNumberList = ((posData ?? []) as any[]).map((p) => p.po_number).filter(Boolean);
+      const [
+        { data: paymentSchedulesData },
+        { data: invoicesData },
+      ] = await Promise.all([
+        poIdList.length ? supabase.from("cps_po_payment_schedules").select("po_id, status, amount").in("po_id", poIdList) : Promise.resolve({ data: [] }),
+        poNumberList.length ? supabase.from("invoices").select("invoice_number, invoice_date, total_amount, file_path, po_reference, created_at").in("po_reference", poNumberList) : Promise.resolve({ data: [] }),
       ]);
 
       // Build maps
@@ -222,6 +267,28 @@ export default function KanbanBoard() {
       const supMap: Record<string, string> = {};
       (suppliersData ?? []).forEach((s: any) => { supMap[s.id] = s.name; });
 
+      // Payment schedules per PO → derive total + paid + all_paid
+      const paymentsByPo: Record<string, { total: number; paid: number; all_paid: boolean }> = {};
+      ((paymentSchedulesData ?? []) as any[]).forEach((p) => {
+        const rec = paymentsByPo[p.po_id] ?? { total: 0, paid: 0, all_paid: true };
+        rec.total += 1;
+        if (p.status === "paid") rec.paid += 1;
+        if (p.status !== "paid") rec.all_paid = false;
+        paymentsByPo[p.po_id] = rec;
+      });
+
+      // Invoice lookup by po_reference (PO number)
+      const invoiceByPoNumber: Record<string, { invoice_number: string; total_amount: number | null; file_path: string | null }> = {};
+      ((invoicesData ?? []) as any[]).forEach((inv) => {
+        if (inv.po_reference && !invoiceByPoNumber[inv.po_reference]) {
+          invoiceByPoNumber[inv.po_reference] = {
+            invoice_number: inv.invoice_number,
+            total_amount: inv.total_amount,
+            file_path: inv.file_path,
+          };
+        }
+      });
+
       // Build cards
       const next: PRCard[] = prRows.map((pr) => {
         const rfq = rfqByPr[pr.id];
@@ -232,10 +299,24 @@ export default function KanbanBoard() {
         const po = poByPr[pr.id];
         const hasGrn = po ? !!grnByPo[po.id] : false;
 
+        const poPayments = po ? paymentsByPo[po.id] : undefined;
+        const hasPaymentSchedules = !!(poPayments && poPayments.total > 0);
+        const allPaid = !!(poPayments && poPayments.all_paid && poPayments.total > 0);
+        const invoice = po?.po_number ? invoiceByPoNumber[po.po_number] : undefined;
+        const hasInvoice = !!invoice;
+
         const stage = deriveStage(
           pr.status,
           rfq ? { status: rfq.status, quotes_count: qCount, has_approved_quote: qApproved > 0, comparison_status: compStatus } : null,
-          po ? { status: String(po.status), has_grn: hasGrn } : null,
+          po ? {
+            status: String(po.status),
+            founder_approval_status: po.founder_approval_status ?? null,
+            finance_dispatch_sent_at: po.finance_dispatch_sent_at ?? null,
+            sent_at: po.sent_at ?? null,
+            all_paid: allPaid,
+            has_payment_schedules: hasPaymentSchedules,
+            has_invoice: hasInvoice,
+          } : null,
         );
 
         return {
@@ -260,6 +341,15 @@ export default function KanbanBoard() {
           supplier_name: po?.supplier_id ? supMap[po.supplier_id] : undefined,
           has_grn: hasGrn,
           age_days: daysBetween(pr.created_at),
+          payments_total: poPayments?.total ?? 0,
+          payments_paid: poPayments?.paid ?? 0,
+          all_paid: allPaid,
+          founder_approval_status: po?.founder_approval_status ?? null,
+          finance_dispatch_sent_at: po?.finance_dispatch_sent_at ?? null,
+          invoice_number: invoice?.invoice_number ?? null,
+          invoice_amount: invoice?.total_amount ?? null,
+          invoice_file_url: invoice?.file_path ?? null,
+          is_cancelled: pr.status === "cancelled",
         } as PRCard;
       });
 
@@ -301,10 +391,12 @@ export default function KanbanBoard() {
   const grouped = useMemo(() => {
     const g: Record<StageKey, PRCard[]> = {
       pr_raised: [], rfq_sent: [], quotes_in: [], review: [], approval: [],
-      po_sent: [], delivery: [], delivered: [], closed: [],
+      finance: [], payment_done: [], invoice_added: [], closed: [], cancelled: [],
     };
     const rank: Record<Priority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-    filtered.forEach((c) => { g[c.stage].push(c); });
+    filtered.forEach((c) => {
+      if (g[c.stage]) g[c.stage].push(c);
+    });
     (Object.keys(g) as StageKey[]).forEach((k) => {
       g[k].sort((a, b) => {
         const r = rank[a.priority] - rank[b.priority];
@@ -316,10 +408,11 @@ export default function KanbanBoard() {
   }, [filtered]);
 
   const overallStats = useMemo(() => {
-    const totalActive = filtered.filter((c) => c.stage !== "closed").length;
+    const totalActive = filtered.filter((c) => c.stage !== "closed" && c.stage !== "cancelled").length;
+    const totalClosed = filtered.filter((c) => c.stage === "closed").length;
     const totalValue = filtered.reduce((s, c) => s + (c.po_grand_total ?? 0), 0);
     const avgAge = filtered.length > 0 ? filtered.reduce((s, c) => s + c.age_days, 0) / filtered.length : 0;
-    return { totalActive, totalClosed: filtered.length - totalActive, totalValue, avgAge };
+    return { totalActive, totalClosed, totalValue, avgAge };
   }, [filtered]);
 
   const navigateCard = (c: PRCard) => {
@@ -406,7 +499,7 @@ export default function KanbanBoard() {
       <div className="overflow-x-auto pb-3">
         <div className="flex gap-3 min-w-max">
           {STAGES.map((stage) => {
-            const list = grouped[stage.key];
+            const list = grouped[stage.key] ?? [];
             const Icon = stage.icon;
             return (
               <div key={stage.key} className={`w-[280px] shrink-0 rounded-lg border ${stage.border} ${stage.bg}`}>
@@ -506,6 +599,32 @@ export default function KanbanBoard() {
                             </div>
                             {c.supplier_name && (
                               <div className="text-muted-foreground truncate">→ {c.supplier_name}</div>
+                            )}
+                            {/* Payment progress */}
+                            {c.payments_total && c.payments_total > 0 ? (
+                              <div className={`flex items-center gap-1 ${c.all_paid ? "text-green-700" : "text-sky-700"}`}>
+                                <Wallet className="h-2.5 w-2.5 shrink-0" />
+                                <span>{c.all_paid ? "Paid" : `${c.payments_paid}/${c.payments_total} paid`}</span>
+                              </div>
+                            ) : null}
+                            {/* Invoice link — procurement can click to view */}
+                            {c.invoice_number && (
+                              <div className="flex items-center gap-1 text-emerald-700">
+                                <Receipt className="h-2.5 w-2.5 shrink-0" />
+                                <span className="font-mono truncate">{c.invoice_number}</span>
+                                {c.invoice_file_url && (
+                                  <a
+                                    href={c.invoice_file_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="ml-auto text-[10px] hover:underline flex items-center gap-0.5"
+                                    title="View invoice"
+                                  >
+                                    View <ExternalLink className="h-2.5 w-2.5" />
+                                  </a>
+                                )}
+                              </div>
                             )}
                           </div>
                         )}
