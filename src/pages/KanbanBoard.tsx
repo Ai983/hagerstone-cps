@@ -144,6 +144,7 @@ const deriveStage = (
     all_paid: boolean;
     has_payment_schedules: boolean;
     has_invoice: boolean;
+    finance_paid_at: string | null;
   } | null,
 ): StageKey => {
   if (prStatus === "cancelled") return "cancelled";
@@ -155,8 +156,8 @@ const deriveStage = (
     // Invoice uploaded by site team (awaiting auto-close trigger)
     if (po.has_invoice) return "invoice_added";
 
-    // Payment complete (all schedules paid), waiting for invoice
-    if (po.has_payment_schedules && po.all_paid) return "payment_done";
+    // Payment complete — finance backend confirmed payment OR all schedules paid
+    if (po.finance_paid_at || (po.has_payment_schedules && po.all_paid)) return "payment_done";
 
     // Sent to finance (payment terms set, awaiting finance to pay)
     if (po.finance_dispatch_sent_at || po.sent_at || po.status === "sent") return "finance";
@@ -218,7 +219,7 @@ export default function KanbanBoard() {
         supabase.from("cps_rfqs").select("id, rfq_number, pr_id, status").in("pr_id", prIds),
         supabase.from("cps_quotes").select("id, rfq_id, parse_status"),
         supabase.from("cps_comparison_sheets").select("rfq_id, manual_review_status"),
-        supabase.from("cps_purchase_orders").select("id, po_number, pr_id, supplier_id, status, grand_total, founder_approval_status, finance_dispatch_sent_at, sent_at"),
+        supabase.from("cps_purchase_orders").select("id, po_number, pr_id, supplier_id, status, grand_total, founder_approval_status, finance_dispatch_sent_at, sent_at, finance_paid_at"),
         supabase.from("cps_grns").select("po_id"),
         supabase.from("cps_suppliers").select("id, name"),
       ]);
@@ -316,6 +317,7 @@ export default function KanbanBoard() {
             all_paid: allPaid,
             has_payment_schedules: hasPaymentSchedules,
             has_invoice: hasInvoice,
+            finance_paid_at: (po as any).finance_paid_at ?? null,
           } : null,
         );
 
