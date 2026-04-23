@@ -2933,7 +2933,14 @@ function PoTableRows({
             </TableCell>
             <TableCell>{supplier?.name ?? (r.supplier_name_text || "—")}</TableCell>
             <TableCell className="text-muted-foreground">{rfq?.rfq_number ?? "—"}</TableCell>
-            <TableCell className="text-muted-foreground">{pr?.project_site ?? "—"}</TableCell>
+            <TableCell className="text-muted-foreground">
+              {pr?.project_code ? (
+                <div>
+                  <div className="font-medium text-foreground">{pr.project_code}</div>
+                  {pr.project_site && <div className="text-xs">{pr.project_site}</div>}
+                </div>
+              ) : pr?.project_site ?? "—"}
+            </TableCell>
             <TableCell className="text-right">{formatCurrency(r.grand_total, canViewPrices)}</TableCell>
             <TableCell className="text-muted-foreground">{formatDate(r.delivery_date)}</TableCell>
             <TableCell>
