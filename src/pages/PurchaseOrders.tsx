@@ -86,6 +86,8 @@ type PoRow = {
   payment_due_date?: string | null;
   finance_dispatch_status?: string | null;
   finance_dispatch_sent_at?: string | null;
+  finance_paid_at?: string | null;
+  finance_paid_amount?: number | null;
 };
 
 type SupplierRow = {
@@ -387,7 +389,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount",
         )
         .order("created_at", { ascending: false });
 
@@ -999,7 +1001,7 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount",
         )
         .eq("id", poId)
         .single();
@@ -2696,6 +2698,21 @@ export default function PurchaseOrders() {
                     </div>
                   )}
 
+                  {viewPo.finance_paid_at && (
+                    <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-1">
+                      <div className="text-sm font-semibold text-green-900">✅ Finance Paid</div>
+                      <div className="text-xs text-green-700">
+                        Payment confirmed by Finance team on{" "}
+                        {new Date(viewPo.finance_paid_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}.
+                      </div>
+                      {viewPo.finance_paid_amount != null && (
+                        <div className="text-xs text-green-800 font-semibold">
+                          Amount Paid: ₹{Number(viewPo.finance_paid_amount).toLocaleString("en-IN")}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {viewPo.status === "closed" && (
                     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-1">
                       <div className="text-sm font-semibold text-gray-700">✔ Closed</div>
@@ -2930,6 +2947,11 @@ function PoTableRows({
                     {r.finance_dispatch_status === "failed" && (
                       <span className="text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit bg-red-50 text-red-700 border-red-200">
                         ⚠ Dispatch failed
+                      </span>
+                    )}
+                    {r.finance_paid_at && (
+                      <span className="text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit bg-green-50 text-green-700 border-green-200">
+                        ✓ Finance Paid
                       </span>
                     )}
                   </div>
