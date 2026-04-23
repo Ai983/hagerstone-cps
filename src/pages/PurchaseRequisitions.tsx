@@ -1447,15 +1447,15 @@ export default function PurchaseRequisitions() {
                           </div>
                         </div>
 
-                        {/* Reference image upload */}
+                        {/* Reference photos + BOQ document upload */}
                         <div className="space-y-2">
                           <Label className="text-xs text-muted-foreground">
-                            {lang === 'hi' ? 'Reference Photo' : 'Reference Photos'}
+                            {lang === 'hi' ? 'Reference Photo / BOQ' : 'Reference Photos / BOQ Document'}
                             <span className="ml-1 text-muted-foreground/50">({li.referenceImages.length}/5)</span>
                           </Label>
                           {li.referenceImages.length < 5 && (
-                            <div className="flex gap-2">
-                              <label className="flex-1 cursor-pointer">
+                            <div className="grid grid-cols-3 gap-2">
+                              <label className="cursor-pointer">
                                 <input
                                   type="file"
                                   accept="image/*"
@@ -1473,10 +1473,10 @@ export default function PurchaseRequisitions() {
                                   }}
                                 />
                                 <div className="h-10 flex items-center justify-center gap-1.5 rounded-lg border border-border/60 bg-muted/30 hover:bg-muted/60 transition-colors text-xs text-muted-foreground font-medium">
-                                  {lang === 'hi' ? '📷 Camera' : '📷 Camera / Photo'}
+                                  {lang === 'hi' ? '📷 Camera' : '📷 Camera'}
                                 </div>
                               </label>
-                              <label className="flex-1 cursor-pointer">
+                              <label className="cursor-pointer">
                                 <input
                                   type="file"
                                   accept="image/*"
@@ -1496,30 +1496,71 @@ export default function PurchaseRequisitions() {
                                   {lang === 'hi' ? '🖼 Gallery' : '🖼 Gallery'}
                                 </div>
                               </label>
+                              <label className="cursor-pointer">
+                                <input
+                                  type="file"
+                                  accept="application/pdf,.pdf,.xls,.xlsx,.doc,.docx"
+                                  multiple
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const files = Array.from(e.target.files ?? []);
+                                    // Limit file size to 15 MB per file
+                                    const validFiles = files.filter((f) => {
+                                      if (f.size > 15 * 1024 * 1024) {
+                                        toast.error(`${f.name} is too large (max 15 MB)`);
+                                        return false;
+                                      }
+                                      return true;
+                                    });
+                                    setWizLineItems((prev) => prev.map((r) => {
+                                      if (r.rowKey !== li.rowKey) return r;
+                                      const remaining = 5 - r.referenceImages.length;
+                                      return { ...r, referenceImages: [...r.referenceImages, ...validFiles.slice(0, remaining)] };
+                                    }));
+                                    e.target.value = "";
+                                  }}
+                                />
+                                <div className="h-10 flex items-center justify-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 hover:bg-primary/20 transition-colors text-xs text-primary font-medium">
+                                  📄 BOQ / PDF
+                                </div>
+                              </label>
                             </div>
                           )}
                           {li.referenceImages.length > 0 && (
                             <div className="flex flex-wrap gap-2">
-                              {li.referenceImages.map((file, imgIdx) => (
-                                <div key={imgIdx} className="relative group">
-                                  <img
-                                    src={URL.createObjectURL(file)}
-                                    alt={`ref-${imgIdx + 1}`}
-                                    className="h-16 w-16 object-cover rounded-lg border border-border/60"
-                                  />
-                                  <button
-                                    type="button"
-                                    className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-destructive text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                    onClick={() => setWizLineItems((prev) => prev.map((r) =>
-                                      r.rowKey === li.rowKey
-                                        ? { ...r, referenceImages: r.referenceImages.filter((_, i) => i !== imgIdx) }
-                                        : r
-                                    ))}
-                                  >
-                                    <X className="h-3 w-3" />
-                                  </button>
-                                </div>
-                              ))}
+                              {li.referenceImages.map((file, imgIdx) => {
+                                const isImage = file.type.startsWith("image/");
+                                const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+                                return (
+                                  <div key={imgIdx} className="relative group">
+                                    {isImage ? (
+                                      <img
+                                        src={URL.createObjectURL(file)}
+                                        alt={`ref-${imgIdx + 1}`}
+                                        className="h-16 w-16 object-cover rounded-lg border border-border/60"
+                                      />
+                                    ) : (
+                                      <div className="h-16 w-16 rounded-lg border border-border/60 bg-muted/40 flex flex-col items-center justify-center gap-0.5 p-1">
+                                        <span className="text-lg">{isPdf ? "📄" : "📎"}</span>
+                                        <span className="text-[8px] text-muted-foreground text-center leading-tight line-clamp-2 break-all">
+                                          {file.name.length > 12 ? file.name.substring(0, 10) + "…" : file.name}
+                                        </span>
+                                      </div>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-destructive text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                      onClick={() => setWizLineItems((prev) => prev.map((r) =>
+                                        r.rowKey === li.rowKey
+                                          ? { ...r, referenceImages: r.referenceImages.filter((_, i) => i !== imgIdx) }
+                                          : r
+                                      ))}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
                         </div>
@@ -1806,20 +1847,70 @@ export default function PurchaseRequisitions() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {docLines.map((li, i) => (
-                        <TableRow key={li.id}>
-                          <TableCell className="border border-foreground/20 text-center">{i + 1}</TableCell>
-                          <TableCell className="border border-foreground/20 font-medium">{li.description}</TableCell>
-                          <TableCell className="border border-foreground/20 text-muted-foreground">
-                            {(li.preferred_brands ?? []).join(", ") || "—"}
-                          </TableCell>
-                          <TableCell className="border border-foreground/20 text-sm">
-                            {li.specs ?? "—"}
-                          </TableCell>
-                          <TableCell className="border border-foreground/20 text-center">{li.quantity ?? "—"}</TableCell>
-                          <TableCell className="border border-foreground/20 text-center">{li.unit ?? "—"}</TableCell>
-                        </TableRow>
-                      ))}
+                      {docLines.map((li, i) => {
+                        // Parse specs field — images are stored as "Images: url1,url2,..." inside specs
+                        const specsText = li.specs ?? "";
+                        const imagesMatch = specsText.match(/Images:\s*([^|]+)/i);
+                        const imageUrls = imagesMatch
+                          ? imagesMatch[1].split(",").map((u: string) => u.trim()).filter(Boolean)
+                          : [];
+                        // Remove the "Images: ..." part from the display text so it doesn't show raw URLs
+                        const cleanSpecs = specsText.replace(/\|?\s*Images:\s*[^|]+/i, "").replace(/^\s*\|\s*/, "").trim();
+                        return (
+                          <React.Fragment key={li.id}>
+                            <TableRow>
+                              <TableCell className="border border-foreground/20 text-center" rowSpan={imageUrls.length > 0 ? 2 : 1}>{i + 1}</TableCell>
+                              <TableCell className="border border-foreground/20 font-medium">{li.description}</TableCell>
+                              <TableCell className="border border-foreground/20 text-muted-foreground">
+                                {(li.preferred_brands ?? []).join(", ") || "—"}
+                              </TableCell>
+                              <TableCell className="border border-foreground/20 text-sm">
+                                {cleanSpecs || "—"}
+                              </TableCell>
+                              <TableCell className="border border-foreground/20 text-center">{li.quantity ?? "—"}</TableCell>
+                              <TableCell className="border border-foreground/20 text-center">{li.unit ?? "—"}</TableCell>
+                            </TableRow>
+                            {imageUrls.length > 0 && (
+                              <TableRow>
+                                <TableCell colSpan={5} className="border border-foreground/20 bg-muted/20 p-2">
+                                  <div className="flex flex-wrap gap-2 items-start">
+                                    <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide self-center">Attachments:</span>
+                                    {imageUrls.map((url, idx) => {
+                                      const lower = url.toLowerCase();
+                                      const isPdf = lower.endsWith(".pdf");
+                                      const isDoc = /\.(xls|xlsx|doc|docx)$/i.test(lower);
+                                      if (isPdf || isDoc) {
+                                        return (
+                                          <a
+                                            key={idx}
+                                            href={url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="h-24 w-24 rounded border border-foreground/30 bg-white flex flex-col items-center justify-center gap-1 p-1 hover:bg-muted/40 no-underline"
+                                          >
+                                            <span className="text-2xl">{isPdf ? "📄" : "📎"}</span>
+                                            <span className="text-[9px] text-center leading-tight text-primary break-all px-0.5">
+                                              {isPdf ? "BOQ PDF" : "Document"} {idx + 1}
+                                            </span>
+                                          </a>
+                                        );
+                                      }
+                                      return (
+                                        <img
+                                          key={idx}
+                                          src={url}
+                                          alt={`Ref ${idx + 1}`}
+                                          className="h-24 w-24 object-cover rounded border border-foreground/30 print:h-32 print:w-32"
+                                        />
+                                      );
+                                    })}
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 )}
