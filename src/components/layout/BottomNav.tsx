@@ -27,8 +27,8 @@ const ADMIN_MORE = [
 
 const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Requests", url: "/requisitions", icon: FileText },
-  { title: "Saman", url: "/items", icon: Package },
+  { title: "Meri Requests", url: "/requisitions", icon: FileText },
+  { title: "Saman List", url: "/items", icon: Package },
   { title: "Delivery", url: "/delivery", icon: Truck },
 ];
 

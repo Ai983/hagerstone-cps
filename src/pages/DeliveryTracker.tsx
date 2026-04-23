@@ -164,7 +164,7 @@ const TIMELINE_STEPS: { key: string; label: string }[] = [
 // ── Component ────────────────────────────────────────────────────────────────
 
 export default function DeliveryTracker() {
-  const { user, canApprove, canViewPrices } = useAuth();
+  const { user, canApprove, canViewPrices, isEmployee } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -228,10 +228,29 @@ export default function DeliveryTracker() {
     setLoading(true);
     setLoadError(null);
     try {
-      const { data: poData, error: poErr } = await supabase
+      // For requestor/site_receiver: only show POs linked to PRs they created
+      let userPrIds: string[] | null = null;
+      if (isEmployee && user?.id) {
+        const { data: myPrs } = await supabase
+          .from("cps_purchase_requisitions")
+          .select("id")
+          .eq("requested_by", user.id);
+        userPrIds = (myPrs ?? []).map((p: { id: string }) => p.id);
+        // If no PRs, skip PO fetch entirely
+        if (userPrIds.length === 0) {
+          setPoCards([]);
+          setLoading(false);
+          return;
+        }
+      }
+
+      let poQuery = supabase
         .from("cps_purchase_orders")
         .select("id,po_number,supplier_id,status,delivery_date,ship_to_address,grand_total,project_code,pr_id,sent_at,acknowledged_at,created_at")
         .order("created_at", { ascending: false });
+      if (userPrIds) poQuery = poQuery.in("pr_id", userPrIds);
+
+      const { data: poData, error: poErr } = await poQuery;
       if (poErr) throw poErr;
 
       const allPos = (poData ?? []) as PoRow[];
@@ -657,7 +676,8 @@ export default function DeliveryTracker() {
   // ── Role checks ────────────────────────────────────────────────────────────
 
   const canAddUpdate = user?.role === "procurement_executive" || user?.role === "procurement_head" || user?.role === "it_head" || user?.role === "management";
-  const canConfirmGrn = user?.role === "site_receiver" || canApprove;
+  // Requestor can confirm GRN for their own PRs (they are on site and received the material)
+  const canConfirmGrn = user?.role === "site_receiver" || user?.role === "requestor" || canApprove;
 
   // ── Render ─────────────────────────────────────────────────────────────────
 

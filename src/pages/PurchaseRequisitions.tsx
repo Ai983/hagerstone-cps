@@ -205,6 +205,9 @@ export default function PurchaseRequisitions() {
   const [projectSelMode, setProjectSelMode] = useState<'select' | 'text'>('select');
 
   const [prList, setPrList] = useState<PurchaseRequisition[]>([]);
+  // Pending item requests raised by this requestor (for status visibility)
+  type PendingItemReq = { id: string; item_name: string; status: string; rejection_reason: string | null; review_notes: string | null; reviewed_at: string | null; created_at: string };
+  const [pendingItemReqs, setPendingItemReqs] = useState<PendingItemReq[]>([]);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -256,6 +259,14 @@ export default function PurchaseRequisitions() {
   const [wizNewItemSubmitting, setWizNewItemSubmitting] = useState<Record<string, boolean>>({});
 
   const [detailOpen, setDetailOpen] = useState(false);
+  // Edit mode for requestor-owned pending PRs
+  const [editMode, setEditMode] = useState(false);
+  const [editNotes, setEditNotes] = useState("");
+  const [editRequiredBy, setEditRequiredBy] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  // Simple activity timeline for PR detail
+  type TimelineEvent = { icon: string; label: string; date: string | null; tone: "default" | "success" | "danger" };
+  const [detailTimeline, setDetailTimeline] = useState<TimelineEvent[]>([]);
   const [detailPr, setDetailPr] = useState<PurchaseRequisition | null>(null);
   const [detailLines, setDetailLines] = useState<DetailLineItem[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -336,6 +347,18 @@ export default function PurchaseRequisitions() {
           }) as PurchaseRequisition,
       ),
     );
+
+    // For requestor: also fetch their pending item requests so they can see approval status
+    if (isRequestor && user?.id) {
+      const { data: pitems } = await supabase
+        .from("cps_pending_item_requests")
+        .select("id,item_name,status,rejection_reason,review_notes,reviewed_at,created_at")
+        .eq("requested_by", user.id)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      setPendingItemReqs((pitems ?? []) as PendingItemReq[]);
+    }
+
     setLoading(false);
   };
 
@@ -457,6 +480,39 @@ export default function PurchaseRequisitions() {
     setDetailOpen(true);
     setDetailPr(pr);
     setDetailLoading(true);
+    setEditMode(false);
+    setEditNotes(pr.notes ?? "");
+    setEditRequiredBy(pr.required_by ?? "");
+
+    // Build a simple activity timeline from existing data
+    const events: TimelineEvent[] = [
+      { icon: "📝", label: lang === 'hi' ? 'PR Raise Kiya' : 'PR Raised', date: pr.created_at, tone: "default" },
+    ];
+    // Look up RFQ for this PR
+    const { data: rfqRow } = await supabase
+      .from("cps_rfqs")
+      .select("rfq_number,created_at,status")
+      .eq("pr_id", pr.id)
+      .maybeSingle();
+    if (rfqRow) {
+      events.push({ icon: "📧", label: lang === 'hi' ? `RFQ Bheja (${(rfqRow as any).rfq_number})` : `RFQ Sent (${(rfqRow as any).rfq_number})`, date: (rfqRow as any).created_at, tone: "default" });
+    }
+    // Look up PO for this PR
+    const { data: poRow } = await supabase
+      .from("cps_purchase_orders")
+      .select("po_number,created_at,status,delivery_date")
+      .eq("pr_id", pr.id)
+      .maybeSingle();
+    if (poRow) {
+      events.push({ icon: "📋", label: lang === 'hi' ? `PO Bana (${(poRow as any).po_number})` : `PO Created (${(poRow as any).po_number})`, date: (poRow as any).created_at, tone: "default" });
+      if ((poRow as any).status === "delivered" || (poRow as any).status === "closed") {
+        events.push({ icon: "🚚", label: lang === 'hi' ? 'Deliver Ho Gaya' : 'Delivered', date: (poRow as any).delivery_date, tone: "success" });
+      }
+    }
+    if (pr.status === "cancelled") {
+      events.push({ icon: "❌", label: lang === 'hi' ? 'Cancel Kar Diya' : 'Cancelled', date: null, tone: "danger" });
+    }
+    setDetailTimeline(events);
     const { data, error } = await supabase
       .from("cps_pr_line_items")
       .select("id, pr_id, description, quantity, unit, specs, preferred_brands, sort_order")
@@ -472,13 +528,54 @@ export default function PurchaseRequisitions() {
     setDetailLoading(false);
   };
 
+  const savePrEdits = async () => {
+    if (!detailPr || !user) return;
+    if (!isRequestor || detailPr.requested_by !== user.id) {
+      toast.error("You can only edit PRs you created");
+      return;
+    }
+    if (!["pending", "pending_design"].includes(detailPr.status)) {
+      toast.error("Only pending PRs can be edited");
+      return;
+    }
+    setEditSaving(true);
+    const { error } = await supabase
+      .from("cps_purchase_requisitions")
+      .update({
+        notes: editNotes.trim() || null,
+        required_by: editRequiredBy || null,
+      })
+      .eq("id", detailPr.id)
+      .eq("requested_by", user.id);
+    if (error) {
+      toast.error("Failed to save changes");
+      setEditSaving(false);
+      return;
+    }
+    toast.success(lang === 'hi' ? "Update ho gaya" : "Changes saved");
+    setEditMode(false);
+    setEditSaving(false);
+    // Refresh local PR object and list
+    setDetailPr({ ...detailPr, notes: editNotes.trim() || null, required_by: editRequiredBy || detailPr.required_by });
+    await refresh();
+  };
+
   const closePR = async (pr: PurchaseRequisition, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!user) return;
+    // Ownership check — requestor/site_receiver can only close their own PRs
+    if (isRequestor && pr.requested_by !== user.id) {
+      toast.error("You can only close PRs you created");
+      return;
+    }
     if (!confirm(`Close PR ${pr.pr_number}? This cannot be undone.`)) return;
-    const { error } = await supabase
+    let query = supabase
       .from("cps_purchase_requisitions")
       .update({ status: "cancelled" })
       .eq("id", pr.id);
+    // Extra safety: enforce ownership at DB level for requestors
+    if (isRequestor) query = query.eq("requested_by", user.id);
+    const { error } = await query;
     if (error) { toast.error("Failed to close PR"); return; }
     toast.success(`${pr.pr_number} closed`);
     await refresh();
@@ -800,6 +897,60 @@ export default function PurchaseRequisitions() {
           </Button>
         </div>
       </div>
+
+      {/* Pending Item Requests (requestor only) — shows status of new items user asked to add */}
+      {isRequestor && pendingItemReqs.length > 0 && (
+        <Card className="border-primary/30">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              📦 {lang === 'hi' ? 'Naye Item Request Ka Status' : 'Your New Item Requests'}
+              <Badge variant="outline" className="text-xs">{pendingItemReqs.length}</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {pendingItemReqs.map((req) => {
+              const isApproved = req.status === "approved";
+              const isRejected = req.status === "rejected";
+              const isPending = req.status === "pending";
+              return (
+                <div
+                  key={req.id}
+                  className={`rounded-md border p-2 text-sm flex items-start gap-2 ${
+                    isApproved ? "border-green-200 bg-green-50" :
+                    isRejected ? "border-red-200 bg-red-50" :
+                    "border-amber-200 bg-amber-50"
+                  }`}
+                >
+                  <span className="text-lg">{isApproved ? "✅" : isRejected ? "❌" : "⏳"}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium">{req.item_name}</span>
+                      <Badge className={`text-[10px] border-0 ${
+                        isApproved ? "bg-green-100 text-green-800" :
+                        isRejected ? "bg-red-100 text-red-800" :
+                        "bg-amber-100 text-amber-800"
+                      }`}>
+                        {isApproved ? (lang === 'hi' ? "Approved" : "Approved") :
+                         isRejected ? (lang === 'hi' ? "Reject" : "Rejected") :
+                         (lang === 'hi' ? "Review mein" : "Pending review")}
+                      </Badge>
+                    </div>
+                    {isRejected && req.rejection_reason && (
+                      <p className="text-xs text-red-700 mt-1">{lang === 'hi' ? 'Kyu reject hua: ' : 'Reason: '}{req.rejection_reason}</p>
+                    )}
+                    {isApproved && req.review_notes && (
+                      <p className="text-xs text-green-700 mt-1">{req.review_notes}</p>
+                    )}
+                    {isPending && (
+                      <p className="text-xs text-amber-700 mt-1">{lang === 'hi' ? 'Procurement team review kar rahi hai' : 'Procurement team is reviewing'}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -1737,8 +1888,69 @@ export default function PurchaseRequisitions() {
                       return <Badge className={`text-xs border ${cfg.className}`}>{cfg.label}</Badge>;
                     })()}
                   </DialogTitle>
-                  <DialogDescription>PR details — view only</DialogDescription>
+                  <DialogDescription>
+                    {isRequestor && detailPr.requested_by === user?.id && ["pending", "pending_design"].includes(detailPr.status)
+                      ? (lang === 'hi' ? 'Aap apne PR ki details update kar sakte hain' : 'You can update details until procurement starts processing')
+                      : 'PR details — view only'}
+                  </DialogDescription>
+                  {/* Edit button — only for requestor's own pending PRs */}
+                  {isRequestor && detailPr.requested_by === user?.id && ["pending", "pending_design"].includes(detailPr.status) && !editMode && (
+                    <div className="pt-2">
+                      <Button size="sm" variant="outline" onClick={() => setEditMode(true)}>
+                        ✏️ {lang === 'hi' ? 'Details Edit Karo' : 'Edit Details'}
+                      </Button>
+                    </div>
+                  )}
                 </DialogHeader>
+
+                {/* PR Status Pipeline — visual progress indicator */}
+                <div className="mt-4 rounded-lg border border-border bg-muted/20 p-3">
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                    {lang === 'hi' ? 'Request Kahan Tak Pahucha' : 'PR Status Pipeline'}
+                  </div>
+                  {(() => {
+                    const stages = [
+                      { key: "pending", label: lang === 'hi' ? 'Raised' : 'Raised', icon: '📝' },
+                      { key: "validated", label: lang === 'hi' ? 'Approved' : 'Validated', icon: '✅' },
+                      { key: "rfq_created", label: lang === 'hi' ? 'RFQ Bheja' : 'RFQ Sent', icon: '📧' },
+                      { key: "po_issued", label: lang === 'hi' ? 'PO Bana' : 'PO Issued', icon: '📋' },
+                      { key: "delivered", label: lang === 'hi' ? 'Deliver Ho Gaya' : 'Delivered', icon: '🚚' },
+                    ];
+                    const order = ["pending", "pending_design", "validated", "duplicate_flagged", "rfq_created", "po_issued", "delivered", "cancelled"];
+                    const currentIdx = order.indexOf(detailPr.status);
+                    const isCancelled = detailPr.status === "cancelled";
+                    return (
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {stages.map((stage, idx) => {
+                          const stageIdx = order.indexOf(stage.key);
+                          const done = !isCancelled && currentIdx >= stageIdx;
+                          const current = !isCancelled && (
+                            (stage.key === "pending" && (detailPr.status === "pending" || detailPr.status === "pending_design" || detailPr.status === "duplicate_flagged")) ||
+                            stage.key === detailPr.status
+                          );
+                          return (
+                            <React.Fragment key={stage.key}>
+                              <div className={`flex flex-col items-center gap-0.5 min-w-[56px] ${current ? "text-primary" : done ? "text-green-700" : "text-muted-foreground/50"}`}>
+                                <div className={`h-7 w-7 rounded-full flex items-center justify-center text-sm ${current ? "bg-primary/20 ring-2 ring-primary" : done ? "bg-green-100" : "bg-muted"}`}>
+                                  {done ? "✓" : stage.icon}
+                                </div>
+                                <span className="text-[10px] font-medium text-center leading-tight">{stage.label}</span>
+                              </div>
+                              {idx < stages.length - 1 && (
+                                <div className={`flex-1 h-0.5 min-w-[16px] ${done && currentIdx > stageIdx ? "bg-green-300" : "bg-muted"}`} />
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                        {isCancelled && (
+                          <div className="ml-2 text-xs text-red-700 font-medium">
+                            ❌ {lang === 'hi' ? 'Cancel ho gaya' : 'Cancelled'}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
 
                 {detailPr.duplicate_of_pr_id && (
                   <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 flex items-start gap-2">
@@ -1762,14 +1974,71 @@ export default function PurchaseRequisitions() {
                   </div>
                   <div className="space-y-1">
                     <div className="text-xs text-muted-foreground">Required By</div>
-                    <div className="text-sm font-medium">{formatRequiredByDate(detailPr.required_by)}</div>
+                    {editMode ? (
+                      <Input
+                        type="date"
+                        value={editRequiredBy}
+                        onChange={(e) => setEditRequiredBy(e.target.value)}
+                        className="h-8 text-sm"
+                      />
+                    ) : (
+                      <div className="text-sm font-medium">{formatRequiredByDate(detailPr.required_by)}</div>
+                    )}
                   </div>
                 </div>
 
                 <div className="mt-4">
                   <div className="text-xs text-muted-foreground">Notes</div>
-                  <div className="text-sm mt-1">{detailPr.notes ?? "—"}</div>
+                  {editMode ? (
+                    <Textarea
+                      value={editNotes}
+                      onChange={(e) => setEditNotes(e.target.value)}
+                      rows={3}
+                      className="mt-1 text-sm"
+                      placeholder={lang === 'hi' ? "Kuch special instructions..." : "Any special instructions..."}
+                    />
+                  ) : (
+                    <div className="text-sm mt-1">{detailPr.notes ?? "—"}</div>
+                  )}
                 </div>
+
+                {/* Save/Cancel buttons when editing */}
+                {editMode && (
+                  <div className="mt-3 flex items-center gap-2">
+                    <Button size="sm" onClick={savePrEdits} disabled={editSaving}>
+                      {editSaving ? (lang === 'hi' ? 'Save ho raha hai...' : 'Saving...') : (lang === 'hi' ? '✓ Save Karo' : '✓ Save')}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => { setEditMode(false); setEditNotes(detailPr.notes ?? ""); setEditRequiredBy(detailPr.required_by ?? ""); }}>
+                      {lang === 'hi' ? 'Cancel' : 'Cancel'}
+                    </Button>
+                  </div>
+                )}
+
+                {/* Activity Timeline */}
+                {detailTimeline.length > 0 && (
+                  <div className="mt-6 border-t border-border/60 pt-4">
+                    <h2 className="text-sm font-semibold mb-2">
+                      {lang === 'hi' ? '📜 Aap Ki Request Ka Safar' : '📜 Activity Timeline'}
+                    </h2>
+                    <div className="space-y-2">
+                      {detailTimeline.map((ev, idx) => (
+                        <div key={idx} className="flex items-start gap-3 text-sm">
+                          <span className="text-lg leading-none">{ev.icon}</span>
+                          <div className="flex-1 min-w-0">
+                            <span className={`font-medium ${ev.tone === "success" ? "text-green-700" : ev.tone === "danger" ? "text-red-700" : "text-foreground"}`}>
+                              {ev.label}
+                            </span>
+                            {ev.date && (
+                              <span className="text-xs text-muted-foreground ml-2">
+                                {formatIndianDateTime(ev.date)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-6 border-t border-border/60 pt-4">
                   <div className="flex items-center justify-between gap-3 mb-3">
