@@ -294,12 +294,22 @@ export function buildPoPdf(data: PoPdfData): Blob {
     doc.text(addrLines, rightX, ry);
     ry += addrLines.length * 3.8 + 2;
   }
+  if (data.projectName) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7);
+    doc.setTextColor(60, 60, 60);
+    doc.text("Project:", rightX, ry);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(20, 20, 20);
+    const projLines = doc.splitTextToSize(data.projectName, rightW - 18);
+    doc.text(projLines, rightX + 18, ry);
+    ry += projLines.length * 3.8 + 2;
+  }
 
   /* PO meta */
   const metaRows: [string, string][] = [
     ["PO No", data.poNumber],
     ...(data.prNumber ? [["PR Ref", data.prNumber] as [string, string]] : []),
-    ...(data.projectName ? [["Project", data.projectName] as [string, string]] : []),
     ["Po Issue Date", poDate],
     ["Po upto", poUpto],
     ["Valid Upto", validUpto],
