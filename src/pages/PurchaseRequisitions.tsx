@@ -489,29 +489,18 @@ function UploadInvoiceDialog({
       });
       if (insErr) throw insErr;
 
-      // Auto-close check: all payments paid + invoice just uploaded → close PR
-      const { data: schedules } = await supabase.from("cps_po_payment_schedules").select("status").eq("po_id", poId);
-      const schedulesList = (schedules ?? []) as Array<{ status: string }>;
-      const allPaid = schedulesList.length === 0 || schedulesList.every((s) => s.status === "paid");
+      // Audit log — procurement team will verify and close
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id, user_name: user.name, user_role: user.role,
+        action_type: "INVOICE_UPLOADED",
+        entity_type: "purchase_order", entity_id: poId, entity_number: poNumber,
+        description: `Invoice uploaded for ${poNumber} by site team — awaiting procurement verification.`,
+        severity: "info", logged_at: new Date().toISOString(),
+      });
 
-      if (allPaid && prId) {
-        // Payment done + invoice uploaded → auto-close PR
-        await supabase.from("cps_purchase_requisitions").update({ status: "delivered" }).eq("id", prId);
-        await supabase.from("cps_purchase_orders").update({ status: "closed" }).eq("id", poId);
-
-        // Audit log
-        await supabase.from("cps_audit_log").insert({
-          user_id: user.id, user_name: user.name, user_role: user.role,
-          action_type: "PR_AUTO_CLOSED",
-          entity_type: "purchase_requisition", entity_id: prId, entity_number: null,
-          description: `PR auto-closed: invoice uploaded + all payments done.`,
-          severity: "info", logged_at: new Date().toISOString(),
-        });
-
-        toast.success(lang === 'hi' ? "Invoice upload ho gaya aur PR band ho gayi ✓" : "Invoice uploaded — PR auto-closed ✓");
-      } else {
-        toast.success(lang === 'hi' ? "Invoice upload ho gaya" : "Invoice uploaded successfully");
-      }
+      toast.success(lang === 'hi'
+        ? "Invoice upload ho gaya — procurement team verify karke PR band karegi"
+        : "Invoice uploaded — procurement will verify and close the PR");
 
       onOpenChange(false);
       onSaved();
@@ -529,8 +518,8 @@ function UploadInvoiceDialog({
           <DialogTitle>{lang === 'hi' ? "Invoice Upload Karo" : "Upload Supplier Invoice"}</DialogTitle>
           <DialogDescription>
             {lang === 'hi'
-              ? `PO ${poNumber} ke liye supplier ka invoice upload karo. Upload hote hi PR automatic close ho jayegi.`
-              : `Upload supplier's invoice for PO ${poNumber}. Once uploaded, PR auto-closes (payment is already done).`}
+              ? `PO ${poNumber} ke liye supplier ka invoice upload karo. Procurement team verify karke PR band karegi.`
+              : `Upload supplier's invoice for PO ${poNumber}. Procurement will verify it and close the PR.`}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">

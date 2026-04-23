@@ -52,6 +52,7 @@ type PRCard = {
   rfq_status?: string;
   quotes_count?: number;
   comparison_status?: string | null;
+  po_id?: string;
   po_number?: string;
   po_status?: string;
   po_grand_total?: number | null;
@@ -104,7 +105,7 @@ const STAGES: Array<{
   { key: "approval",      label: "5. Pending Approval",  icon: CheckCircle2,  color: "text-orange-700",  bg: "bg-orange-50",  border: "border-orange-200",  desc: "Awaiting founder" },
   { key: "finance",       label: "6. Sent to Finance",   icon: Landmark,      color: "text-teal-700",    bg: "bg-teal-50",    border: "border-teal-200",    desc: "Awaiting payment" },
   { key: "payment_done",  label: "7. Payment Done",      icon: Wallet,        color: "text-sky-700",     bg: "bg-sky-50",     border: "border-sky-200",     desc: "All payments complete" },
-  { key: "invoice_added", label: "8. Invoice Added",     icon: Receipt,       color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", desc: "Site uploaded invoice" },
+  { key: "invoice_added", label: "8. Invoice Added",     icon: Receipt,       color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", desc: "Verify invoice & close" },
   { key: "closed",        label: "9. Closed",            icon: Archive,       color: "text-slate-700",   bg: "bg-slate-50",   border: "border-slate-200",   desc: "PR fully closed" },
   { key: "cancelled",     label: "Cancelled",            icon: XCircle,       color: "text-red-700",     bg: "bg-red-50",     border: "border-red-200",     desc: "Request cancelled" },
 ];
@@ -149,11 +150,11 @@ const deriveStage = (
 ): StageKey => {
   if (prStatus === "cancelled") return "cancelled";
   if (po) {
-    // PR fully closed (procurement marked PO closed OR auto-closed after invoice+payment)
+    // PR fully closed ONLY when procurement has explicitly marked the PO closed
+    // (verification step after reviewing the uploaded invoice).
     if (["closed"].includes(po.status)) return "closed";
-    if (po.has_invoice && po.all_paid) return "closed";
 
-    // Invoice uploaded by site team (awaiting auto-close trigger)
+    // Invoice uploaded by site team — awaits procurement verification before closing
     if (po.has_invoice) return "invoice_added";
 
     // Payment complete — finance backend confirmed payment OR all schedules paid
@@ -190,6 +191,52 @@ export default function KanbanBoard() {
   const [cards, setCards] = useState<PRCard[]>([]);
   const [search, setSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string>("all");
+  const [closingPoId, setClosingPoId] = useState<string | null>(null);
+
+  const canVerifyAndClose =
+    user?.role === "procurement_head" ||
+    user?.role === "procurement_executive" ||
+    user?.role === "it_head" ||
+    user?.role === "management";
+
+  const verifyAndCloseCard = async (card: PRCard) => {
+    if (!user || !card.po_number || !card.po_id) return;
+    const poId = card.po_id;
+    setClosingPoId(poId);
+    try {
+      const { error: poErr } = await supabase
+        .from("cps_purchase_orders")
+        .update({ status: "closed" })
+        .eq("id", poId);
+      if (poErr) throw poErr;
+
+      const { error: prErr } = await supabase
+        .from("cps_purchase_requisitions")
+        .update({ status: "delivered" })
+        .eq("id", card.pr_id);
+      if (prErr) throw prErr;
+
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+        action_type: "PR_CLOSED_AFTER_VERIFICATION",
+        entity_type: "purchase_order",
+        entity_id: poId,
+        entity_number: card.po_number,
+        description: `Invoice verified by ${user.name ?? user.email}; PR ${card.pr_number} closed.`,
+        severity: "info",
+        logged_at: new Date().toISOString(),
+      });
+
+      toast.success(`PR ${card.pr_number} closed after invoice verification`);
+      await fetchAll();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to close PR");
+    } finally {
+      setClosingPoId(null);
+    }
+  };
 
   const fetchAll = async () => {
     setLoading(true);
@@ -337,6 +384,7 @@ export default function KanbanBoard() {
           rfq_status: rfq?.status,
           quotes_count: qCount,
           comparison_status: compStatus,
+          po_id: po?.id,
           po_number: po?.po_number,
           po_status: po?.status,
           po_grand_total: po?.grand_total,
@@ -637,6 +685,19 @@ export default function KanbanBoard() {
                           </span>
                           <ArrowRight className="h-3 w-3 text-muted-foreground" />
                         </div>
+
+                        {/* Verify & Close — only on Invoice Added stage, procurement-only */}
+                        {c.stage === "invoice_added" && canVerifyAndClose && c.po_id && (
+                          <button
+                            type="button"
+                            className="mt-1 w-full rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium py-1.5 px-2 flex items-center justify-center gap-1 disabled:opacity-60"
+                            disabled={closingPoId === c.po_id}
+                            onClick={(e) => { e.stopPropagation(); verifyAndCloseCard(c); }}
+                          >
+                            <CheckCircle2 className="h-3 w-3" />
+                            {closingPoId === c.po_id ? "Closing..." : "Verify & Close PR"}
+                          </button>
+                        )}
                       </button>
                     ))
                   )}
