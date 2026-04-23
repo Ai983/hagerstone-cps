@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -65,7 +65,7 @@ type ProjectRow = {
 
 const hindi: Record<string, string> = {
   "Purchase Requisitions": "Meri Purchase Requests",
-  "New PR": "Naya Request",
+  "New PR": "Naya Saman Mangwao",
   "Project Site": "Project Site",
   "Project Code": "Project Code",
   "Required By Date": "Kab Chahiye?",
@@ -190,6 +190,7 @@ const rpcResultToString = (data: unknown) => {
 export default function PurchaseRequisitions() {
   const { user, canViewPrices } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [itemsLoading, setItemsLoading] = useState(true);
 
@@ -475,6 +476,16 @@ export default function PurchaseRequisitions() {
     setWizNewItemSubmitting({});
     setWizardOpen(true);
   };
+
+  // Auto-open wizard when navigated with ?new=1 (from Dashboard "Naya Saman Mangwao" button)
+  useEffect(() => {
+    if (searchParams.get("new") === "1" && !wizardOpen) {
+      openWizard();
+      // Clean up the URL so refresh doesn't reopen it
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const openDetail = async (pr: PurchaseRequisition) => {
     setDetailOpen(true);

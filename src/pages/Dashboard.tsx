@@ -272,7 +272,8 @@ export default function Dashboard() {
 
   const quickActions = useMemo(() => {
     const role = user?.role;
-    if (role === "requestor") return [{ label: "Naya Saman Mangwao", path: "/requisitions", icon: Plus }];
+    // For requestor: the big "Naya Saman Mangwao" CTA below is enough — no quick actions needed in header
+    if (role === "requestor") return [];
     if (role === "procurement_executive") return [
       { label: t("Create RFQ", "RFQ Banao"), path: "/rfqs", icon: Send },
       { label: t("Review Quotes", "Quotes Dekho"), path: "/quotes", icon: Eye },
@@ -326,7 +327,7 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           </div>
-          <Button className="w-full h-12 text-base" onClick={() => navigate('/requisitions')}>
+          <Button className="w-full h-12 text-base" onClick={() => navigate('/requisitions?new=1')}>
             <Plus className="h-5 w-5 mr-2" /> Naya Saman Mangwao
           </Button>
         </div>
