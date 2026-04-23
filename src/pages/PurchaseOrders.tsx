@@ -899,6 +899,8 @@ export default function PurchaseOrders() {
             paymentTerms: _paymentTerms || null,
             deliveryDate: _deliveryDate || null,
             shipToAddress: _shipTo || null,
+            projectCode: prProjectCode || null,
+            projectName: prProjectCode || null,
             subTotal: _subTotal,
             gstAmount: _gstTotal,
             grandTotal: _grandTotal,
@@ -1395,6 +1397,7 @@ export default function PurchaseOrders() {
         paymentTerms: viewPo.payment_terms,
         deliveryDate: viewPo.delivery_date,
         projectCode: viewPo.project_code ?? viewPr?.project_code ?? null,
+        projectName: viewPr?.project_code ?? viewPo.project_code ?? null,
         subTotal,
         gstAmount,
         grandTotal,
@@ -2265,8 +2268,8 @@ export default function PurchaseOrders() {
                       </div>
                     )}
                     <div className="text-sm">
-                      <span className="text-muted-foreground">Project Code: </span>
-                      <span className="font-medium">{viewPo.project_code ?? viewPr?.project_code ?? "—"}</span>
+                      <span className="text-muted-foreground">Project Name: </span>
+                      <span className="font-medium">{viewPr?.project_code ?? viewPo.project_code ?? "—"}</span>
                     </div>
                     <div className="text-sm">
                       <span className="text-muted-foreground">Delivery Date: </span>

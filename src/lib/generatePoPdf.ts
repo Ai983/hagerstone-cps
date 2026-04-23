@@ -36,6 +36,7 @@ export interface PoPdfData {
   paymentTerms?: string | null;
   deliveryDate?: string | null;
   projectCode?: string | null;
+  projectName?: string | null;
 
   /* financials */
   subTotal: number;
@@ -298,6 +299,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   const metaRows: [string, string][] = [
     ["PO No", data.poNumber],
     ...(data.prNumber ? [["PR Ref", data.prNumber] as [string, string]] : []),
+    ...(data.projectName ? [["Project", data.projectName] as [string, string]] : []),
     ["Po Issue Date", poDate],
     ["Po upto", poUpto],
     ["Valid Upto", validUpto],
