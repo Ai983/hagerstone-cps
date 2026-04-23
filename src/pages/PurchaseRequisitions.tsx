@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -445,34 +445,30 @@ function UploadInvoiceDialog({
   lang: 'en' | 'hi';
 }) {
   const { user } = useAuth();
-  const [invoiceNumber, setInvoiceNumber] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState("");
-  const [totalAmount, setTotalAmount] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
-      setInvoiceNumber("");
-      setInvoiceDate(new Date().toISOString().slice(0, 10));
-      setTotalAmount("");
       setFile(null);
     }
   }, [open]);
 
   const handleSave = async () => {
     if (!user || !poNumber || !poId) return;
-    if (!invoiceNumber.trim()) { toast.error(lang === 'hi' ? "Invoice number dalo" : "Invoice number is required"); return; }
-    if (!invoiceDate) { toast.error(lang === 'hi' ? "Invoice date dalo" : "Invoice date is required"); return; }
-    if (!totalAmount || parseFloat(totalAmount) <= 0) { toast.error(lang === 'hi' ? "Amount dalo" : "Total amount is required"); return; }
-    if (!file) { toast.error(lang === 'hi' ? "Invoice PDF/image upload karo" : "Please attach the invoice file"); return; }
+    if (!file) { toast.error(lang === 'hi' ? "Invoice file ya photo upload karo" : "Please attach the invoice file or photo"); return; }
     if (file.size > 15 * 1024 * 1024) { toast.error("File too large (max 15 MB)"); return; }
 
     setSaving(true);
     try {
+      // Auto-generate placeholder invoice number — will be extracted by AI later
+      const autoInvoiceNumber = `PENDING-${poNumber}-${Date.now()}`;
+
       // Upload file to storage
       const ext = file.name.split(".").pop() ?? "pdf";
-      const path = `pr-invoices/${prId}/${invoiceNumber.replace(/[^a-z0-9-]/gi, "_")}-${Date.now()}.${ext}`;
+      const path = `pr-invoices/${prId}/${autoInvoiceNumber.replace(/[^a-z0-9-]/gi, "_")}.${ext}`;
       const { error: upErr } = await supabase.storage
         .from("cps-quotes")
         .upload(path, file, { upsert: true });
@@ -480,17 +476,16 @@ function UploadInvoiceDialog({
       const { data: pubData } = supabase.storage.from("cps-quotes").getPublicUrl(path);
       const fileUrl = pubData?.publicUrl ?? path;
 
-      // Insert invoice row
+      // Insert invoice row — details auto-extracted later by AI parser
       const { error: insErr } = await supabase.from("invoices").insert({
-        invoice_number: invoiceNumber.trim(),
-        invoice_date: invoiceDate,
-        total_amount: parseFloat(totalAmount),
+        invoice_number: autoInvoiceNumber,
         file_path: fileUrl,
         po_reference: poNumber,
         supplier_id: supplierId,
         uploaded_by: user.id,
         document_type: "invoice",
         status: "uploaded",
+        needs_review: true,
       });
       if (insErr) throw insErr;
 
@@ -509,7 +504,7 @@ function UploadInvoiceDialog({
           user_id: user.id, user_name: user.name, user_role: user.role,
           action_type: "PR_AUTO_CLOSED",
           entity_type: "purchase_requisition", entity_id: prId, entity_number: null,
-          description: `PR auto-closed: invoice ${invoiceNumber} uploaded + all payments done.`,
+          description: `PR auto-closed: invoice uploaded + all payments done.`,
           severity: "info", logged_at: new Date().toISOString(),
         });
 
@@ -538,30 +533,53 @@ function UploadInvoiceDialog({
               : `Upload supplier's invoice for PO ${poNumber}. Once uploaded, PR auto-closes (payment is already done).`}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 py-2">
-          <div className="space-y-1">
-            <Label className="text-xs">{lang === 'hi' ? "Invoice Number *" : "Invoice Number *"}</Label>
-            <Input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} placeholder="e.g. INV-2026-0123" />
-          </div>
+        <div className="space-y-4 py-2">
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">{lang === 'hi' ? "Invoice Date *" : "Invoice Date *"}</Label>
-              <Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">{lang === 'hi' ? "Total Amount (₹) *" : "Total Amount (₹) *"}</Label>
-              <Input type="number" min={0} step="0.01" value={totalAmount} onChange={(e) => setTotalAmount(e.target.value)} placeholder="e.g. 10000" />
-            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-24 flex flex-col items-center justify-center gap-1"
+              onClick={() => cameraInputRef.current?.click()}
+            >
+              <span className="text-2xl">📷</span>
+              <span className="text-sm font-medium">{lang === 'hi' ? "Photo Khincho" : "Take Photo"}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-24 flex flex-col items-center justify-center gap-1"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <span className="text-2xl">📁</span>
+              <span className="text-sm font-medium">{lang === 'hi' ? "File Chuno" : "Upload File"}</span>
+            </Button>
           </div>
-          <div className="space-y-1">
-            <Label className="text-xs">{lang === 'hi' ? "Invoice File (PDF / Image) *" : "Invoice File (PDF / Image) *"}</Label>
-            <Input
-              type="file"
-              accept="application/pdf,image/*"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-            />
-            {file && <p className="text-xs text-muted-foreground">📄 {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)</p>}
-          </div>
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf,image/*"
+            className="hidden"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+          {file && (
+            <div className="rounded-md border border-border bg-muted/30 p-3 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">📄 {file.name}</p>
+                <p className="text-xs text-muted-foreground">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setFile(null)} disabled={saving}>
+                {lang === 'hi' ? "Hatao" : "Remove"}
+              </Button>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>{lang === 'hi' ? "Cancel" : "Cancel"}</Button>
