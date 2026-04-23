@@ -316,11 +316,14 @@ export default function ComparisonSheetPage() {
       const localPrLineItems = (prRows ?? []) as PrLineItem[];
       setPrLineItems(localPrLineItems);
 
-      const { data: sheetRow, error: sheetErr } = await supabase
+      // Use order+limit instead of maybeSingle() so legacy duplicates (if any) don't error
+      const { data: sheetRows, error: sheetErr } = await supabase
         .from("cps_comparison_sheets")
         .select("*")
         .eq("rfq_id", rfqId)
-        .maybeSingle();
+        .order("created_at", { ascending: true })
+        .limit(1);
+      const sheetRow = (sheetRows ?? [])[0] ?? null;
 
       if (sheetErr) {
         toast.error("Failed to load comparison sheet");
@@ -474,12 +477,14 @@ export default function ComparisonSheetPage() {
       }
       setAllQuoteLinesBySupplierId(linesBySupplier);
 
-      // Extra charges per supplier (read from each quote's ai_parsed_data)
+      // Extra charges per supplier (read from each APPROVED quote's ai_parsed_data)
       const extraBySupplier: Record<string, Array<{ name: string; amount: number; taxable: boolean }>> = {};
-      const { data: quotesAiData } = await supabase
-        .from("cps_quotes")
-        .select("supplier_id, ai_parsed_data")
-        .in("id", quoteIds);
+      const { data: quotesAiData } = approvedQuoteIds.length
+        ? await supabase
+            .from("cps_quotes")
+            .select("supplier_id, ai_parsed_data")
+            .in("id", approvedQuoteIds)
+        : { data: [] };
       (quotesAiData ?? []).forEach((q: any) => {
         const charges = q?.ai_parsed_data?.extra_charges;
         if (Array.isArray(charges) && charges.length > 0) {
@@ -599,6 +604,22 @@ export default function ComparisonSheetPage() {
     if (!rfqId) return;
     setGenerating(true);
     try {
+      // First check if a sheet already exists for this RFQ — don't create duplicates
+      const { data: existing } = await supabase
+        .from("cps_comparison_sheets")
+        .select("id")
+        .eq("rfq_id", rfqId)
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        // Already exists — just refresh; no new row needed
+        toast.success("Comparison Sheet loaded");
+        await fetchAll();
+        return;
+      }
+
       const { data: quotes, error: qErr } = await supabase.from("cps_quotes").select("id").eq("rfq_id", rfqId);
       if (qErr) throw qErr;
       const total = (quotes ?? []).length;
