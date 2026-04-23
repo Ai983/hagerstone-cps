@@ -335,8 +335,11 @@ export default function PRReview() {
       }
 
       if (toUpsert.length) {
+        // Generate client-side UUIDs for new rows — upsert with mixed (with-id + without-id)
+        // payloads sends NULL for the missing id field and violates not-null. Generating the id
+        // client-side avoids that entirely.
         const payload = toUpsert.map((li, idx) => ({
-          ...(li.id ? { id: li.id } : {}),
+          id: li.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined),
           pr_id: li.pr_id,
           item_id: li.item_id,
           description: li.description.trim(),
@@ -376,8 +379,10 @@ export default function PRReview() {
         await supabase.from("cps_pr_line_items").delete().in("id", toDelete.map((li) => li.id!));
       }
       if (toUpsert.length) {
+        // Always include id — generate client-side UUID for new rows to avoid
+        // upsert NULL-id issue on mixed batches
         const payload = toUpsert.map((li, idx) => ({
-          ...(li.id ? { id: li.id } : {}),
+          id: li.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined),
           pr_id: li.pr_id,
           item_id: li.item_id,
           description: li.description.trim(),
@@ -439,8 +444,10 @@ export default function PRReview() {
         await supabase.from("cps_pr_line_items").delete().in("id", toDelete.map((li) => li.id!));
       }
       if (toUpsert.length) {
+        // Always include id — generate client-side UUID for new rows to avoid
+        // upsert NULL-id issue on mixed batches
         const payload = toUpsert.map((li, idx) => ({
-          ...(li.id ? { id: li.id } : {}),
+          id: li.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined),
           pr_id: li.pr_id,
           item_id: li.item_id,
           description: li.description.trim(),
