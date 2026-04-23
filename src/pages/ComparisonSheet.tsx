@@ -380,21 +380,22 @@ export default function ComparisonSheetPage() {
       });
       setQuoteBySupplierId(quoteMap);
 
-      // Load line items for those quotes.
-      const quoteIds = quotes.map((q) => q.id).filter(Boolean);
-      const { data: quoteLineItemsRows, error: liErr } = quoteIds.length
+      // Load line items ONLY for APPROVED quotes — non-approved / rejected / pending quotes
+      // should never feed into comparison (prevents stale or non-compliant data skewing analysis).
+      const approvedQuoteIds = approvedQuotes.map((q) => q.id).filter(Boolean);
+      const { data: quoteLineItemsRows, error: liErr } = approvedQuoteIds.length
         ? await supabase
             .from("cps_quote_line_items")
             .select("id,quote_id,pr_line_item_id,item_id,original_description,brand,quantity,unit,rate,gst_percent,freight,packing,total_landed_rate,lead_time_days,hsn_code,confidence_score,human_corrected,correction_log")
-            .in("quote_id", quoteIds)
+            .in("quote_id", approvedQuoteIds)
         : { data: [], error: null };
       if (liErr) throw liErr;
 
       const liList = (quoteLineItemsRows ?? []) as QuoteLineItem[];
 
-      // For matching, we need supplier_id per quote_id.
+      // For matching, we need supplier_id per quote_id — only approved quotes considered.
       const quoteIdToSupplierId: Record<string, string> = {};
-      quotes.forEach((q) => {
+      approvedQuotes.forEach((q) => {
         quoteIdToSupplierId[String(q.id)] = String(q.supplier_id);
       });
 

@@ -188,6 +188,8 @@ export default function RFQs() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewRfq, setReviewRfq] = useState<Rfq | null>(null);
   const [reviewSuppliers, setReviewSuppliers] = useState<ReviewRfqSupplier[]>([]);
+  const [responseStatusBySupplier, setResponseStatusBySupplier] = useState<Record<string, string>>({});
+  const [resendingSupplierId, setResendingSupplierId] = useState<string | null>(null);
   const [reviewPrItems, setReviewPrItems] = useState<ReviewPrLineItem[]>([]);
   const [reviewDeadline, setReviewDeadline] = useState("");
   const [showAddVendor, setShowAddVendor] = useState(false);
@@ -574,16 +576,125 @@ export default function RFQs() {
       await loadPrItems(rfq.pr_id, rfq.target_category ?? null);
       const { data: sups } = await supabase
         .from("cps_rfq_suppliers")
-        .select("supplier_id, cps_suppliers(id, name, whatsapp, phone, email, city, categories, performance_score, profile_complete, last_awarded_at, status, added_via)")
+        .select("supplier_id, response_status, cps_suppliers(id, name, whatsapp, phone, email, city, categories, performance_score, profile_complete, last_awarded_at, status, added_via)")
         .eq("rfq_id", rfq.id);
       const dispatched = (sups ?? [])
         .map((row: any) => row.cps_suppliers)
         .filter(Boolean) as Supplier[];
+      // Track each supplier's response_status for the Resend button visibility logic
+      const rsMap: Record<string, string> = {};
+      (sups ?? []).forEach((row: any) => {
+        if (row.supplier_id) rsMap[row.supplier_id] = row.response_status ?? "pending";
+      });
+      setResponseStatusBySupplier(rsMap);
       setMatchedSuppliers(dispatched);
       setReviewSelectedIds(dispatched.map((s) => s.id));
     }
 
     setReviewLoading(false);
+  };
+
+  // Resend quote-upload link to a single vendor — used when their previous quote was deleted
+  // or they never responded. Generates a fresh token and fires the WhatsApp webhook for them only.
+  const resendLinkToVendor = async (supplier: Supplier) => {
+    if (!reviewRfq || !user) return;
+    // Block if RFQ is closed/cancelled
+    if (["closed", "cancelled"].includes(String(reviewRfq.status ?? ""))) {
+      toast.error("Cannot resend — RFQ is closed/cancelled");
+      return;
+    }
+    const phone = formatWhatsApp(supplier.whatsapp || supplier.phone);
+    if (phone.length !== 12) {
+      toast.error(`${supplier.name} has no valid WhatsApp number`);
+      return;
+    }
+    setResendingSupplierId(supplier.id);
+    try {
+      // Find the rfq_supplier row
+      const { data: rfqSup } = await supabase
+        .from("cps_rfq_suppliers")
+        .select("id")
+        .eq("rfq_id", reviewRfq.id)
+        .eq("supplier_id", supplier.id)
+        .maybeSingle();
+      const rfqSupplierId = (rfqSup as { id?: string } | null)?.id;
+
+      // Create a fresh token (valid for 7 days) — old tokens are left as-is; new one supersedes
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const { data: tokenRow, error: tokErr } = await supabase
+        .from("cps_quote_upload_tokens")
+        .insert({
+          rfq_id: reviewRfq.id,
+          supplier_id: supplier.id,
+          rfq_supplier_id: rfqSupplierId ?? null,
+          expires_at: expiresAt,
+        })
+        .select("token")
+        .single();
+      if (tokErr || !tokenRow) throw tokErr ?? new Error("Failed to create token");
+
+      const token = (tokenRow as { token: string }).token;
+      const uploadUrl = `${window.location.origin}/vendor/upload-quote?token=${token}`;
+
+      // Fetch webhook URL
+      const { data: cfgRow } = await supabase
+        .from("cps_config")
+        .select("value")
+        .eq("key", "webhook_rfq_dispatch")
+        .maybeSingle();
+      const webhookUrl = (cfgRow as { value?: string } | null)?.value;
+      if (!webhookUrl) { toast.error("RFQ dispatch webhook not configured"); return; }
+
+      // Fire webhook for just this vendor
+      await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "rfq_resend",
+          rfq_id: reviewRfq.id,
+          rfq_number: reviewRfq.rfq_number,
+          rfq_title: reviewRfq.title,
+          deadline: reviewRfq.deadline,
+          suppliers: [{
+            name: supplier.name,
+            whatsapp: phone,
+            email: supplier.email ?? null,
+            upload_url: uploadUrl,
+            token,
+          }],
+          total_suppliers: 1,
+        }),
+      });
+
+      // Reset response_status so the supplier is "pending" again
+      await supabase
+        .from("cps_rfq_suppliers")
+        .update({ response_status: "pending" })
+        .eq("rfq_id", reviewRfq.id)
+        .eq("supplier_id", supplier.id);
+
+      setResponseStatusBySupplier((prev) => ({ ...prev, [supplier.id]: "pending" }));
+
+      // Audit log
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id,
+        user_name: user.name ?? user.email ?? "",
+        user_role: user.role,
+        action_type: "RFQ_RESENT_TO_VENDOR",
+        entity_type: "rfq",
+        entity_id: reviewRfq.id,
+        entity_number: reviewRfq.rfq_number,
+        description: `RFQ ${reviewRfq.rfq_number} link resent to ${supplier.name} via WhatsApp`,
+        severity: "info",
+        logged_at: new Date().toISOString(),
+      });
+
+      toast.success(`Link resent to ${supplier.name} on WhatsApp`);
+    } catch (e: any) {
+      toast.error("Failed to resend: " + (e?.message || "Unknown error"));
+    } finally {
+      setResendingSupplierId(null);
+    }
   };
 
   const removeSupplierFromRFQ = async (rfqSupplierId: string) => {
@@ -1399,6 +1510,10 @@ export default function RFQs() {
                         const checked = reviewSelectedIds.includes(s.id);
                         const inCategory = !reviewRfqCategories.length ||
                           (s.categories ?? []).some((c) => reviewRfqCategories.includes(c));
+                        // For SENT RFQs: show a Resend Link button for vendors who don't have an approved quote
+                        const isSentRfq = reviewRfq && reviewRfq.status && !["draft", "closed", "cancelled"].includes(String(reviewRfq.status));
+                        const vendorResponseStatus = responseStatusBySupplier[s.id] ?? "pending";
+                        const canResend = isSentRfq && vendorResponseStatus !== "approved";
                         return (
                           <div key={s.id} className={`flex items-center gap-3 p-3 border rounded-lg transition-colors ${checked ? "border-primary/40 bg-primary/5" : "border-border/60 bg-muted/10"}`}>
                             <Checkbox
@@ -1421,6 +1536,15 @@ export default function RFQs() {
                                 {!inCategory && reviewRfqCategories.length > 0 && (
                                   <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5 leading-none">⚠ Outside category</span>
                                 )}
+                                {isSentRfq && vendorResponseStatus === "approved" && (
+                                  <Badge className="bg-green-100 text-green-800 border-green-200 border text-[10px] px-1.5 py-0">✓ Quote Approved</Badge>
+                                )}
+                                {isSentRfq && vendorResponseStatus === "responded" && (
+                                  <Badge className="bg-blue-100 text-blue-800 border-blue-200 border text-[10px] px-1.5 py-0">Quote Received</Badge>
+                                )}
+                                {isSentRfq && vendorResponseStatus === "pending" && (
+                                  <Badge className="bg-amber-100 text-amber-800 border-amber-200 border text-[10px] px-1.5 py-0">Awaiting Response</Badge>
+                                )}
                               </div>
                               <p className="text-xs text-muted-foreground mt-0.5">
                                 {s.whatsapp || s.phone || "No phone"} · {s.email || "No email"}
@@ -1432,14 +1556,27 @@ export default function RFQs() {
                               </div>
                             </div>
                             <span className="text-xs text-muted-foreground shrink-0">★ {s.performance_score ?? 100}</span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="text-destructive hover:text-destructive shrink-0 h-7 w-7 p-0"
-                              onClick={() => setReviewSelectedIds((prev) => prev.filter((id) => id !== s.id))}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
+                            {canResend ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="shrink-0 text-xs h-7"
+                                disabled={resendingSupplierId === s.id}
+                                onClick={() => resendLinkToVendor(s)}
+                                title="Resend WhatsApp link to this vendor (use after deleting their quote)"
+                              >
+                                {resendingSupplierId === s.id ? "Sending..." : "📤 Resend"}
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-destructive hover:text-destructive shrink-0 h-7 w-7 p-0"
+                                onClick={() => setReviewSelectedIds((prev) => prev.filter((id) => id !== s.id))}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
                           </div>
                         );
                       })}

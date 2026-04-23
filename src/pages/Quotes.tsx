@@ -190,7 +190,8 @@ const buildCorrectionEntries = (oldRow: QuoteLineItem, next: Partial<QuoteLineIt
 };
 
 export default function Quotes() {
-  const { user, canViewPrices } = useAuth();
+  const { user, canViewPrices, canCreateRFQ } = useAuth();
+  const isProcurementTeam = canCreateRFQ; // procurement_executive / procurement_head / it_head
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -539,6 +540,94 @@ export default function Quotes() {
     setReviewQuoteId(null);
     setReviewQuote(null);
     setReviewItems([]);
+  };
+
+  // Delete a quote — only if:
+  //   1. User is procurement team (canCreateRFQ)
+  //   2. The RFQ is still active (not closed/cancelled)
+  //   3. No PO has been created from this quote (comparison may exist but no PO yet)
+  // This is used when a vendor sends an updated quote and procurement wants to replace the old one.
+  const deleteQuote = async () => {
+    if (!user || !reviewQuote) return;
+    if (!isProcurementTeam) { toast.error("Only procurement team can delete quotes"); return; }
+
+    // 1. Check RFQ status — must be active
+    const { data: rfqRow } = await supabase
+      .from("cps_rfqs")
+      .select("status")
+      .eq("id", reviewQuote.rfq_id)
+      .maybeSingle();
+    const rfqStatus = (rfqRow as { status?: string } | null)?.status ?? "";
+    if (["closed", "cancelled"].includes(rfqStatus)) {
+      toast.error("Cannot delete — RFQ is already closed/cancelled");
+      return;
+    }
+
+    // 2. Check if any PO exists based on this quote's RFQ
+    const { data: poRow } = await supabase
+      .from("cps_purchase_orders")
+      .select("id,po_number,status")
+      .eq("rfq_id", reviewQuote.rfq_id)
+      .maybeSingle();
+    if (poRow) {
+      const poStatus = (poRow as { status?: string })?.status ?? "";
+      // Block delete if a real PO exists (anything beyond draft is locked; even drafts are risky)
+      if (!["cancelled", "rejected"].includes(poStatus)) {
+        toast.error(`Cannot delete — PO ${(poRow as any).po_number} has already been created for this RFQ (${poStatus})`);
+        return;
+      }
+    }
+
+    const confirmed = window.confirm(
+      `Delete quote ${reviewQuote.blind_quote_ref}? This will permanently remove the quote, its line items, and the uploaded file. This action cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setSavingReview(true);
+    try {
+      // 3. Delete the stored file (best effort, non-blocking)
+      if (reviewQuote.raw_file_path) {
+        await supabase.storage.from("cps-quotes").remove([reviewQuote.raw_file_path]);
+      }
+
+      // 4. Delete line items
+      await supabase.from("cps_quote_line_items").delete().eq("quote_id", reviewQuote.id);
+
+      // 5. Reset response_status on rfq_suppliers so they can submit another
+      if (reviewQuote.supplier_id) {
+        await supabase
+          .from("cps_rfq_suppliers")
+          .update({ response_status: "pending" })
+          .eq("rfq_id", reviewQuote.rfq_id)
+          .eq("supplier_id", reviewQuote.supplier_id);
+      }
+
+      // 6. Delete the quote itself
+      const { error: delErr } = await supabase.from("cps_quotes").delete().eq("id", reviewQuote.id);
+      if (delErr) throw delErr;
+
+      // 7. Audit log
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+        action_type: "QUOTE_DELETED",
+        entity_type: "quote",
+        entity_id: reviewQuote.id,
+        entity_number: reviewQuote.blind_quote_ref,
+        description: `Quote ${reviewQuote.blind_quote_ref} deleted by ${user.name} (vendor likely resubmitting updated quote).`,
+        severity: "warning",
+        logged_at: new Date().toISOString(),
+      });
+
+      toast.success(`Quote ${reviewQuote.blind_quote_ref} deleted — vendor can now resubmit`);
+      setReviewOpen(false);
+      await fetchQuotes();
+    } catch (e: any) {
+      toast.error("Failed to delete quote: " + (e?.message || "Unknown error"));
+    } finally {
+      setSavingReview(false);
+    }
   };
 
   const saveLineItemCorrections = async (item: QuoteLineItem) => {
@@ -1783,6 +1872,19 @@ Rules:
                         }}
                       >
                         {aiParsing ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Parsing…</> : aiResult ? "Re-parse" : "Parse with AI"}
+                      </Button>
+                    )}
+                    {/* Delete Quote — only for procurement team, blocks if PO created */}
+                    {isProcurementTeam && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                        disabled={savingReview}
+                        onClick={deleteQuote}
+                        title="Delete this quote (e.g. to let vendor resubmit an updated one)"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete Quote
                       </Button>
                     )}
                     <Button size="sm" variant="ghost" onClick={closeReview}>Close</Button>
