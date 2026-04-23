@@ -220,7 +220,7 @@ async function buildKanbanStagesForPr(pr: { id: string; status: string; created_
 
   const { data: poRow } = await supabase
     .from("cps_purchase_orders")
-    .select("id,po_number,created_at,status,delivery_date,founder_approval_status,founder_approval_sent_at,sent_at,finance_dispatch_sent_at,supplier_id")
+    .select("id,po_number,created_at,status,delivery_date,founder_approval_status,founder_approval_sent_at,sent_at,finance_dispatch_sent_at,finance_paid_at,supplier_id")
     .eq("pr_id", pr.id)
     .maybeSingle();
 
@@ -260,7 +260,9 @@ async function buildKanbanStagesForPr(pr: { id: string; status: string; created_
   const hasSentToFinance = !!(po?.sent_at || po?.finance_dispatch_sent_at);
   const totalPayable = paymentSchedules.reduce((s, p) => s + Number(p.amount), 0);
   const paidAmount = paymentSchedules.filter((p) => p.status === "paid").reduce((s, p) => s + Number(p.amount), 0);
-  const allPaid = paymentSchedules.length > 0 && paymentSchedules.every((p) => p.status === "paid");
+  // Payment done when finance backend confirmed OR all payment schedules are paid
+  const financePaidAt = po?.finance_paid_at ?? null;
+  const allPaid = !!financePaidAt || (paymentSchedules.length > 0 && paymentSchedules.every((p) => p.status === "paid"));
   // "Delivered" is green whenever a GRN has been recorded, OR PO status shows delivered/closed.
   // This handles partial deliveries — PO status only becomes "delivered" when ALL items are fully received,
   // but once any GRN is confirmed the site team has physically received material at site.
@@ -302,19 +304,23 @@ async function buildKanbanStagesForPr(pr: { id: string; status: string; created_
       date: po?.finance_dispatch_sent_at ?? po?.sent_at ?? null,
       detail: paymentSchedules.length > 0 ? `${paymentSchedules.length} payment${paymentSchedules.length > 1 ? "s" : ""}` : undefined,
     },
-    // Single consolidated "Payment Done" stage — green only when ALL payment schedules are paid
+    // Single consolidated "Payment Done" stage — green when finance confirmed OR all schedules paid
     {
       key: "payment_done", icon: allPaid ? "💰" : "💸",
       label: lang === 'hi' ? "Payment Hogyi" : "Payment Done",
       state: allPaid ? "done" : (hasSentToFinance ? "current" : "pending"),
-      date: allPaid && paymentSchedules.length > 0
-        ? paymentSchedules.map((p) => p.paid_at).filter(Boolean).sort().reverse()[0] ?? null
+      date: allPaid
+        ? (paymentSchedules.length > 0
+            ? paymentSchedules.map((p) => p.paid_at).filter(Boolean).sort().reverse()[0] ?? financePaidAt
+            : financePaidAt)
         : null,
       detail: paymentSchedules.length > 0
         ? (allPaid
             ? `₹${Number(totalPayable).toLocaleString("en-IN")} paid`
             : `₹${Number(paidAmount).toLocaleString("en-IN")} / ₹${Number(totalPayable).toLocaleString("en-IN")} paid`)
-        : (hasSentToFinance ? (lang === 'hi' ? "Finance team process kar rahi" : "Finance processing") : undefined),
+        : (allPaid
+            ? (lang === 'hi' ? "Finance confirm kiya" : "Finance confirmed")
+            : (hasSentToFinance ? (lang === 'hi' ? "Finance team process kar rahi" : "Finance processing") : undefined)),
     },
     // Invoice stage — enabled (clickable) only AFTER payment is done
     // Green when supplier's invoice has been uploaded and linked to PO
@@ -900,7 +906,7 @@ export default function PurchaseRequisitions() {
 
     const { data: poRow } = await supabase
       .from("cps_purchase_orders")
-      .select("id,po_number,created_at,status,delivery_date,founder_approval_status,founder_approval_sent_at,sent_at,finance_dispatch_sent_at,finance_dispatch_status")
+      .select("id,po_number,created_at,status,delivery_date,founder_approval_status,founder_approval_sent_at,sent_at,finance_dispatch_sent_at,finance_dispatch_status,finance_paid_at")
       .eq("pr_id", pr.id)
       .maybeSingle();
 
@@ -985,7 +991,8 @@ export default function PurchaseRequisitions() {
     const hasSentToFinance = po?.sent_at || po?.finance_dispatch_sent_at;
     const totalPayable = paymentSchedules.reduce((s, p) => s + Number(p.amount), 0);
     const paidAmount = paymentSchedules.filter((p) => p.status === "paid").reduce((s, p) => s + Number(p.amount), 0);
-    const allPaid = paymentSchedules.length > 0 && paymentSchedules.every((p) => p.status === "paid");
+    const financePaidAt = po?.finance_paid_at ?? null;
+    const allPaid = !!financePaidAt || (paymentSchedules.length > 0 && paymentSchedules.every((p) => p.status === "paid"));
     const isDelivered = po?.status === "delivered" || po?.status === "closed";
 
     const kanban: KanbanStage[] = [
