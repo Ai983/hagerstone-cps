@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, Upload, ClipboardCheck, KanbanSquare, LineChart } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, Upload, ClipboardCheck, KanbanSquare, LineChart, Boxes } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,7 @@ const NAV = [
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Purchase Orders", url: "/purchase-orders", icon: ShoppingCart, roles: ["procurement_executive","procurement_head","it_head","management","finance"] },
   { title: "Delivery Tracker", url: "/delivery", icon: Truck, roles: ["all"] },
+  { title: "Stock", url: "/stock", icon: Boxes, roles: ["all"] },
   { title: "Supplier Master", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Item Master", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head","it_head"] },
   { title: "Invoice Upload", url: "/invoices/upload", icon: Upload, roles: ["procurement_executive","procurement_head","it_head","management"] },
@@ -25,6 +26,7 @@ const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Meri Requests", url: "/requisitions", icon: FileText },
   { title: "Delivery Status", url: "/delivery", icon: Truck },
+  { title: "Stock", url: "/stock", icon: Boxes },
   { title: "Saman List", url: "/items", icon: Package },
 ];
 

@@ -14,6 +14,7 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   canApprove: boolean; canCreateRFQ: boolean; canViewAudit: boolean;
   canViewPrices: boolean; canManageSuppliers: boolean;
+  canIssueStock: boolean; canAdjustStock: boolean; canViewStock: boolean;
   isProcurementHead: boolean; isManagement: boolean;
   isEmployee: boolean;
 }
@@ -107,6 +108,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       canViewAudit: role === "auditor" || role === "procurement_head" || role === "it_head" || role === "management" || role === "procurement_executive",
       canViewPrices: role !== "requestor" && role !== "site_receiver",
       canManageSuppliers: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
+      // Stock permissions — anyone with a role can view. Issue is for site team (receiver/requestor) + procurement.
+      // Adjust (corrections, opening stock, thresholds) is procurement-only.
+      canViewStock: !!role,
+      canIssueStock: role === "site_receiver" || role === "requestor" || role === "procurement_executive" || role === "procurement_head" || role === "it_head",
+      canAdjustStock: role === "procurement_executive" || role === "procurement_head" || role === "it_head",
       isProcurementHead: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
       isManagement: role === "management",
       isEmployee: role === "requestor" || role === "site_receiver",

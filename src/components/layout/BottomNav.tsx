@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FileText, Send, ShoppingCart, Truck, MessageSquare,
-  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, ClipboardCheck,
+  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, ClipboardCheck, Boxes,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
@@ -20,6 +20,7 @@ const ADMIN_MORE = [
   { title: "Quotes", url: "/quotes", icon: MessageSquare },
   { title: "Comparison", url: "/comparison", icon: BarChart3 },
   { title: "Delivery", url: "/delivery", icon: Truck },
+  { title: "Stock", url: "/stock", icon: Boxes },
   { title: "Suppliers", url: "/suppliers", icon: Users },
   { title: "Items", url: "/items", icon: Package },
   { title: "Audit Log", url: "/audit", icon: Shield },
@@ -28,7 +29,7 @@ const ADMIN_MORE = [
 const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Meri Requests", url: "/requisitions", icon: FileText },
-  { title: "Saman List", url: "/items", icon: Package },
+  { title: "Stock", url: "/stock", icon: Boxes },
   { title: "Delivery", url: "/delivery", icon: Truck },
 ];
 

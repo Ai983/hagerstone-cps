@@ -62,6 +62,10 @@ export default function Dashboard() {
   const [legacyQuoteCount, setLegacyQuoteCount] = useState(0);
   const [incompleteVendorCount, setIncompleteVendorCount] = useState(0);
 
+  // Low-stock widget for site users
+  type LowStockItem = { id: string; project_site: string; current_qty: number; min_threshold: number | null; unit: string | null; item_name: string };
+  const [lowStockItems, setLowStockItems] = useState<LowStockItem[]>([]);
+
   const hideValues = user?.role === "requestor" || user?.role === "site_receiver";
   const [lang, setLang] = useState<'en' | 'hi'>('hi');
   const t = (en: string, hi: string) => lang === 'hi' ? hi : en;
@@ -235,6 +239,44 @@ export default function Dashboard() {
         });
         setPrImages(imageRows.slice(0, 12));
       }
+
+      // Low-stock items — for everyone except those without stock view
+      if (user?.id) {
+        let stockQuery = supabase
+          .from("cps_stock")
+          .select("id, project_site, current_qty, unit, min_threshold, item_id, cps_items(name)");
+        // For site users: restrict to their sites
+        if (user.role === "requestor" || user.role === "site_receiver") {
+          const { data: mySites } = await supabase
+            .from("cps_purchase_requisitions")
+            .select("project_site")
+            .eq("requested_by", user.id);
+          const siteList = Array.from(new Set((mySites ?? []).map((r: { project_site: string }) => r.project_site).filter(Boolean)));
+          if (siteList.length === 0) {
+            setLowStockItems([]);
+          } else {
+            stockQuery = stockQuery.in("project_site", siteList);
+          }
+        }
+        const { data: stockData } = await stockQuery;
+        const lowItems = ((stockData ?? []) as any[])
+          .filter((s) => {
+            const qty = Number(s.current_qty);
+            const threshold = s.min_threshold != null ? Number(s.min_threshold) : null;
+            return qty <= 0 || (threshold != null && qty <= threshold);
+          })
+          .map((s) => ({
+            id: s.id,
+            project_site: s.project_site,
+            current_qty: Number(s.current_qty),
+            min_threshold: s.min_threshold != null ? Number(s.min_threshold) : null,
+            unit: s.unit,
+            item_name: s.cps_items?.name ?? "Unknown",
+          }))
+          .sort((a, b) => a.current_qty - b.current_qty)
+          .slice(0, 8);
+        setLowStockItems(lowItems);
+      }
     } catch {
       toast.error("Failed to load dashboard data");
     }
@@ -330,6 +372,43 @@ export default function Dashboard() {
           <Button className="w-full h-12 text-base" onClick={() => navigate('/requisitions?new=1')}>
             <Plus className="h-5 w-5 mr-2" /> Naya Saman Mangwao
           </Button>
+
+          {/* Low-stock alerts for site users */}
+          {lowStockItems.length > 0 && (
+            <Card className="border-amber-300">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base flex items-center gap-2 text-amber-800">
+                  ⚠️ {t("Low Stock Alert", "Stock Kam Hai")}
+                  <Badge variant="outline" className="text-xs">{lowStockItems.length}</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {lowStockItems.map((s) => {
+                  const isOut = s.current_qty <= 0;
+                  return (
+                    <div key={s.id} className={`rounded-md border p-2 flex items-start gap-2 text-sm ${isOut ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}>
+                      <span className="text-lg">{isOut ? "🔴" : "🟡"}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium truncate">{s.item_name}</span>
+                          <Badge className={`text-[10px] border-0 ${isOut ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}`}>
+                            {isOut ? (lang === "hi" ? "Khatam" : "OUT") : (lang === "hi" ? "Kam" : "LOW")}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {s.project_site} · {lang === "hi" ? "Balance" : "Balance"}: <span className="font-medium">{s.current_qty} {s.unit ?? ""}</span>
+                          {s.min_threshold != null && <span> · {lang === "hi" ? "Min" : "Min"}: {s.min_threshold}</span>}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+                <Button size="sm" variant="outline" className="w-full mt-1" onClick={() => navigate("/stock")}>
+                  {t("View All Stock", "Saara Stock Dekho")}
+                </Button>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
