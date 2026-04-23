@@ -161,6 +161,8 @@ export default function RFQs() {
   const [sortDirRfq, setSortDirRfq] = useState<"asc" | "desc">("desc");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 25;
 
   const [submittedPRs, setSubmittedPRs] = useState<Array<PurchaseRequisition & { itemsCount: number }>>([]);
   const [submittedPRLoading, setSubmittedPRLoading] = useState(false);
@@ -383,6 +385,10 @@ export default function RFQs() {
       return sortDirRfq === "asc" ? cmp : -cmp;
     });
   }, [rfqs, debouncedSearch, statusFilter, dateFrom, dateTo, prDisplayById, sortFieldRfq, sortDirRfq]);
+
+  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, dateFrom, dateTo]);
+  const totalPagesRfq = Math.max(1, Math.ceil(rfqTable.length / PAGE_SIZE));
+  const paginatedRfqs = rfqTable.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const openDialog = async () => {
     setDialogOpen(true);
@@ -859,6 +865,19 @@ export default function RFQs() {
         </div>
       </div>
 
+      {!loading && rfqTable.length > 0 && (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, rfqTable.length)} of {rfqTable.length} RFQs</span>
+          {totalPagesRfq > 1 && (
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Prev</Button>
+              <span className="text-xs px-2">Page {page + 1}/{totalPagesRfq}</span>
+              <Button variant="outline" size="sm" disabled={page >= totalPagesRfq - 1} onClick={() => setPage(p => p + 1)}>Next</Button>
+            </div>
+          )}
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base font-semibold">RFQ List</CardTitle>
@@ -898,7 +917,7 @@ export default function RFQs() {
                   </TableCell>
                 </TableRow>
               ) : (
-                rfqTable.map((r) => {
+                paginatedRfqs.map((r) => {
                   const sc = statusColor[r.status] ?? statusColor.draft;
                   const total = totalQuotesByRfq[r.id] ?? 0;
                   const approved = approvedQuotesByRfq[r.id] ?? 0;
@@ -997,7 +1016,7 @@ export default function RFQs() {
             ) : rfqTable.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground">No RFQs yet.</div>
             ) : (
-              rfqTable.map((r) => {
+              paginatedRfqs.map((r) => {
                 const sc = statusColor[r.status] ?? statusColor.draft;
                 const total = totalQuotesByRfq[r.id] ?? 0;
                 const approved = approvedQuotesByRfq[r.id] ?? 0;

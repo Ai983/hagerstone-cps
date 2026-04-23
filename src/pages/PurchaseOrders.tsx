@@ -248,6 +248,8 @@ export default function PurchaseOrders() {
   }, [searchParams]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 25;
   const [sortFieldPO, setSortFieldPO] = useState("created_at");
   const [sortDirPO, setSortDirPO] = useState<"asc" | "desc">("desc");
 
@@ -374,6 +376,10 @@ export default function PurchaseOrders() {
       return sortDirPO === "asc" ? cmp : -cmp;
     });
   }, [rows, debouncedSearch, statusFilter, dateFrom, dateTo, sortFieldPO, sortDirPO]);
+
+  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, dateFrom, dateTo]);
+  const totalPagesPo = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const paginatedRows = filteredRows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const fetchPoRows = async () => {
     setLoading(true);
@@ -1621,6 +1627,19 @@ export default function PurchaseOrders() {
         </div>
       </div>
 
+      {!loading && filteredRows.length > 0 && (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filteredRows.length)} of {filteredRows.length} POs</span>
+          {totalPagesPo > 1 && (
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Prev</Button>
+              <span className="text-xs px-2">Page {page + 1}/{totalPagesPo}</span>
+              <Button variant="outline" size="sm" disabled={page >= totalPagesPo - 1} onClick={() => setPage(p => p + 1)}>Next</Button>
+            </div>
+          )}
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base font-semibold">PO List</CardTitle>
@@ -1661,7 +1680,7 @@ export default function PurchaseOrders() {
                 </TableRow>
               ) : (
                 <PoTableRows
-                  poRows={filteredRows}
+                  poRows={paginatedRows}
                   canViewPrices={canViewPrices}
                   onView={openView}
                   userId={user?.id ?? null}
@@ -1694,7 +1713,7 @@ export default function PurchaseOrders() {
             ) : filteredRows.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground">No purchase orders found.</div>
             ) : (
-              filteredRows.map((r) => (
+              paginatedRows.map((r) => (
                 <div key={r.id} className="p-4 space-y-2">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-1.5 flex-wrap">

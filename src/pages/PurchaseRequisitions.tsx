@@ -212,6 +212,8 @@ export default function PurchaseRequisitions() {
   const [sortDir, setSortDirPR] = useState<"asc" | "desc">("desc");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 25;
 
   // Quick preview expand
   const [expandedPrId, setExpandedPrId] = useState<string | null>(null);
@@ -426,6 +428,11 @@ export default function PurchaseRequisitions() {
       return sortDir === "asc" ? cmp : -cmp;
     });
   }, [prList, debouncedSearch, statusFilter, priorityFilter, dateFrom, dateTo, sortField, sortDir]);
+
+  // Reset page when filters change
+  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, priorityFilter, dateFrom, dateTo]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginatedFiltered = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const openWizard = () => {
     setWizardStep(1);
@@ -861,6 +868,20 @@ export default function PurchaseRequisitions() {
         </div>
       </div>
 
+      {/* Pagination info + controls */}
+      {!loading && filtered.length > 0 && (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of {filtered.length} PRs</span>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>Prev</Button>
+              <span className="text-xs px-2">Page {page + 1}/{totalPages}</span>
+              <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next</Button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Table — desktop */}
       <div className="hidden lg:block">
       <Card>
@@ -911,7 +932,7 @@ export default function PurchaseRequisitions() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filtered.map((pr) => {
+                paginatedFiltered.map((pr) => {
                   const badge = statusBadge(pr.status);
                   return (
                     <React.Fragment key={pr.id}>
@@ -1009,7 +1030,7 @@ export default function PurchaseRequisitions() {
             <Button onClick={() => openWizard()} className="mt-3 w-full h-11">Raise your first PR</Button>
           </div>
         ) : (
-          filtered.map((pr) => {
+          paginatedFiltered.map((pr) => {
             const badge = statusBadge(pr.status);
             return (
               <Card key={pr.id} className="p-4 cursor-pointer active:bg-muted/50" onClick={() => openDetail(pr)}>
