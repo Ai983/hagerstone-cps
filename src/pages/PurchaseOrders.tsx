@@ -929,16 +929,15 @@ export default function PurchaseOrders() {
             link: `${origin}/approve-po?token=${t.token}`,
           }));
 
-          /* fetch webhook URL + founder numbers from config */
+          /* fetch webhook URL + founder number from config */
           const { data: cfgRows } = await supabase
             .from("cps_config")
             .select("key,value")
-            .in("key", ["webhook_po_founder_approval", "founder_whatsapp_dhruv", "founder_whatsapp_bhaskar"]);
+            .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar"]);
           const cfgMap: Record<string, string> = {};
           (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
           const webhookUrl = cfgMap["webhook_po_founder_approval"];
           if (!webhookUrl) return;
-          const dhruvWA = cfgMap["founder_whatsapp_dhruv"] || "919910820078";
           const bhaskarWA = cfgMap["founder_whatsapp_bhaskar"] || "919953001048";
 
           /* mark PO as pending */
@@ -1197,7 +1196,7 @@ export default function PurchaseOrders() {
         .update({ founder_approval_status: "pending" })
         .eq("id", poId);
 
-      toast.success("Approval message resent to Bhaskar");
+      toast.success("Approval message resent to Bhaskar Sir");
 
       /* refresh token display */
       const { data: freshTokens } = await supabase
@@ -2561,11 +2560,11 @@ export default function PurchaseOrders() {
                 {/* Approval section */}
                 <div className="border-t border-border/60 pt-4 space-y-4">
                   {/* Founder feedback — individual cards per founder */}
-                  {viewPoTokens.length > 0 && (
+                  {viewPoTokens.filter((t) => t.founder_name !== "Dhruv").length > 0 && (
                     <div className="space-y-2">
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Founder Responses</p>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        {viewPoTokens.map((tok) => {
+                      <div className="grid grid-cols-1 gap-2">
+                        {viewPoTokens.filter((t) => t.founder_name !== "Dhruv").map((tok) => {
                           const responded = !!tok.used_at;
                           const approved = tok.response === "approved";
                           const rejected = tok.response === "rejected";
@@ -2583,7 +2582,7 @@ export default function PurchaseOrders() {
                                 <span className={`text-sm font-semibold ${
                                   approved ? "text-green-800" : rejected ? "text-red-800" : "text-amber-800"
                                 }`}>
-                                  {tok.founder_name}
+                                  {tok.founder_name === "Bhaskar" ? "Bhaskar Sir" : tok.founder_name}
                                 </span>
                                 <span className={`ml-auto text-xs font-medium ${
                                   approved ? "text-green-700" : rejected ? "text-red-700" : "text-amber-700"

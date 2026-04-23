@@ -250,7 +250,7 @@ export default function ApprovePoPage() {
           <p className="text-xs text-muted-foreground uppercase tracking-wide">Purchase Order</p>
           <p className="text-2xl font-bold text-foreground">{po?.po_number}</p>
           {tokenRow?.founder_name && (
-            <p className="text-sm text-muted-foreground">Approval requested from <strong>{tokenRow.founder_name}</strong></p>
+            <p className="text-sm text-muted-foreground">Approval requested from <strong>{tokenRow.founder_name === "Bhaskar" ? "Bhaskar Sir" : tokenRow.founder_name}</strong></p>
           )}
         </div>
 

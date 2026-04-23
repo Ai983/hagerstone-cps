@@ -493,11 +493,11 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
         const tokenList = (insertedTokens ?? []) as Array<{ token: string; founder_name: string }>;
         const bhaskarLink = tokenList.find(t => t.founder_name === "Bhaskar");
 
-        // Fetch webhook URL + founder numbers from config
+        // Fetch webhook URL + founder number from config
         const { data: cfgRows } = await supabase
           .from("cps_config")
           .select("key,value")
-          .in("key", ["webhook_po_founder_approval", "founder_whatsapp_dhruv", "founder_whatsapp_bhaskar"]);
+          .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar"]);
         const cfgMap: Record<string, string> = {};
         (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
         const webhookUrl = cfgMap["webhook_po_founder_approval"];
