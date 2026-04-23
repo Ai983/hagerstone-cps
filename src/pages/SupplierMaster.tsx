@@ -482,13 +482,9 @@ For any field not found on the card, use empty string. For phone, if the card sh
       toast.error("Invalid GSTIN format — must be 15 characters (e.g. 09AAECH3768B1ZM)");
       return;
     }
-    // PAN: mandatory + format check
-    if (!form.pan.trim()) {
-      toast.error("PAN number is required");
-      return;
-    }
-    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(form.pan.trim().toUpperCase())) {
-      toast.error("Invalid PAN format — must be 10 characters (e.g. ABCDE1234F)");
+    // PAN: optional — but if entered, must be valid 10-char format
+    if (form.pan.trim() && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(form.pan.trim().toUpperCase())) {
+      toast.error("Invalid PAN format — must be 10 characters (e.g. ABCDE1234F) or leave blank");
       return;
     }
     // Phone: 10-digit Indian number (optional +91 prefix)
@@ -912,7 +908,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
               <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Full company name" />
             </div>
             <div className="space-y-1"><Label>GSTIN <span className="text-destructive">*</span></Label><Input value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value })} placeholder="15-digit GSTIN" required /></div>
-            <div className="space-y-1"><Label>PAN</Label><Input value={form.pan} onChange={(e) => setForm({ ...form, pan: e.target.value })} placeholder="PAN" /></div>
+            <div className="space-y-1"><Label>PAN</Label><Input value={form.pan} onChange={(e) => setForm({ ...form, pan: e.target.value })} placeholder="Optional — e.g. ABCDE1234F" /></div>
             <div className="space-y-1"><Label>Email</Label><Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="contact@supplier.com" /></div>
             <div className="space-y-1"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 XXXXX XXXXX" /></div>
             <div className="space-y-1"><Label>WhatsApp</Label><Input value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} placeholder="+91 XXXXX XXXXX" /></div>
