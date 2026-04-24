@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Trophy, Plus, FileText, Camera, Upload, CheckCircle2, Clock, X } from "lucide-react";
 
-const POINTS_PER_APPROVED_QUOTE = 10;
+const POINTS_PER_WIN = 10;
 
 type PrOption = {
   id: string;
@@ -55,7 +55,7 @@ export default function SiteQuotes() {
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
   const [quotes, setQuotes] = useState<SiteQuoteRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [pointsStats, setPointsStats] = useState({ submitted: 0, pending: 0, approved: 0, needsReview: 0 });
+  const [pointsStats, setPointsStats] = useState({ submitted: 0, pending: 0, approved: 0, needsReview: 0, wins: 0 });
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -120,16 +120,37 @@ export default function SiteQuotes() {
         .order("name");
       setSuppliers((supData ?? []) as SupplierRow[]);
 
-      // Load user's lifetime quote stats for points
+      // Load user's lifetime quote stats
       const { data: myQuotes } = await supabase
         .from("cps_quotes")
-        .select("id, parse_status")
+        .select("id, rfq_id, supplier_id, parse_status")
         .eq("submitted_by_site_user_id", user.id);
-      const submitted = (myQuotes ?? []).length;
-      const approved = (myQuotes ?? []).filter((q: any) => q.parse_status === "approved").length;
-      const pending = (myQuotes ?? []).filter((q: any) => q.parse_status === "pending").length;
-      const needsReview = (myQuotes ?? []).filter((q: any) => q.parse_status === "needs_review").length;
-      setPointsStats({ submitted, pending, approved, needsReview });
+      const quotesList = (myQuotes ?? []) as Array<{ id: string; rfq_id: string; supplier_id: string | null; parse_status: string }>;
+
+      const submitted = quotesList.length;
+      const approved = quotesList.filter((q) => q.parse_status === "approved").length;
+      const pending = quotesList.filter((q) => q.parse_status === "pending").length;
+      const needsReview = quotesList.filter((q) => q.parse_status === "needs_review").length;
+
+      // Wins = site quotes where a PO was actually cut for that (rfq_id, supplier_id).
+      // That's the signal procurement picked this vendor — the real reward trigger.
+      let wins = 0;
+      const quoteKeys = quotesList
+        .filter((q) => q.rfq_id && q.supplier_id)
+        .map((q) => `${q.rfq_id}::${q.supplier_id}`);
+      if (quoteKeys.length > 0) {
+        const rfqIds = Array.from(new Set(quotesList.map((q) => q.rfq_id))).filter(Boolean) as string[];
+        const supIds = Array.from(new Set(quotesList.map((q) => q.supplier_id).filter(Boolean))) as string[];
+        const { data: poRows } = await supabase
+          .from("cps_purchase_orders")
+          .select("rfq_id, supplier_id")
+          .in("rfq_id", rfqIds)
+          .in("supplier_id", supIds);
+        const winSet = new Set(((poRows ?? []) as Array<{ rfq_id: string; supplier_id: string }>)
+          .map((p) => `${p.rfq_id}::${p.supplier_id}`));
+        wins = quoteKeys.filter((k) => winSet.has(k)).length;
+      }
+      setPointsStats({ submitted, pending, approved, needsReview, wins });
     } catch (e: any) {
       toast.error(e?.message || "Failed to load data");
     } finally {
@@ -163,7 +184,7 @@ export default function SiteQuotes() {
     setQuotes(((data ?? []) as any[]).map((q) => ({ ...q, supplier_name: q.supplier_id ? supMap[q.supplier_id] ?? null : null })));
   };
 
-  const points = pointsStats.approved * POINTS_PER_APPROVED_QUOTE;
+  const points = pointsStats.wins * POINTS_PER_WIN;
 
   // Supplier autocomplete filter
   const supplierMatches = useMemo(() => {
@@ -323,7 +344,7 @@ export default function SiteQuotes() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Mere Quotes — Upload & Earn</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Raise PR ke baad apne vendor ka quote bhi upload karo. Agar aapka quote approved hota hai, aapko points milte hain ({POINTS_PER_APPROVED_QUOTE} points per approved quote).
+          Raise PR ke baad apne vendor ka quote bhi upload karo. Jab aapke vendor se PO issue hota hai, aapko {POINTS_PER_WIN} points milte hain.
         </p>
       </div>
 
@@ -335,12 +356,12 @@ export default function SiteQuotes() {
               <Trophy className="h-3 w-3" /> Your Points
             </div>
             <div className="text-3xl font-bold text-amber-900 mt-1">{points}</div>
-            <div className="text-[10px] text-amber-700 mt-1">{pointsStats.approved} approved × {POINTS_PER_APPROVED_QUOTE}</div>
+            <div className="text-[10px] text-amber-700 mt-1">{pointsStats.wins} PO won × {POINTS_PER_WIN}</div>
           </CardContent>
         </Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Submitted</div><div className="text-2xl font-bold">{pointsStats.submitted}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" />Pending</div><div className="text-2xl font-bold text-amber-700">{pointsStats.pending + pointsStats.needsReview}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><CheckCircle2 className="h-3 w-3" />Approved</div><div className="text-2xl font-bold text-green-700">{pointsStats.approved}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" />Under Review</div><div className="text-2xl font-bold text-amber-700">{pointsStats.pending + pointsStats.needsReview + pointsStats.approved}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground flex items-center gap-1 text-green-700"><CheckCircle2 className="h-3 w-3" />POs Won</div><div className="text-2xl font-bold text-green-700">{pointsStats.wins}</div></CardContent></Card>
       </div>
 
       {/* PR selector + Add button */}
