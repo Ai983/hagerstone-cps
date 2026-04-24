@@ -437,6 +437,10 @@ function PrKanbanTracker({ pr, lang, onUploadInvoice }: { pr: { id: string; stat
   const showBanners = pr.status !== "cancelled" && pr.status !== "delivered";
   const winnerBanner = showBanners && result.isSiteSupplierWinner && !isVerified;
   const rejectionBanner = showBanners && wasRejected;
+  // Generic "invoice needed" reminder — fires when payment is done and there is
+  // no active invoice yet, for PRs where the green winner banner doesn't apply
+  // (either the site engineer didn't upload a quote, or their vendor wasn't picked).
+  const invoiceNeededBanner = showBanners && result.allPaid && !result.hasInvoice && !winnerBanner && !rejectionBanner;
 
   return (
     <div className="space-y-2">
@@ -456,6 +460,21 @@ function PrKanbanTracker({ pr, lang, onUploadInvoice }: { pr: { id: string; stat
           </div>
         </div>
       )}
+      {invoiceNeededBanner && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[13px] text-amber-900 flex items-start gap-2">
+          <span className="text-lg leading-none">📄</span>
+          <div className="flex-1">
+            <div className="font-semibold">
+              {lang === 'hi' ? 'Payment ho gayi — ab invoice upload karo' : 'Payment done — please upload the invoice'}
+            </div>
+            <div className="text-[11px] text-amber-800/80">
+              {lang === 'hi'
+                ? "Invoice upload karte hi procurement verify karegi aur PR band ho jayegi."
+                : "Once you upload, procurement will verify and close the PR."}
+            </div>
+          </div>
+        </div>
+      )}
       {rejectionBanner && (
         <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-900 flex items-start gap-2">
           <span className="text-lg leading-none">❌</span>
@@ -468,6 +487,9 @@ function PrKanbanTracker({ pr, lang, onUploadInvoice }: { pr: { id: string; stat
                 <span className="font-medium">{lang === 'hi' ? "Wajah:" : "Reason:"}</span> {result.invoiceRejectionReason}
               </div>
             )}
+            <div className="text-[11px] text-red-800/80 mt-1">
+              {lang === 'hi' ? "Sahi invoice dobara upload karo taaki PR band ho aur points mile." : "Re-upload a correct invoice so the PR can close and points get credited."}
+            </div>
           </div>
         </div>
       )}
