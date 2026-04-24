@@ -60,17 +60,17 @@ export function AppSidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 min-h-0 p-1.5 space-y-0.5 overflow-y-auto">
+      <nav className="flex-1 min-h-0 p-2 space-y-1 overflow-y-auto">
         {visible.map(item => (
           <NavLink key={item.url} to={item.url}
             className={({ isActive }) => cn(
-              "flex items-center gap-3 px-3 py-1.5 rounded-md text-[13px] transition-colors",
+              "flex items-center gap-3 px-3 py-2.5 rounded-md text-[15px] transition-colors",
               collapsed && "justify-center px-2",
               isActive ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-sidebar-foreground hover:bg-sidebar-accent/50"
             )}
             title={collapsed ? item.title : undefined}
           >
-            <item.icon className="h-4 w-4 shrink-0" />
+            <item.icon className="h-[18px] w-[18px] shrink-0" />
             {!collapsed && <span>{item.title}</span>}
           </NavLink>
         ))}
