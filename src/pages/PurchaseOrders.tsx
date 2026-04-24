@@ -358,6 +358,9 @@ export default function PurchaseOrders() {
   const [markPaidRef, setMarkPaidRef] = useState("");
   const [markPaidSaving, setMarkPaidSaving] = useState(false);
 
+  // Revised-by link: when viewing a superseded PO, shows link to the new revision
+  const [revisedByPo, setRevisedByPo] = useState<{ id: string; po_number: string } | null>(null);
+
   // Revise / Cancel PO dialog state
   const [reviseCancelOpen, setReviseCancelOpen] = useState(false);
   const [reviseCancelAction, setReviseCancelAction] = useState<"revise" | "cancel">("revise");
@@ -1009,6 +1012,7 @@ export default function PurchaseOrders() {
     setViewRfq(null);
     setViewPr(null);
     setViewApprovedByUser(null);
+    setRevisedByPo(null);
     setViewPoLineItems([]);
     setViewPoTokens([]);
     setApprovalNotes("");
@@ -1025,6 +1029,20 @@ export default function PurchaseOrders() {
       const po = poRow as PoRow;
       setViewPo(po);
       setViewPaymentSchedule([]);
+
+      // If this PO is superseded, find the revision that replaced it
+      if (po.status === "superseded") {
+        supabase
+          .from("cps_purchase_orders")
+          .select("id,po_number")
+          .eq("parent_po_id", poId)
+          .order("version", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+          .then(({ data }) => {
+            if (data) setRevisedByPo(data as { id: string; po_number: string });
+          });
+      }
 
       const supplierId = po.supplier_id;
       const rfqId = po.rfq_id;
@@ -2888,9 +2906,19 @@ export default function PurchaseOrders() {
 
                   {/* Superseded notice — shown if this PO was replaced */}
                   {viewPo.status === "superseded" && (
-                    <div className="rounded-lg border border-gray-300 bg-gray-100 p-4 space-y-1">
+                    <div className="rounded-lg border border-gray-300 bg-gray-100 p-4 space-y-2">
                       <div className="text-sm font-semibold text-gray-600">🗃 Archived (Revised)</div>
                       <div className="text-xs text-gray-500">This PO has been superseded by a newer revision. It is preserved here for audit purposes.</div>
+                      {revisedByPo && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-xs border-blue-300 text-blue-700 hover:bg-blue-50 h-7"
+                          onClick={() => openView(revisedByPo.id)}
+                        >
+                          View Revised PO: {revisedByPo.po_number} →
+                        </Button>
+                      )}
                     </div>
                   )}
 
