@@ -1632,9 +1632,6 @@ export default function PurchaseRequisitions() {
                   <FileText className="h-6 w-6 text-primary" />
                 </div>
                 <p className="text-muted-foreground">{lang === 'hi' ? 'Abhi koi request nahi hai' : 'No requests yet'}</p>
-                <Button onClick={() => openWizard()} className="mt-2">
-                  {lang === 'hi' ? 'Pehla Request Banao' : 'Raise your first PR'}
-                </Button>
               </CardContent>
             </Card>
           ) : (
