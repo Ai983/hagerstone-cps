@@ -1639,6 +1639,31 @@ export default function PurchaseOrders() {
     });
   };
 
+  const addEditLineItem = () => {
+    if (!viewPo) return;
+    setEditLineItems((prev) => [
+      ...prev,
+      {
+        id: `new-${Date.now()}`,
+        po_id: viewPo.id,
+        description: "",
+        brand: null,
+        quantity: 1,
+        unit: "nos",
+        rate: 0,
+        gst_percent: 18,
+        gst_amount: 0,
+        total_value: 0,
+        hsn_code: null,
+        sort_order: prev.length + 1,
+      },
+    ]);
+  };
+
+  const deleteEditLineItem = (idx: number) => {
+    setEditLineItems((prev) => prev.filter((_, i) => i !== idx));
+  };
+
   const saveEditPo = async () => {
     if (!viewPo || !user) return;
     setEditSaving(true);
@@ -1663,19 +1688,46 @@ export default function PurchaseOrders() {
       }).eq("id", viewPo.id);
       if (poErr) throw poErr;
 
+      // Delete removed items (were in original but not in current editLineItems)
+      const editIds = new Set(editLineItems.map((li) => li.id).filter((id) => !id.startsWith("new-")));
+      const deletedIds = viewPoLineItems.map((li) => li.id).filter((id) => !editIds.has(id));
+      if (deletedIds.length > 0) {
+        const { error: delErr } = await supabase.from("cps_po_line_items").delete().in("id", deletedIds);
+        if (delErr) throw delErr;
+      }
+
+      // Update existing + insert new items
       for (const li of editLineItems) {
-        const { error: liErr } = await supabase.from("cps_po_line_items").update({
-          description: li.description,
-          brand: li.brand,
-          hsn_code: li.hsn_code,
-          quantity: li.quantity,
-          unit: li.unit,
-          rate: li.rate,
-          gst_percent: li.gst_percent,
-          gst_amount: li.gst_amount,
-          total_value: li.total_value,
-        }).eq("id", li.id);
-        if (liErr) throw liErr;
+        const isNew = li.id.startsWith("new-");
+        if (isNew) {
+          const { error: insErr } = await supabase.from("cps_po_line_items").insert({
+            po_id: viewPo.id,
+            description: li.description,
+            brand: li.brand || null,
+            hsn_code: li.hsn_code || null,
+            quantity: li.quantity,
+            unit: li.unit,
+            rate: li.rate,
+            gst_percent: li.gst_percent,
+            gst_amount: li.gst_amount,
+            total_value: li.total_value,
+            sort_order: li.sort_order,
+          });
+          if (insErr) throw insErr;
+        } else {
+          const { error: liErr } = await supabase.from("cps_po_line_items").update({
+            description: li.description,
+            brand: li.brand,
+            hsn_code: li.hsn_code,
+            quantity: li.quantity,
+            unit: li.unit,
+            rate: li.rate,
+            gst_percent: li.gst_percent,
+            gst_amount: li.gst_amount,
+            total_value: li.total_value,
+          }).eq("id", li.id);
+          if (liErr) throw liErr;
+        }
       }
 
       // Persist supplier detail edits to cps_suppliers (reusable across POs)
@@ -2547,12 +2599,13 @@ export default function PurchaseOrders() {
                           <TableHead>GST%</TableHead>
                           <TableHead className="text-right">GST Amt</TableHead>
                           <TableHead className="text-right">Total {canViewPrices ? "(₹)" : ""}</TableHead>
+                          {editMode && <TableHead className="w-8"></TableHead>}
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {(editMode ? editLineItems : viewPoLineItems).length === 0 && (
                           <TableRow>
-                            <TableCell colSpan={10} className="text-center py-6 text-muted-foreground text-sm">
+                            <TableCell colSpan={editMode ? 11 : 10} className="text-center py-6 text-muted-foreground text-sm">
                               {viewPo.source === "legacy"
                                 ? "No itemised line items — this is a legacy PO uploaded as a PDF. See Payment Schedule below for amounts."
                                 : "No line items"}
@@ -2599,10 +2652,34 @@ export default function PurchaseOrders() {
                             </TableCell>
                             <TableCell className="text-right">{formatCurrency(li.gst_amount, canViewPrices)}</TableCell>
                             <TableCell className="text-right font-medium">{formatCurrency(li.total_value, canViewPrices)}</TableCell>
+                            {editMode && (
+                              <TableCell>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteEditLineItem(idx)}
+                                  className="h-7 w-7 flex items-center justify-center rounded hover:bg-red-50 text-red-400 hover:text-red-600"
+                                  title="Remove this line item"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </TableCell>
+                            )}
                           </TableRow>
                         ))}
                       </TableBody>
                     </Table>
+                    {editMode && (
+                      <div className="pt-2 pb-1">
+                        <button
+                          type="button"
+                          onClick={addEditLineItem}
+                          className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-medium px-2 py-1 rounded hover:bg-primary/5"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Add Line Item
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Footer totals — derive from payment schedule when line items are empty (legacy POs) */}
@@ -2815,7 +2892,7 @@ export default function PurchaseOrders() {
                   )}
 
                   {/* Lifecycle status banners */}
-                  {(viewPo.status === "pending_approval" || viewPo.status === "draft") && viewPo.founder_approval_status !== "approved" && (
+                  {(viewPo.status === "pending_approval" || viewPo.status === "draft") && (viewPo.founder_approval_status === "pending" || viewPo.founder_approval_status === "sent") && (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex items-start justify-between gap-4 flex-wrap">
                       <div className="space-y-1 flex-1">
                         <div className="text-sm font-semibold text-amber-900">⏳ Awaiting Founder Approval</div>
