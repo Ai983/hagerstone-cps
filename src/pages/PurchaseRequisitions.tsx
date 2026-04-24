@@ -1138,10 +1138,19 @@ export default function PurchaseRequisitions() {
     if (!user) return;
     // Ownership check — requestor/site_receiver can only close their own PRs
     if (isRequestor && pr.requested_by !== user.id) {
-      toast.error("You can only close PRs you created");
+      toast.error("You can only cancel PRs you created");
       return;
     }
-    if (!confirm(`Close PR ${pr.pr_number}? This cannot be undone.`)) return;
+    // Site team can only cancel PRs still awaiting procurement action.
+    // Once procurement has moved the PR forward (validated, rfq_created, po_issued, delivered),
+    // cancellation must go through procurement.
+    if (pr.status !== "pending" && pr.status !== "pending_design") {
+      toast.error(lang === 'hi'
+        ? "Ye PR procurement team ne aage badha diya hai — ab cancel nahi ho sakti"
+        : "Procurement has already started work on this PR — it can no longer be cancelled");
+      return;
+    }
+    if (!confirm(`Cancel PR ${pr.pr_number}? This cannot be undone.`)) return;
     let query = supabase
       .from("cps_purchase_requisitions")
       .update({ status: "cancelled" })
@@ -1149,8 +1158,8 @@ export default function PurchaseRequisitions() {
     // Extra safety: enforce ownership at DB level for requestors
     if (isRequestor) query = query.eq("requested_by", user.id);
     const { error } = await query;
-    if (error) { toast.error("Failed to close PR"); return; }
-    toast.success(`${pr.pr_number} closed`);
+    if (error) { toast.error("Failed to cancel PR"); return; }
+    toast.success(`${pr.pr_number} cancelled`);
     await refresh();
   };
 
@@ -1655,7 +1664,7 @@ export default function PurchaseRequisitions() {
                         <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="Print">
                           <Printer className="h-3.5 w-3.5" />
                         </Button>
-                        {pr.status !== "cancelled" && pr.status !== "rfq_created" && pr.requested_by === user?.id && (
+                        {(pr.status === "pending" || pr.status === "pending_design") && pr.requested_by === user?.id && (
                           <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
                             <X className="h-3.5 w-3.5" />
                           </Button>
@@ -1776,8 +1785,8 @@ export default function PurchaseRequisitions() {
                           <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="View as Document">
                             <Printer className="h-3.5 w-3.5" />
                           </Button>
-                          {pr.status !== "cancelled" && pr.status !== "rfq_created" && (
-                            <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Close PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
+                          {(pr.status === "pending" || pr.status === "pending_design") && (
+                            <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
                               <X className="h-3.5 w-3.5" />
                             </Button>
                           )}
