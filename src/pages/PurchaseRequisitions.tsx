@@ -204,10 +204,14 @@ export type KanbanResult = {
   poId: string | null;
   poNumber: string | null;
   supplierId: string | null;
+  supplierName: string | null;
   hasGrn: boolean;
   hasInvoice: boolean;
+  invoiceStatus: string | null;
+  invoiceRejectionReason: string | null;
   allPaid: boolean;
   isDelivered: boolean;
+  isSiteSupplierWinner: boolean;
 };
 
 // Fetch all lifecycle data for a PR and return computed Kanban stages + context
@@ -236,22 +240,48 @@ async function buildKanbanStagesForPr(pr: { id: string; status: string; created_
 
   let grnRow: { created_at: string; grn_number: string; is_partial: boolean | null } | null = null;
   let paymentSchedules: Array<{ id: string; milestone_name: string; amount: number; status: string; paid_at: string | null; payment_reference: string | null }> = [];
-  let invoiceRow: { id: string; invoice_number: string; invoice_date: string; total_amount: number; created_at: string } | null = null;
+  let invoiceRow: { id: string; invoice_number: string; invoice_date: string; total_amount: number; created_at: string; status: string | null; rejection_reason: string | null } | null = null;
+  let supplierName: string | null = null;
+  let isSiteSupplierWinner = false;
   if (poRow) {
     const { data: grn } = await supabase.from("cps_grns").select("grn_number,created_at,is_partial").eq("po_id", (poRow as any).id).maybeSingle();
     grnRow = grn as any;
     const { data: schedules } = await supabase.from("cps_po_payment_schedules").select("id,milestone_name,amount,status,paid_at,payment_reference,milestone_order").eq("po_id", (poRow as any).id).order("milestone_order", { ascending: true });
     paymentSchedules = (schedules ?? []) as any[];
-    // Fetch invoice linked to this PO (via po_reference matching po_number)
+    // Fetch LATEST invoice linked to this PO (via po_reference matching po_number) — includes lifecycle status
     if ((poRow as any).po_number) {
       const { data: inv } = await supabase
         .from("invoices")
-        .select("id,invoice_number,invoice_date,total_amount,created_at")
+        .select("id,invoice_number,invoice_date,total_amount,created_at,status,rejection_reason")
         .eq("po_reference", (poRow as any).po_number)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
       invoiceRow = inv as any;
+    }
+    // Supplier name for the winner banner
+    if ((poRow as any).supplier_id) {
+      const { data: sup } = await supabase
+        .from("cps_suppliers")
+        .select("name")
+        .eq("id", (poRow as any).supplier_id)
+        .maybeSingle();
+      supplierName = (sup as any)?.name ?? null;
+    }
+    // Detect winner: did the site engineer's submitted quote for this PR's RFQ
+    // go to the supplier who got the PO?
+    if (rfqRow && (poRow as any).supplier_id) {
+      const { data: authData } = await supabase.auth.getUser();
+      const uid = authData?.user?.id;
+      if (uid) {
+        const { data: myQuotes } = await supabase
+          .from("cps_quotes")
+          .select("supplier_id")
+          .eq("rfq_id", (rfqRow as any).id)
+          .eq("submitted_by_site_user_id", uid)
+          .eq("is_site_submitted", true);
+        isSiteSupplierWinner = (myQuotes ?? []).some((q: any) => q.supplier_id === (poRow as any).supplier_id);
+      }
     }
   }
 
@@ -322,40 +352,60 @@ async function buildKanbanStagesForPr(pr: { id: string; status: string; created_
             ? (lang === 'hi' ? "Finance confirm kiya" : "Finance confirmed")
             : (hasSentToFinance ? (lang === 'hi' ? "Finance team process kar rahi" : "Finance processing") : undefined)),
     },
-    // Invoice stage — enabled (clickable) only AFTER payment is done
-    // Green when supplier's invoice has been uploaded and linked to PO
-    {
-      key: "invoice", icon: "📄", label: lang === 'hi' ? "Invoice" : "Invoice Added",
-      state: invoiceRow ? "done" : (allPaid ? "current" : "pending"),
-      date: invoiceRow?.created_at ?? null,
-      detail: invoiceRow
-        ? `${(invoiceRow as any).invoice_number}${(invoiceRow as any).total_amount ? ` · ₹${Number((invoiceRow as any).total_amount).toLocaleString("en-IN")}` : ""}`
-        : (allPaid ? (lang === 'hi' ? "Upload karo" : "Upload needed") : undefined),
-    },
+    // Invoice stage — enabled (clickable) only AFTER payment is done.
+    // Rejected invoice doesn't count — site must re-upload → stage returns to "current".
+    (() => {
+      const invoiceStatus = (invoiceRow as any)?.status ?? null;
+      const hasActiveInvoice = !!invoiceRow && invoiceStatus !== "rejected";
+      const isVerified = invoiceStatus === "verified";
+      const isPendingReview = hasActiveInvoice && !isVerified;
+      const wasRejected = invoiceStatus === "rejected";
+      return {
+        key: "invoice",
+        icon: isVerified ? "✅" : wasRejected ? "❌" : "📄",
+        label: lang === 'hi' ? "Invoice" : "Invoice Added",
+        state: (isVerified ? "done" : hasActiveInvoice ? "current" : (allPaid ? "current" : "pending")) as KanbanStage["state"],
+        date: hasActiveInvoice ? invoiceRow!.created_at : null,
+        detail: hasActiveInvoice
+          ? `${(invoiceRow as any).invoice_number}${(invoiceRow as any).total_amount ? ` · ₹${Number((invoiceRow as any).total_amount).toLocaleString("en-IN")}` : ""}${isPendingReview ? (lang === 'hi' ? " · procurement review mein" : " · under review") : ""}`
+          : (wasRejected
+              ? (lang === 'hi' ? "Reject ho gaya — dobara upload karo" : "Rejected — re-upload needed")
+              : (allPaid ? (lang === 'hi' ? "Upload karo" : "Upload needed") : undefined)),
+      };
+    })(),
     {
       key: "closed", icon: "✓", label: lang === 'hi' ? "PR Band" : "PR Closed",
-      // PR closes when payment done + invoice uploaded — OR PO status is closed
-      state: (allPaid && !!invoiceRow) || po?.status === "closed" ? "done" : "pending",
+      // PR closes only when procurement verifies the invoice (PO status → closed).
+      // Merely having an uploaded invoice is NOT enough anymore.
+      state: po?.status === "closed" ? "done" : "pending",
       date: po?.status === "closed" ? po?.created_at : null,
       detail: po?.status === "closed"
         ? (lang === 'hi' ? "Band" : "Closed")
-        : (allPaid && invoiceRow
-            ? (lang === 'hi' ? "Ready to close" : "Ready to close")
+        : ((invoiceRow as any)?.status === "verified"
+            ? (lang === 'hi' ? "Verified — band ho rahi" : "Verified — closing")
             : undefined),
     },
   ];
   if (pr.status === "cancelled") {
     for (let i = 1; i < stages.length; i++) stages[i].state = "skipped";
   }
+  const invoiceStatus = (invoiceRow as any)?.status ?? null;
+  const invoiceRejectionReason = (invoiceRow as any)?.rejection_reason ?? null;
+  // An invoice is "active" (blocks re-upload) only if it hasn't been rejected
+  const hasActiveInvoice = !!invoiceRow && invoiceStatus !== "rejected";
   return {
     stages,
     poId: po?.id ?? null,
     poNumber: po?.po_number ?? null,
     supplierId: po?.supplier_id ?? null,
+    supplierName,
     hasGrn: !!grnRow,
-    hasInvoice: !!invoiceRow,
+    hasInvoice: hasActiveInvoice,
+    invoiceStatus,
+    invoiceRejectionReason,
     allPaid,
     isDelivered,
+    isSiteSupplierWinner,
   };
 }
 
@@ -376,11 +426,52 @@ function PrKanbanTracker({ pr, lang, onUploadInvoice }: { pr: { id: string; stat
     return <div className="flex gap-1 py-2">{[...Array(8)].map((_, i) => <Skeleton key={i} className="h-14 w-24 shrink-0" />)}</div>;
   }
   const { stages } = result;
-  // Invoice upload unlocks after all payments are done — site team uploads invoice to close PR
-  const canUploadInvoice = !!onUploadInvoice && result.allPaid && !result.hasInvoice && result.poId && result.poNumber;
+  // Invoice upload unlocks when:
+  //  - all payments done AND no active invoice yet (first time), OR
+  //  - the latest invoice was rejected (re-upload)
+  const wasRejected = result.invoiceStatus === "rejected";
+  const canUploadInvoice = !!onUploadInvoice && result.allPaid && (!result.hasInvoice || wasRejected) && result.poId && result.poNumber;
+  const isVerified = result.invoiceStatus === "verified";
+
+  // Hinglish banners — only shown if PR is still in motion
+  const showBanners = pr.status !== "cancelled" && pr.status !== "delivered";
+  const winnerBanner = showBanners && result.isSiteSupplierWinner && !isVerified;
+  const rejectionBanner = showBanners && wasRejected;
 
   return (
-    <div className="overflow-x-auto pb-1">
+    <div className="space-y-2">
+      {winnerBanner && (
+        <div className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-[13px] text-emerald-900 flex items-start gap-2">
+          <span className="text-lg leading-none">🏆</span>
+          <div className="flex-1">
+            <div className="font-semibold">
+              {lang === 'hi' ? 'Badhai ho! Aapka supplier select ho gaya' : "Congrats! Your supplier was picked"}
+              {result.supplierName ? ` — ${result.supplierName}` : ""}
+            </div>
+            <div className="text-[11px] text-emerald-800/80">
+              {result.allPaid
+                ? (lang === 'hi' ? "Ab invoice upload karo — procurement verify karegi aur aapko 10 points milenge" : "Upload the invoice now — once procurement verifies it, you earn 10 points")
+                : (lang === 'hi' ? "Payment hote hi invoice upload karke 10 points pao" : "Once payment is done, upload the invoice to earn 10 points")}
+            </div>
+          </div>
+        </div>
+      )}
+      {rejectionBanner && (
+        <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-[13px] text-red-900 flex items-start gap-2">
+          <span className="text-lg leading-none">❌</span>
+          <div className="flex-1">
+            <div className="font-semibold">
+              {lang === 'hi' ? 'Invoice reject ho gaya — dobara upload karo' : 'Invoice rejected — please re-upload'}
+            </div>
+            {result.invoiceRejectionReason && (
+              <div className="text-[12px] text-red-800/90 mt-0.5">
+                <span className="font-medium">{lang === 'hi' ? "Wajah:" : "Reason:"}</span> {result.invoiceRejectionReason}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      <div className="overflow-x-auto pb-1">
       <div className="flex items-stretch gap-1 min-w-fit">
         {stages.map((stage, idx) => {
           const isLast = idx === stages.length - 1;
@@ -425,6 +516,7 @@ function PrKanbanTracker({ pr, lang, onUploadInvoice }: { pr: { id: string; stat
             </React.Fragment>
           );
         })}
+      </div>
       </div>
     </div>
   );

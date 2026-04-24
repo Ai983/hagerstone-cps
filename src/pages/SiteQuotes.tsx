@@ -132,8 +132,10 @@ export default function SiteQuotes() {
       const pending = quotesList.filter((q) => q.parse_status === "pending").length;
       const needsReview = quotesList.filter((q) => q.parse_status === "needs_review").length;
 
-      // Wins = site quotes where a PO was actually cut for that (rfq_id, supplier_id).
-      // That's the signal procurement picked this vendor — the real reward trigger.
+      // Wins = site quotes where a PO was cut to that vendor AND procurement
+      // has verified the uploaded invoice for that PO. Points only flow after
+      // the whole loop closes: quote picked → PO raised → invoice uploaded →
+      // invoice verified by procurement.
       let wins = 0;
       const quoteKeys = quotesList
         .filter((q) => q.rfq_id && q.supplier_id)
@@ -143,12 +145,21 @@ export default function SiteQuotes() {
         const supIds = Array.from(new Set(quotesList.map((q) => q.supplier_id).filter(Boolean))) as string[];
         const { data: poRows } = await supabase
           .from("cps_purchase_orders")
-          .select("rfq_id, supplier_id")
+          .select("po_number, rfq_id, supplier_id")
           .in("rfq_id", rfqIds)
           .in("supplier_id", supIds);
-        const winSet = new Set(((poRows ?? []) as Array<{ rfq_id: string; supplier_id: string }>)
-          .map((p) => `${p.rfq_id}::${p.supplier_id}`));
-        wins = quoteKeys.filter((k) => winSet.has(k)).length;
+        const winningPos = ((poRows ?? []) as Array<{ po_number: string; rfq_id: string; supplier_id: string }>)
+          .filter((p) => quoteKeys.includes(`${p.rfq_id}::${p.supplier_id}`));
+        if (winningPos.length > 0) {
+          const winningPoNumbers = winningPos.map((p) => p.po_number).filter(Boolean);
+          const { data: invRows } = await supabase
+            .from("invoices")
+            .select("po_reference, status")
+            .in("po_reference", winningPoNumbers)
+            .eq("status", "verified");
+          const verifiedPoNumbers = new Set(((invRows ?? []) as Array<{ po_reference: string }>).map((i) => i.po_reference));
+          wins = winningPos.filter((p) => verifiedPoNumbers.has(p.po_number)).length;
+        }
       }
       setPointsStats({ submitted, pending, approved, needsReview, wins });
     } catch (e: any) {
@@ -344,7 +355,7 @@ export default function SiteQuotes() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Mere Quotes — Upload & Earn</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Raise PR ke baad apne vendor ka quote bhi upload karo. Jab aapke vendor se PO issue hota hai, aapko {POINTS_PER_WIN} points milte hain.
+          Raise PR ke baad apne vendor ka quote upload karo. Jab aapke vendor se PO ban jaye, invoice upload karo — procurement invoice verify karegi, fir aapko {POINTS_PER_WIN} points milenge.
         </p>
       </div>
 
@@ -356,12 +367,12 @@ export default function SiteQuotes() {
               <Trophy className="h-3 w-3" /> Your Points
             </div>
             <div className="text-3xl font-bold text-amber-900 mt-1">{points}</div>
-            <div className="text-[10px] text-amber-700 mt-1">{pointsStats.wins} PO won × {POINTS_PER_WIN}</div>
+            <div className="text-[10px] text-amber-700 mt-1">{pointsStats.wins} invoice verified × {POINTS_PER_WIN}</div>
           </CardContent>
         </Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Submitted</div><div className="text-2xl font-bold">{pointsStats.submitted}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="h-3 w-3" />Under Review</div><div className="text-2xl font-bold text-amber-700">{pointsStats.pending + pointsStats.needsReview + pointsStats.approved}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground flex items-center gap-1 text-green-700"><CheckCircle2 className="h-3 w-3" />POs Won</div><div className="text-2xl font-bold text-green-700">{pointsStats.wins}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground flex items-center gap-1 text-green-700"><CheckCircle2 className="h-3 w-3" />Verified Wins</div><div className="text-2xl font-bold text-green-700">{pointsStats.wins}</div></CardContent></Card>
       </div>
 
       {/* PR selector + Add button */}

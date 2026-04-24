@@ -7,15 +7,18 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import {
   FileText, Send, MessageSquare, BarChart3, CheckCircle2, ShoppingCart,
   Archive, Search, RefreshCw, ArrowRight, Clock, User,
-  Landmark, Wallet, Receipt, XCircle, ExternalLink,
+  Landmark, Wallet, Receipt, XCircle, ExternalLink, Eye, AlertCircle,
 } from "lucide-react";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -68,6 +71,9 @@ type PRCard = {
   invoice_number?: string | null;
   invoice_amount?: number | null;
   invoice_file_url?: string | null;
+  invoice_id?: string | null;
+  invoice_status?: string | null;
+  invoice_rejection_reason?: string | null;
   is_cancelled?: boolean;
 };
 
@@ -191,7 +197,10 @@ export default function KanbanBoard() {
   const [cards, setCards] = useState<PRCard[]>([]);
   const [search, setSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string>("all");
-  const [closingPoId, setClosingPoId] = useState<string | null>(null);
+  const [reviewCard, setReviewCard] = useState<PRCard | null>(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [rejectMode, setRejectMode] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
 
   const canVerifyAndClose =
     user?.role === "procurement_head" ||
@@ -199,42 +208,107 @@ export default function KanbanBoard() {
     user?.role === "it_head" ||
     user?.role === "management";
 
-  const verifyAndCloseCard = async (card: PRCard) => {
-    if (!user || !card.po_number || !card.po_id) return;
-    const poId = card.po_id;
-    setClosingPoId(poId);
+  const openReview = (card: PRCard) => {
+    setReviewCard(card);
+    setRejectMode(false);
+    setRejectReason("");
+  };
+
+  const closeReview = () => {
+    setReviewCard(null);
+    setRejectMode(false);
+    setRejectReason("");
+    setReviewBusy(false);
+  };
+
+  const verifyAndClose = async () => {
+    if (!user || !reviewCard || !reviewCard.po_number || !reviewCard.po_id || !reviewCard.invoice_id) return;
+    setReviewBusy(true);
     try {
+      const now = new Date().toISOString();
+
+      const { error: invErr } = await supabase
+        .from("invoices")
+        .update({
+          status: "verified",
+          verified_at: now,
+          verified_by: user.id,
+          needs_review: false,
+        } as any)
+        .eq("id", reviewCard.invoice_id);
+      if (invErr) throw invErr;
+
       const { error: poErr } = await supabase
         .from("cps_purchase_orders")
         .update({ status: "closed" })
-        .eq("id", poId);
+        .eq("id", reviewCard.po_id);
       if (poErr) throw poErr;
 
       const { error: prErr } = await supabase
         .from("cps_purchase_requisitions")
         .update({ status: "delivered" })
-        .eq("id", card.pr_id);
+        .eq("id", reviewCard.pr_id);
       if (prErr) throw prErr;
 
       await supabase.from("cps_audit_log").insert({
         user_id: user.id,
         user_name: user.name,
         user_role: user.role,
-        action_type: "PR_CLOSED_AFTER_VERIFICATION",
+        action_type: "INVOICE_VERIFIED_PR_CLOSED",
         entity_type: "purchase_order",
-        entity_id: poId,
-        entity_number: card.po_number,
-        description: `Invoice verified by ${user.name ?? user.email}; PR ${card.pr_number} closed.`,
+        entity_id: reviewCard.po_id,
+        entity_number: reviewCard.po_number,
+        description: `Invoice ${reviewCard.invoice_number ?? ""} verified by ${user.name ?? user.email}; PR ${reviewCard.pr_number} closed.`,
         severity: "info",
-        logged_at: new Date().toISOString(),
+        logged_at: now,
       });
 
-      toast.success(`PR ${card.pr_number} closed after invoice verification`);
+      toast.success(`PR ${reviewCard.pr_number} closed after invoice verification`);
+      closeReview();
       await fetchAll();
     } catch (e: any) {
-      toast.error(e?.message || "Failed to close PR");
-    } finally {
-      setClosingPoId(null);
+      toast.error(e?.message || "Failed to verify invoice");
+      setReviewBusy(false);
+    }
+  };
+
+  const rejectInvoice = async () => {
+    if (!user || !reviewCard || !reviewCard.invoice_id) return;
+    if (!rejectReason.trim()) { toast.error("Please enter a reason"); return; }
+    setReviewBusy(true);
+    try {
+      const now = new Date().toISOString();
+      const { error: invErr } = await supabase
+        .from("invoices")
+        .update({
+          status: "rejected",
+          rejection_reason: rejectReason.trim(),
+          rejected_at: now,
+          rejected_by: user.id,
+          needs_review: true,
+        } as any)
+        .eq("id", reviewCard.invoice_id);
+      if (invErr) throw invErr;
+
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+        action_type: "INVOICE_REJECTED",
+        entity_type: "cps_purchase_orders",
+        entity_id: reviewCard.po_id ?? null,
+        entity_number: reviewCard.po_number ?? null,
+        description: `Invoice rejected by ${user.name ?? user.email} for PR ${reviewCard.pr_number}. Reason: ${rejectReason.trim()}`,
+        severity: "warning",
+        logged_at: now,
+      });
+
+      toast.success("Invoice rejected — site team will be notified to re-upload");
+      closeReview();
+      await fetchAll();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to reject invoice");
+      setReviewBusy(false);
     }
   };
 
@@ -279,7 +353,7 @@ export default function KanbanBoard() {
         { data: invoicesData },
       ] = await Promise.all([
         poIdList.length ? supabase.from("cps_po_payment_schedules").select("po_id, status, amount").in("po_id", poIdList) : Promise.resolve({ data: [] }),
-        poNumberList.length ? supabase.from("invoices").select("invoice_number, invoice_date, total_amount, file_path, po_reference, created_at").in("po_reference", poNumberList) : Promise.resolve({ data: [] }),
+        poNumberList.length ? supabase.from("invoices").select("id, invoice_number, invoice_date, total_amount, file_path, po_reference, created_at, status, rejection_reason").in("po_reference", poNumberList).order("created_at", { ascending: false }) : Promise.resolve({ data: [] }),
       ]);
 
       // Build maps
@@ -325,14 +399,25 @@ export default function KanbanBoard() {
         paymentsByPo[p.po_id] = rec;
       });
 
-      // Invoice lookup by po_reference (PO number)
-      const invoiceByPoNumber: Record<string, { invoice_number: string; total_amount: number | null; file_path: string | null }> = {};
+      // Invoice lookup by po_reference (PO number). Invoices are sorted desc by created_at,
+      // so the first hit per PO is the latest one — that's the one that matters for the Kanban.
+      const invoiceByPoNumber: Record<string, {
+        id: string;
+        invoice_number: string;
+        total_amount: number | null;
+        file_path: string | null;
+        status: string | null;
+        rejection_reason: string | null;
+      }> = {};
       ((invoicesData ?? []) as any[]).forEach((inv) => {
         if (inv.po_reference && !invoiceByPoNumber[inv.po_reference]) {
           invoiceByPoNumber[inv.po_reference] = {
+            id: inv.id,
             invoice_number: inv.invoice_number,
             total_amount: inv.total_amount,
             file_path: inv.file_path,
+            status: inv.status ?? null,
+            rejection_reason: inv.rejection_reason ?? null,
           };
         }
       });
@@ -351,7 +436,9 @@ export default function KanbanBoard() {
         const hasPaymentSchedules = !!(poPayments && poPayments.total > 0);
         const allPaid = !!(poPayments && poPayments.all_paid && poPayments.total > 0);
         const invoice = po?.po_number ? invoiceByPoNumber[po.po_number] : undefined;
-        const hasInvoice = !!invoice;
+        // Only treat non-rejected invoices as an active invoice. A rejected latest
+        // invoice means site needs to re-upload — stage should not show Invoice Added.
+        const hasActiveInvoice = !!invoice && invoice.status !== "rejected";
 
         const stage = deriveStage(
           pr.status,
@@ -363,7 +450,7 @@ export default function KanbanBoard() {
             sent_at: po.sent_at ?? null,
             all_paid: allPaid,
             has_payment_schedules: hasPaymentSchedules,
-            has_invoice: hasInvoice,
+            has_invoice: hasActiveInvoice,
             finance_paid_at: (po as any).finance_paid_at ?? null,
           } : null,
         );
@@ -399,6 +486,9 @@ export default function KanbanBoard() {
           invoice_number: invoice?.invoice_number ?? null,
           invoice_amount: invoice?.total_amount ?? null,
           invoice_file_url: invoice?.file_path ?? null,
+          invoice_id: invoice?.id ?? null,
+          invoice_status: invoice?.status ?? null,
+          invoice_rejection_reason: invoice?.rejection_reason ?? null,
           is_cancelled: pr.status === "cancelled",
         } as PRCard;
       });
@@ -686,16 +776,15 @@ export default function KanbanBoard() {
                           <ArrowRight className="h-3 w-3 text-muted-foreground" />
                         </div>
 
-                        {/* Verify & Close — only on Invoice Added stage, procurement-only */}
-                        {c.stage === "invoice_added" && canVerifyAndClose && c.po_id && (
+                        {/* Review Invoice — procurement opens review dialog, must view before verify/reject */}
+                        {c.stage === "invoice_added" && canVerifyAndClose && c.po_id && c.invoice_id && (
                           <button
                             type="button"
-                            className="mt-1 w-full rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium py-1.5 px-2 flex items-center justify-center gap-1 disabled:opacity-60"
-                            disabled={closingPoId === c.po_id}
-                            onClick={(e) => { e.stopPropagation(); verifyAndCloseCard(c); }}
+                            className="mt-1 w-full rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium py-1.5 px-2 flex items-center justify-center gap-1"
+                            onClick={(e) => { e.stopPropagation(); openReview(c); }}
                           >
-                            <CheckCircle2 className="h-3 w-3" />
-                            {closingPoId === c.po_id ? "Closing..." : "Verify & Close PR"}
+                            <Eye className="h-3 w-3" />
+                            Review Invoice
                           </button>
                         )}
                       </button>
@@ -707,6 +796,99 @@ export default function KanbanBoard() {
           })}
         </div>
       </div>
+
+      {/* Invoice review dialog — procurement must view the file before verify/reject */}
+      <Dialog open={!!reviewCard} onOpenChange={(open) => { if (!open) closeReview(); }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Invoice Review — {reviewCard?.pr_number}</DialogTitle>
+            <DialogDescription>
+              {reviewCard?.invoice_number ?? "Invoice uploaded by site team"}
+              {reviewCard?.invoice_amount != null && ` · ₹${Number(reviewCard.invoice_amount).toLocaleString("en-IN")}`}
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Invoice preview */}
+          {reviewCard?.invoice_file_url ? (() => {
+            const url = reviewCard.invoice_file_url!;
+            const cleanUrl = url.split("?")[0].toLowerCase();
+            const isPdf = cleanUrl.endsWith(".pdf");
+            const isImg = cleanUrl.endsWith(".jpg") || cleanUrl.endsWith(".jpeg") || cleanUrl.endsWith(".png") || cleanUrl.endsWith(".webp");
+            return (
+              <div className="rounded-md border bg-muted/20 overflow-hidden" style={{ height: "60vh" }}>
+                {isImg ? (
+                  <img src={url} alt="Invoice" className="w-full h-full object-contain" />
+                ) : isPdf ? (
+                  <iframe src={url} className="w-full h-full border-0" title="Invoice PDF" />
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full gap-2 p-4 text-center">
+                    <FileText className="h-10 w-10 text-muted-foreground" />
+                    <a href={url} target="_blank" rel="noopener noreferrer" className="text-primary underline text-sm">Open invoice in new tab</a>
+                  </div>
+                )}
+              </div>
+            );
+          })() : (
+            <div className="rounded-md border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+              Invoice file not attached
+            </div>
+          )}
+
+          {/* Rejection reason input (only shown once procurement clicks Reject) */}
+          {rejectMode && (
+            <div className="space-y-2 border-t pt-3">
+              <Label className="text-xs flex items-center gap-1 text-red-700">
+                <AlertCircle className="h-3 w-3" /> Reject reason — bataiye kya problem hai
+              </Label>
+              <Textarea
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g. Invoice photo blur hai, amount galat hai, GSTIN missing hai…"
+                rows={3}
+                autoFocus
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Site engineer ko ye reason dikhega aur woh sahi invoice dobara upload karenge.
+              </p>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            {!rejectMode ? (
+              <>
+                <Button variant="outline" onClick={closeReview} disabled={reviewBusy}>Close</Button>
+                <Button
+                  variant="outline"
+                  className="border-red-300 text-red-700 hover:bg-red-50"
+                  onClick={() => setRejectMode(true)}
+                  disabled={reviewBusy}
+                >
+                  <XCircle className="h-4 w-4 mr-1.5" /> Reject
+                </Button>
+                <Button
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  onClick={verifyAndClose}
+                  disabled={reviewBusy}
+                >
+                  <CheckCircle2 className="h-4 w-4 mr-1.5" />
+                  {reviewBusy ? "Verifying…" : "Verify & Close PR"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => { setRejectMode(false); setRejectReason(""); }} disabled={reviewBusy}>Back</Button>
+                <Button
+                  className="bg-red-600 hover:bg-red-700 text-white"
+                  onClick={rejectInvoice}
+                  disabled={reviewBusy || !rejectReason.trim()}
+                >
+                  {reviewBusy ? "Rejecting…" : "Confirm Reject"}
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
