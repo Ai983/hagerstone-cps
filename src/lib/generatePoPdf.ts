@@ -53,6 +53,10 @@ export interface PoPdfData {
 
   /* optional logo — pass base64 string (without data-uri prefix) */
   logoBase64?: string | null;
+
+  /* amendment fields — version > 1 triggers "AMENDMENT NO. X" banner */
+  version?: number | null;
+  revisionReason?: string | null;
 }
 
 /* ─────────────────────────────────────────────────────── helpers ── */
@@ -247,6 +251,31 @@ export function buildPoPdf(data: PoPdfData): Blob {
   doc.line(ML, y, W - MR, y);
   y += 1;
 
+  /* ── Amendment banner (only for revised POs) ── */
+  if (data.version && data.version > 1) {
+    const amendNo = data.version - 1;
+    doc.setFillColor(255, 243, 205); // amber-100
+    doc.rect(ML, y, CW, 10, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(180, 90, 0);
+    doc.text(`AMENDMENT NO. ${amendNo}  —  REVISED PURCHASE ORDER`, ML + 2, y + 6.5);
+    y += 10 + 1;
+    if (data.revisionReason) {
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(7);
+      doc.setTextColor(120, 60, 0);
+      const reasonLines = doc.splitTextToSize("Revision Reason: " + data.revisionReason, CW - 4);
+      doc.text(reasonLines, ML + 2, y + 4);
+      y += reasonLines.length * 4 + 3;
+    }
+    doc.setDrawColor(200, 140, 0);
+    doc.setLineWidth(0.3);
+    doc.line(ML, y, W - MR, y);
+    doc.setDrawColor(0);
+    y += 1;
+  }
+
   /* ── 2. Supplier + Delivery block ── */
   const leftW  = CW * 0.52;
   const rightW = CW * 0.48;
@@ -308,7 +337,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
 
   /* PO meta */
   const metaRows: [string, string][] = [
-    ["PO No", data.poNumber],
+    ["PO No", data.poNumber + (data.version && data.version > 1 ? ` (v${data.version})` : "")],
     ...(data.prNumber ? [["PR Ref", data.prNumber] as [string, string]] : []),
     ["Po Issue Date", poDate],
     ["Po upto", poUpto],

@@ -42,7 +42,8 @@ type PoStatus =
   | "dispatched"
   | "delivered"
   | "closed"
-  | "cancelled";
+  | "cancelled"
+  | "superseded";
 
 type PoRow = {
   id: string;
@@ -88,6 +89,10 @@ type PoRow = {
   finance_dispatch_sent_at?: string | null;
   finance_paid_at?: string | null;
   finance_paid_amount?: number | null;
+  // Amendment fields
+  revision_reason?: string | null;
+  cancel_reason?: string | null;
+  parent_po_id?: string | null;
 };
 
 type SupplierRow = {
@@ -188,6 +193,7 @@ const statusBadgeCls: Record<string, string> = {
   delivered: "bg-green-100 text-green-800 border-green-200",
   closed: "bg-gray-100 text-gray-600 border-gray-200",
   cancelled: "bg-red-100 text-red-800 border-red-200",
+  superseded: "bg-gray-100 text-gray-400 border-gray-200",
 };
 
 // Lifecycle display labels
@@ -202,19 +208,21 @@ const STATUS_LABEL: Record<string, string> = {
   acknowledged:     "Acknowledged",
   dispatched:       "Dispatched",
   delivered:        "Delivered",
+  superseded:       "Superseded",
 };
 
 function poStatusDisplay(r: PoRow): { label: string; cls: string } {
   const s = String(r.status ?? "draft");
-  if (s === "closed")    return { label: "Closed",           cls: statusBadgeCls.closed };
-  if (s === "cancelled") return { label: "Cancelled",        cls: statusBadgeCls.cancelled };
-  if (s === "rejected")  return { label: "Rejected",         cls: statusBadgeCls.rejected };
-  if (s === "sent")      return { label: "Sent to Finance",  cls: statusBadgeCls.sent };
+  if (s === "superseded") return { label: "Archived (Revised)", cls: statusBadgeCls.superseded };
+  if (s === "closed")    return { label: "Closed",              cls: statusBadgeCls.closed };
+  if (s === "cancelled") return { label: "Cancelled",           cls: statusBadgeCls.cancelled };
+  if (s === "rejected")  return { label: "Rejected",            cls: statusBadgeCls.rejected };
+  if (s === "sent")      return { label: "Sent to Finance",     cls: statusBadgeCls.sent };
   if (r.founder_approval_status === "approved")
-                         return { label: "Founder Approved", cls: statusBadgeCls.approved };
+                         return { label: "Founder Approved",    cls: statusBadgeCls.approved };
   if (s === "pending_approval" || r.founder_approval_status === "pending" || r.founder_approval_status === "sent")
-                         return { label: "Sent to Founders", cls: statusBadgeCls.pending_approval };
-  if (s === "draft")     return { label: "Draft",            cls: statusBadgeCls.draft };
+                         return { label: "Sent to Founders",    cls: statusBadgeCls.pending_approval };
+  if (s === "draft")     return { label: "Draft",               cls: statusBadgeCls.draft };
   return { label: STATUS_LABEL[s] ?? s, cls: statusBadgeCls[s] ?? statusBadgeCls.draft };
 }
 
@@ -350,6 +358,12 @@ export default function PurchaseOrders() {
   const [markPaidRef, setMarkPaidRef] = useState("");
   const [markPaidSaving, setMarkPaidSaving] = useState(false);
 
+  // Revise / Cancel PO dialog state
+  const [reviseCancelOpen, setReviseCancelOpen] = useState(false);
+  const [reviseCancelAction, setReviseCancelAction] = useState<"revise" | "cancel">("revise");
+  const [reviseCancelReason, setReviseCancelReason] = useState("");
+  const [reviseCancelSaving, setReviseCancelSaving] = useState(false);
+
   const eligibleRfqsOptions = eligibleRfqs;
 
   const filteredRows = useMemo(() => {
@@ -389,7 +403,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id",
         )
         .order("created_at", { ascending: false });
 
@@ -1003,7 +1017,7 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id",
         )
         .eq("id", poId)
         .single();
@@ -1359,6 +1373,140 @@ export default function PurchaseOrders() {
     }
   };
 
+  const commitReviseCancel = async () => {
+    if (!viewPo || !user) return;
+    const trimmedReason = reviseCancelReason.trim();
+    if (trimmedReason.length < 20) {
+      toast.error("Reason must be at least 20 characters");
+      return;
+    }
+    setReviseCancelSaving(true);
+    try {
+      const now = new Date().toISOString();
+
+      if (reviseCancelAction === "cancel") {
+        // Mark PO as cancelled
+        const { error: cancelErr } = await supabase
+          .from("cps_purchase_orders")
+          .update({ status: "cancelled", cancel_reason: trimmedReason })
+          .eq("id", viewPo.id);
+        if (cancelErr) throw cancelErr;
+
+        // Revert linked PR to validated so procurement can re-issue
+        if (viewPo.pr_id) {
+          await supabase
+            .from("cps_purchase_requisitions")
+            .update({ status: "validated" })
+            .eq("id", viewPo.pr_id);
+        }
+
+        await supabase.from("cps_audit_log").insert([{
+          action_type: "PO_CANCELLED",
+          entity_type: "cps_purchase_orders",
+          entity_id: viewPo.id,
+          user_id: user.id,
+          user_name: user.name ?? user.email ?? "",
+          description: `PO ${viewPo.po_number} cancelled. Reason: ${trimmedReason}`,
+          logged_at: now,
+        }]);
+
+        toast.success("PO cancelled — linked PR reverted to Validated");
+        setReviseCancelOpen(false);
+        setReviseCancelReason("");
+        await fetchPoRows();
+        await openView(viewPo.id);
+      } else {
+        // Revise: supersede original, clone as new version
+        const newVersion = (viewPo.version ?? 1) + 1;
+
+        // Mark original as superseded
+        const { error: supErr } = await supabase
+          .from("cps_purchase_orders")
+          .update({ status: "superseded" })
+          .eq("id", viewPo.id);
+        if (supErr) throw supErr;
+
+        // Clone PO header
+        const { data: newPoData, error: cloneErr } = await supabase
+          .from("cps_purchase_orders")
+          .insert([{
+            po_number: viewPo.po_number, // same number, different version
+            rfq_id: viewPo.rfq_id,
+            pr_id: viewPo.pr_id,
+            supplier_id: viewPo.supplier_id,
+            comparison_sheet_id: viewPo.comparison_sheet_id,
+            status: "draft",
+            version: newVersion,
+            project_code: viewPo.project_code,
+            ship_to_address: viewPo.ship_to_address,
+            bill_to_address: viewPo.bill_to_address,
+            payment_terms: viewPo.payment_terms,
+            delivery_terms: viewPo.delivery_terms,
+            delivery_date: viewPo.delivery_date,
+            penalty_clause: viewPo.penalty_clause,
+            total_value: viewPo.total_value,
+            gst_amount: viewPo.gst_amount,
+            grand_total: viewPo.grand_total,
+            bank_account_holder_name: viewPo.bank_account_holder_name,
+            bank_name: viewPo.bank_name,
+            bank_ifsc: viewPo.bank_ifsc,
+            bank_account_number: viewPo.bank_account_number,
+            supplier_name_text: viewPo.supplier_name_text,
+            site_supervisor_id: viewPo.site_supervisor_id,
+            source: viewPo.source ?? "workflow",
+            created_by: user.id,
+            parent_po_id: viewPo.id,
+            revision_reason: trimmedReason,
+          }])
+          .select("id")
+          .single();
+        if (cloneErr) throw cloneErr;
+
+        const newPoId = (newPoData as any).id as string;
+
+        // Clone line items
+        const clonedItems = viewPoLineItems.map((li) => ({
+          po_id: newPoId,
+          description: li.description,
+          brand: li.brand,
+          quantity: li.quantity,
+          unit: li.unit,
+          rate: li.rate,
+          gst_percent: li.gst_percent,
+          gst_amount: li.gst_amount,
+          total_value: li.total_value,
+          hsn_code: li.hsn_code,
+          sort_order: li.sort_order,
+        }));
+        if (clonedItems.length > 0) {
+          const { error: lineErr } = await supabase.from("cps_po_line_items").insert(clonedItems);
+          if (lineErr) throw lineErr;
+        }
+
+        await supabase.from("cps_audit_log").insert([{
+          action_type: "PO_REVISED",
+          entity_type: "cps_purchase_orders",
+          entity_id: newPoId,
+          user_id: user.id,
+          user_name: user.name ?? user.email ?? "",
+          description: `PO ${viewPo.po_number} revised to v${newVersion}. Reason: ${trimmedReason}. Original PO ID: ${viewPo.id}`,
+          logged_at: now,
+        }]);
+
+        toast.success(`PO revised — v${newVersion} created in Draft. Edit line items and send for approval.`);
+        setReviseCancelOpen(false);
+        setReviseCancelReason("");
+        await fetchPoRows();
+        // Open the new revision PO
+        await openView(newPoId);
+      }
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to process revision");
+    } finally {
+      setReviseCancelSaving(false);
+    }
+  };
+
   const downloadPDF = async () => {
     if (!viewPo || !viewSupplier) return;
     try {
@@ -1406,6 +1554,8 @@ export default function PurchaseOrders() {
         bankName: viewPo.bank_name,
         bankIfsc: viewPo.bank_ifsc,
         bankAccountNumber: viewPo.bank_account_number,
+        version: viewPo.version,
+        revisionReason: viewPo.revision_reason,
         lineItems: viewPoLineItems.map((li) => ({
           description: li.description ?? "",
           quantity: Number(li.quantity ?? 0),
@@ -2722,6 +2872,53 @@ export default function PurchaseOrders() {
                       <div className="text-xs text-gray-500">This PO has been paid and closed by Finance.</div>
                     </div>
                   )}
+
+                  {/* Revision history — shown if this PO is a revision of another */}
+                  {viewPo.parent_po_id && viewPo.revision_reason && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-1">
+                      <div className="text-sm font-semibold text-blue-900">📋 Revision of Earlier PO</div>
+                      <div className="text-xs text-blue-700">
+                        This is <strong>v{viewPo.version ?? 2}</strong> — a revised version of an earlier PO.
+                      </div>
+                      <div className="text-xs text-blue-700">
+                        <strong>Reason for revision:</strong> {viewPo.revision_reason}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Superseded notice — shown if this PO was replaced */}
+                  {viewPo.status === "superseded" && (
+                    <div className="rounded-lg border border-gray-300 bg-gray-100 p-4 space-y-1">
+                      <div className="text-sm font-semibold text-gray-600">🗃 Archived (Revised)</div>
+                      <div className="text-xs text-gray-500">This PO has been superseded by a newer revision. It is preserved here for audit purposes.</div>
+                    </div>
+                  )}
+
+                  {/* Cancel reason — shown if cancelled */}
+                  {viewPo.status === "cancelled" && viewPo.cancel_reason && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-4 space-y-1">
+                      <div className="text-sm font-semibold text-red-800">❌ Cancelled</div>
+                      <div className="text-xs text-red-700"><strong>Reason:</strong> {viewPo.cancel_reason}</div>
+                    </div>
+                  )}
+
+                  {/* Revise / Cancel button — only for procurement head on active POs */}
+                  {isProcurementHead && ["sent", "approved", "pending_approval", "draft"].includes(String(viewPo.status)) && (
+                    <div className="pt-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-orange-300 text-orange-700 hover:bg-orange-50 text-xs"
+                        onClick={() => {
+                          setReviseCancelAction("revise");
+                          setReviseCancelReason("");
+                          setReviseCancelOpen(true);
+                        }}
+                      >
+                        Revise / Cancel PO
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -2746,6 +2943,102 @@ export default function PurchaseOrders() {
             </div>
           )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Revise / Cancel PO dialog */}
+      <Dialog open={reviseCancelOpen} onOpenChange={(o) => { if (!reviseCancelSaving) { setReviseCancelOpen(o); setReviseCancelReason(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Revise or Cancel PO</DialogTitle>
+            <DialogDescription>
+              {viewPo ? `PO ${viewPo.po_number}${(viewPo.version ?? 1) > 1 ? ` (v${viewPo.version})` : ""}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label className="text-sm font-semibold">Action</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReviseCancelAction("revise")}
+                  className={`rounded-lg border-2 p-3 text-left space-y-1 transition-colors ${
+                    reviseCancelAction === "revise"
+                      ? "border-blue-500 bg-blue-50"
+                      : "border-border hover:border-blue-300"
+                  }`}
+                >
+                  <div className="text-sm font-semibold">📋 Revise PO</div>
+                  <div className="text-xs text-muted-foreground">Create a new version with updated line items. Original is archived.</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReviseCancelAction("cancel")}
+                  className={`rounded-lg border-2 p-3 text-left space-y-1 transition-colors ${
+                    reviseCancelAction === "cancel"
+                      ? "border-red-500 bg-red-50"
+                      : "border-border hover:border-red-300"
+                  }`}
+                >
+                  <div className="text-sm font-semibold">❌ Cancel PO</div>
+                  <div className="text-xs text-muted-foreground">Permanently cancel. Linked PR reverts to Validated so a new PO can be raised.</div>
+                </button>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-sm font-semibold">
+                Reason <span className="text-red-500">*</span>
+                <span className="text-muted-foreground font-normal ml-1">(min 20 chars)</span>
+              </Label>
+              <Textarea
+                value={reviseCancelReason}
+                onChange={(e) => setReviseCancelReason(e.target.value)}
+                placeholder={
+                  reviseCancelAction === "revise"
+                    ? "e.g. Client approved a different brand for tiles — quantity also revised from 500 to 450 sqft"
+                    : "e.g. Supplier unable to deliver on time — alternate vendor to be selected via new PO"
+                }
+                rows={3}
+                className="resize-none"
+              />
+              <div className={`text-xs text-right ${reviseCancelReason.trim().length >= 20 ? "text-green-600" : "text-muted-foreground"}`}>
+                {reviseCancelReason.trim().length}/20 min
+              </div>
+            </div>
+            {reviseCancelAction === "revise" && (
+              <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 space-y-1">
+                <div className="font-semibold">What happens on Revise:</div>
+                <ul className="list-disc pl-4 space-y-0.5">
+                  <li>Original PO is archived (no data lost)</li>
+                  <li>A new Draft v{(viewPo?.version ?? 1) + 1} PO is created with same supplier</li>
+                  <li>You can edit line items on the new PO</li>
+                  <li>New PO must go through founder approval again</li>
+                </ul>
+              </div>
+            )}
+            {reviseCancelAction === "cancel" && (
+              <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-800 space-y-1">
+                <div className="font-semibold">What happens on Cancel:</div>
+                <ul className="list-disc pl-4 space-y-0.5">
+                  <li>PO is permanently cancelled</li>
+                  <li>Linked PR reverts to Validated status</li>
+                  <li>Procurement can create a new PO from scratch</li>
+                </ul>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setReviseCancelOpen(false); setReviseCancelReason(""); }} disabled={reviseCancelSaving}>
+              Back
+            </Button>
+            <Button
+              onClick={commitReviseCancel}
+              disabled={reviseCancelSaving || reviseCancelReason.trim().length < 20}
+              className={reviseCancelAction === "cancel" ? "bg-red-600 hover:bg-red-700 text-white" : "bg-blue-600 hover:bg-blue-700 text-white"}
+            >
+              {reviseCancelSaving ? "Processing…" : reviseCancelAction === "revise" ? "Revise PO" : "Cancel PO"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -2913,13 +3206,20 @@ function PoTableRows({
 
         return (
           <React.Fragment key={r.id}>
-          <TableRow className={r.source === "legacy" ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-muted/30"}>
+          <TableRow className={
+            r.status === "superseded" ? "bg-gray-50/60 opacity-60 hover:opacity-80" :
+            r.source === "legacy" ? "bg-amber-50/40 hover:bg-amber-50/60" :
+            "hover:bg-muted/30"
+          }>
             <TableCell className="font-mono text-primary">
               <div className="flex items-center gap-1.5 flex-wrap">
                 <button onClick={(e) => toggleExpandPo(r.id, e)} className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
                   {expandedPoId === r.id ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                 </button>
                 {r.po_number}
+                {(r.version ?? 1) > 1 && (
+                  <span className="text-[10px] font-semibold bg-blue-100 text-blue-800 border border-blue-300 rounded px-1.5 py-0.5 leading-none">v{r.version}</span>
+                )}
                 {r.source === "legacy" && (
                   <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 leading-none">📄 LEGACY</span>
                 )}
