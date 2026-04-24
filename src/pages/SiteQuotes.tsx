@@ -376,9 +376,9 @@ export default function SiteQuotes() {
       </div>
 
       {/* PR selector + Add button */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
         <Select value={selectedPrId} onValueChange={setSelectedPrId}>
-          <SelectTrigger className="w-80"><SelectValue placeholder="Apni PR chuno…" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-80"><SelectValue placeholder="Apni PR chuno…" /></SelectTrigger>
           <SelectContent>
             {prs.map((p) => (
               <SelectItem key={p.id} value={p.id}>
@@ -388,7 +388,7 @@ export default function SiteQuotes() {
             ))}
           </SelectContent>
         </Select>
-        <Button onClick={openDialog} disabled={!selectedPrId}>
+        <Button onClick={openDialog} disabled={!selectedPrId} className="w-full sm:w-auto">
           <Plus className="h-4 w-4 mr-1.5" /> Quote Upload Karo
         </Button>
       </div>
@@ -410,8 +410,36 @@ export default function SiteQuotes() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
+        <>
+        {/* Mobile cards */}
+        <div className="sm:hidden space-y-2">
+          {quotes.length === 0 ? (
+            <Card><CardContent className="py-8 text-center text-muted-foreground text-sm">Is PR ke liye aapne abhi tak koi quote upload nahi kiya</CardContent></Card>
+          ) : quotes.map((q) => (
+            <Card key={q.id}>
+              <CardContent className="p-3 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-primary text-sm">{q.blind_quote_ref ?? "—"}</span>
+                  <Badge className={`text-[10px] border ${parseBadge[q.parse_status] ?? "bg-muted"}`}>{q.parse_status}</Badge>
+                </div>
+                <div className="text-sm font-medium">{q.supplier_name ?? "—"}</div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">{fmtDate(q.received_at)}</span>
+                  <span className="font-mono font-semibold">
+                    {q.total_landed_value != null ? `₹${Number(q.total_landed_value).toLocaleString("en-IN")}` : "—"}
+                  </span>
+                </div>
+                {q.site_submission_notes && (
+                  <div className="text-[11px] text-muted-foreground border-t pt-1 mt-1">{q.site_submission_notes}</div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* Desktop table */}
+        <Card className="hidden sm:block">
+          <CardContent className="p-0 overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -450,11 +478,12 @@ export default function SiteQuotes() {
             </Table>
           </CardContent>
         </Card>
+        </>
       )}
 
       {/* Upload dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
           <DialogHeader>
             <DialogTitle>Upload Supplier Quote</DialogTitle>
             <DialogDescription>

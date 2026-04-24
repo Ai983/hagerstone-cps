@@ -307,15 +307,15 @@ export default function SiteStock() {
         </p>
       </div>
 
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 flex-wrap">
         <Select value={projectCode} onValueChange={setProjectCode}>
-          <SelectTrigger className="w-72"><SelectValue placeholder="Select a project…" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-72"><SelectValue placeholder="Select a project…" /></SelectTrigger>
           <SelectContent>
             {projects.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
           </SelectContent>
         </Select>
 
-        <div className="relative flex-1 min-w-[220px] max-w-md">
+        <div className="relative w-full sm:flex-1 sm:min-w-[220px] sm:max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search items…"
@@ -326,16 +326,16 @@ export default function SiteStock() {
           />
         </div>
 
-        <Button onClick={() => setAddExtraOpen(true)} disabled={!projectCode} variant="outline">
+        <Button onClick={() => setAddExtraOpen(true)} disabled={!projectCode} variant="outline" className="w-full sm:w-auto">
           <Plus className="h-4 w-4 mr-1.5" /> Add Extra Item
         </Button>
       </div>
 
       {projectCode && (
-        <div className="grid grid-cols-3 gap-3">
-          <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Total Items</div><div className="text-2xl font-bold">{stats.total}</div></CardContent></Card>
-          <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">From BOQ</div><div className="text-2xl font-bold">{stats.boqCount}</div></CardContent></Card>
-          <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground text-amber-700">Extra Items</div><div className="text-2xl font-bold text-amber-700">{stats.extras}</div></CardContent></Card>
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          <Card><CardContent className="p-3 sm:p-4"><div className="text-[10px] sm:text-xs text-muted-foreground">Total Items</div><div className="text-xl sm:text-2xl font-bold">{stats.total}</div></CardContent></Card>
+          <Card><CardContent className="p-3 sm:p-4"><div className="text-[10px] sm:text-xs text-muted-foreground">From BOQ</div><div className="text-xl sm:text-2xl font-bold">{stats.boqCount}</div></CardContent></Card>
+          <Card><CardContent className="p-3 sm:p-4"><div className="text-[10px] sm:text-xs text-muted-foreground text-amber-700">Extras</div><div className="text-xl sm:text-2xl font-bold text-amber-700">{stats.extras}</div></CardContent></Card>
         </div>
       )}
 
@@ -347,8 +347,61 @@ export default function SiteStock() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
+        <>
+        {/* Mobile — card view */}
+        <div className="sm:hidden space-y-2">
+          {loading ? (
+            [1, 2, 3].map((i) => <Skeleton key={i} className="h-20 w-full" />)
+          ) : filtered.length === 0 ? (
+            <Card><CardContent className="py-8 text-center text-muted-foreground text-sm">
+              {unified.length === 0
+                ? "No BOQ yet for this project — ask procurement to set it up, or add items as extras."
+                : "No items match your search"}
+            </CardContent></Card>
+          ) : (
+            filtered.map((r) => {
+              const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
+              return (
+                <Card key={r.item_id} className={!r.from_boq ? "border-amber-300 bg-amber-50/50" : undefined}>
+                  <CardContent className="p-3 space-y-1.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-medium text-sm">{r.item_description}</span>
+                          {!r.from_boq && <Badge variant="outline" className="text-[9px] bg-amber-100 text-amber-800 border-amber-300 h-4 px-1">EXTRA</Badge>}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">{r.unit ?? "—"} · {fmtDate(r.last_updated)}</div>
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => openUpdate(r)} className="shrink-0 h-8">
+                        <Edit2 className="h-3.5 w-3.5 mr-1" /> Update
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1 text-xs">
+                      <div>
+                        <div className="text-[10px] text-muted-foreground">Planned</div>
+                        <div className="font-mono">{r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-muted-foreground">Current</div>
+                        <div className="font-mono font-semibold">{Number(r.current_qty).toLocaleString("en-IN")}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-muted-foreground">Diff</div>
+                        <div className={`font-mono ${diff == null ? "" : diff < 0 ? "text-red-700" : diff > 0 ? "text-green-700" : "text-muted-foreground"}`}>
+                          {diff == null ? "—" : `${diff > 0 ? "+" : ""}${Number(diff).toLocaleString("en-IN")}`}
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop — table */}
+        <Card className="hidden sm:block">
+          <CardContent className="p-0 overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -415,10 +468,11 @@ export default function SiteStock() {
             </Table>
           </CardContent>
         </Card>
+        </>
       )}
 
       <Dialog open={updateOpen} onOpenChange={setUpdateOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
           <DialogHeader><DialogTitle>Update Stock Qty</DialogTitle></DialogHeader>
           {updateRow && (
             <div className="space-y-3 py-2">
@@ -449,7 +503,7 @@ export default function SiteStock() {
       </Dialog>
 
       <Dialog open={addExtraOpen} onOpenChange={setAddExtraOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
           <DialogHeader><DialogTitle>Add Extra Item</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-xs text-muted-foreground">

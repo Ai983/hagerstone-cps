@@ -151,9 +151,12 @@ export function TopBar() {
   const isUnread = (n: NotifItem) => !lastReadAt || n.logged_at > lastReadAt;
 
   return (
-    <header className="h-14 flex items-center justify-between border-b border-border bg-background px-6 shrink-0">
-      <div>
-        <p className="text-sm font-semibold text-foreground">Hagerstone International — Centralised Procurement</p>
+    <header className="h-14 flex items-center justify-between border-b border-border bg-background px-3 sm:px-6 shrink-0 gap-2">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-foreground truncate">
+          <span className="hidden sm:inline">Hagerstone International — Centralised Procurement</span>
+          <span className="sm:hidden">Hagerstone CPS</span>
+        </p>
         <p className="text-xs text-muted-foreground hidden sm:block">{new Date().toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</p>
       </div>
       {user && (
