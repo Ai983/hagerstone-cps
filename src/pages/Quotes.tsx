@@ -26,7 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 
-import { Building2, CalendarDays, ChevronsUpDown, Flag, LogIn, Plus, Search, ExternalLink, Loader2, AlertTriangle, CheckCircle2, Paperclip, UserPlus, Sparkles, Trash2 } from "lucide-react";
+import { Building2, CalendarDays, ChevronsUpDown, ChevronRight, ChevronDown, Flag, LogIn, Plus, Search, ExternalLink, Loader2, AlertTriangle, CheckCircle2, Paperclip, UserPlus, Sparkles, Trash2, User } from "lucide-react";
 import { LegacyQuoteUploadModal } from "@/components/quotes/LegacyQuoteUploadModal";
 
 type QuoteParseStatus = "pending" | "parsed" | "needs_review" | "reviewed" | "approved" | "failed";
@@ -83,6 +83,16 @@ type QuoteLineItem = {
 };
 
 type Rfq = { id: string; rfq_number: string; title: string | null; pr_id: string | null };
+
+type PrInfo = {
+  id: string;
+  pr_number: string;
+  project_code: string | null;
+  project_site: string | null;
+  requested_by: string | null;
+  requested_by_name: string | null;
+  created_at: string | null;
+};
 type PrLineItem = { id: string; description: string; quantity: number | null; unit: string | null };
 type Supplier = { id: string; name: string };
 
@@ -211,6 +221,10 @@ export default function Quotes() {
   };
 
   const [rfqById, setRfqById] = useState<Record<string, Rfq>>({});
+  const [prById, setPrById] = useState<Record<string, PrInfo>>({});
+  const [expandedPrId, setExpandedPrId] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 5;
 
   const [itemsCountByQuoteId, setItemsCountByQuoteId] = useState<Record<string, number>>({});
 
@@ -342,6 +356,39 @@ export default function Quotes() {
         setSupplierProfileMap(profileMap);
       }
 
+      // Fetch PRs linked to these RFQs + requestor names (for grouped view)
+      const prIds = [...new Set(rfqsRows.map((r) => r.pr_id).filter(Boolean))] as string[];
+      if (prIds.length > 0) {
+        const { data: prData } = await supabase
+          .from("cps_purchase_requisitions")
+          .select("id,pr_number,project_code,project_site,requested_by,created_at")
+          .in("id", prIds);
+        const requestorIds = [...new Set(((prData ?? []) as any[]).map((p) => p.requested_by).filter(Boolean))] as string[];
+        const nameMap: Record<string, string> = {};
+        if (requestorIds.length > 0) {
+          const { data: userData } = await supabase
+            .from("cps_users")
+            .select("id,name")
+            .in("id", requestorIds);
+          (userData ?? []).forEach((u: any) => { nameMap[u.id] = u.name; });
+        }
+        const prMap: Record<string, PrInfo> = {};
+        ((prData ?? []) as any[]).forEach((p) => {
+          prMap[p.id] = {
+            id: p.id,
+            pr_number: p.pr_number,
+            project_code: p.project_code,
+            project_site: p.project_site,
+            requested_by: p.requested_by,
+            requested_by_name: p.requested_by ? (nameMap[p.requested_by] ?? null) : null,
+            created_at: p.created_at,
+          };
+        });
+        setPrById(prMap);
+      } else {
+        setPrById({});
+      }
+
       setLoading(false);
     } catch (e: any) {
       const msg = e?.message || "Failed to load quotes";
@@ -386,6 +433,54 @@ export default function Quotes() {
     const avg = confValues.length ? confValues.reduce((a, b) => a + b, 0) / confValues.length : null;
     return { total, needsReview, compliant, avgConfidence: avg as number | null };
   }, [quotes]);
+
+  // Group the filtered quotes by PR for the new grouped view
+  type GroupedPrRow = {
+    pr: PrInfo | null;
+    pr_key: string; // pr_id or "orphan:<rfq_id>"
+    rfq_numbers: string[];
+    quotes: QuoteListRow[];
+    latest_received: string | null;
+  };
+  // Reset to first page whenever filters/search change
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedSearch, rfqFilter, parseStatusFilter]);
+
+  const groupedByPr = useMemo<GroupedPrRow[]>(() => {
+    const groups = new Map<string, GroupedPrRow>();
+    filteredQuotes.forEach((q) => {
+      const rfq = rfqById[q.rfq_id];
+      const prId = rfq?.pr_id ?? null;
+      const key = prId ?? `orphan:${q.rfq_id}`;
+      let g = groups.get(key);
+      if (!g) {
+        g = {
+          pr: prId ? (prById[prId] ?? null) : null,
+          pr_key: key,
+          rfq_numbers: [],
+          quotes: [],
+          latest_received: null,
+        };
+        groups.set(key, g);
+      }
+      g.quotes.push(q);
+      if (rfq?.rfq_number && !g.rfq_numbers.includes(rfq.rfq_number)) g.rfq_numbers.push(rfq.rfq_number);
+      if (q.received_at) {
+        if (!g.latest_received || new Date(q.received_at) > new Date(g.latest_received)) {
+          g.latest_received = q.received_at;
+        }
+      }
+    });
+    return Array.from(groups.values()).sort((a, b) => {
+      const at = a.latest_received ? new Date(a.latest_received).getTime() : 0;
+      const bt = b.latest_received ? new Date(b.latest_received).getTime() : 0;
+      return bt - at;
+    });
+  }, [filteredQuotes, rfqById, prById]);
+
+  const totalPages = Math.max(1, Math.ceil(groupedByPr.length / PAGE_SIZE));
+  const paginatedGroups = groupedByPr.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const confidenceEl = (c: number | null) => {
     const conf = confidenceTone(c);
@@ -1391,38 +1486,48 @@ Rules:
         </Select>
       </div>
 
-      <div className="hidden lg:block">
+      <div className="hidden lg:block space-y-3">
+      {!loading && groupedByPr.length > 0 && (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, groupedByPr.length)} of {groupedByPr.length} PRs</span>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Prev</Button>
+              <span className="text-xs px-2">Page {page + 1}/{totalPages}</span>
+              <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
+            </div>
+          )}
+        </div>
+      )}
       <Card>
         <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("blind_quote_ref")}>Blind Ref {sortFieldQ==="blind_quote_ref"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead className="w-10"></TableHead>
+                <TableHead>PR Number</TableHead>
+                <TableHead>Project Name</TableHead>
+                <TableHead>Project Site</TableHead>
+                <TableHead>Raised By</TableHead>
                 <TableHead>RFQ</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("channel")}>Channel {sortFieldQ==="channel"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("total_landed_value")}>Total Landed {sortFieldQ==="total_landed_value"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
-                <TableHead>Payment Terms</TableHead>
-                <TableHead>Warranty</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("parse_status")}>Parse Status {sortFieldQ==="parse_status"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("compliance_status")}>Compliance {sortFieldQ==="compliance_status"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("received_at")}>Received {sortFieldQ==="received_at"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
-                <TableHead className="text-right">Review</TableHead>
+                <TableHead className="text-center">Quotes</TableHead>
+                <TableHead>Latest Received</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 10 }).map((__, j) => (
+                    {Array.from({ length: 8 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-20" />
                       </TableCell>
                     ))}
                   </TableRow>
                 ))
-              ) : filteredQuotes.length === 0 ? (
+              ) : groupedByPr.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center py-10 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
                     <div className="flex items-center justify-center gap-3">
                       <Flag className="h-5 w-5" />
                       <div className="text-sm">No quotes received yet</div>
@@ -1430,57 +1535,129 @@ Rules:
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredQuotes.map((q) => {
-                  const rfq = rfqById[q.rfq_id];
-                  const ps = parseStatusConfig[q.parse_status] ?? parseStatusConfig.pending;
-                  const compBadge = complianceBadge(q.compliance_status);
+                paginatedGroups.map((g) => {
+                  const isOpen = expandedPrId === g.pr_key;
+                  const needsReviewCount = g.quotes.filter((q) => q.parse_status === "needs_review").length;
                   return (
-                    <TableRow key={q.id} className={(q.is_legacy || q.channel === "legacy") ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-muted/30"}>
-                      <TableCell className="font-mono text-primary">
-                        <div className="flex flex-col gap-1">
-                          <span>{q.blind_quote_ref}</span>
-                          <div className="flex flex-wrap gap-1">
-                            {(q.is_legacy || q.channel === "legacy") && (
-                              <Badge className="text-xs border bg-amber-100 text-amber-800 border-amber-300">📄 LEGACY</Badge>
-                            )}
-                            {q.channel === "phone" && (
-                              <Badge className="text-xs border bg-gray-100 text-gray-600 border-gray-300">📞 PHONE</Badge>
-                            )}
-                            {q.submitted_by_human && !(q.is_legacy || q.channel === "legacy") && (
-                              <Badge className="text-xs border bg-purple-100 text-purple-800 border-purple-300">✋ MANUAL</Badge>
-                            )}
-                            {q.supplier_id && supplierProfileMap[q.supplier_id] === false && (
-                              <Badge className="text-xs border bg-blue-100 text-blue-800 border-blue-300">🆕 NEW VENDOR</Badge>
-                            )}
-                            {q.parse_status === "needs_review" && (
-                              <Badge className="text-xs border bg-red-100 text-red-800 border-red-300">⚠️ REVIEW</Badge>
-                            )}
-                            {Number(q.total_quoted_value ?? 0) === 0 && Number(q.total_landed_value ?? 0) === 0 && q.parse_status !== "failed" && (
-                              <Badge className="text-xs border bg-red-100 text-red-800 border-red-300" title="Quote has no extracted items or totals — click Review to parse with AI">⚠️ NO DATA</Badge>
+                    <React.Fragment key={g.pr_key}>
+                      <TableRow
+                        className="cursor-pointer hover:bg-muted/30"
+                        onClick={() => setExpandedPrId(isOpen ? null : g.pr_key)}
+                      >
+                        <TableCell>
+                          {isOpen
+                            ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                            : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                        </TableCell>
+                        <TableCell className="font-mono text-primary font-semibold">
+                          {g.pr?.pr_number ?? <span className="text-muted-foreground italic">Unlinked</span>}
+                        </TableCell>
+                        <TableCell className="font-medium">{g.pr?.project_code ?? "—"}</TableCell>
+                        <TableCell className="text-muted-foreground text-xs max-w-xs truncate">
+                          {g.pr?.project_site ?? "—"}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {g.pr?.requested_by_name ? (
+                            <span className="inline-flex items-center gap-1">
+                              <User className="h-3 w-3" />
+                              {g.pr.requested_by_name}
+                            </span>
+                          ) : "—"}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground font-mono text-xs">
+                          {g.rfq_numbers.length ? g.rfq_numbers.join(", ") : "—"}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <div className="inline-flex items-center gap-1.5">
+                            <Badge variant="outline" className="text-xs">{g.quotes.length}</Badge>
+                            {needsReviewCount > 0 && (
+                              <Badge className="text-[10px] border bg-red-100 text-red-800 border-red-300">
+                                {needsReviewCount} review
+                              </Badge>
                             )}
                           </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{rfq?.rfq_number ?? "—"}</TableCell>
-                      <TableCell>
-                        <Badge className={`text-xs border-0 ${channelBadge(q.channel)}`}>{q.channel}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{canViewPrices ? formatCurrency(q.total_landed_value) : "—"}</TableCell>
-                      <TableCell className="text-muted-foreground text-xs max-w-[150px] truncate">{q.payment_terms ?? "—"}</TableCell>
-                      <TableCell className="text-muted-foreground">{q.warranty_months ? `${q.warranty_months} mo` : "—"}</TableCell>
-                      <TableCell>
-                        <Badge className={`text-xs border-0 ${ps.badge}`}>{ps.label}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge className={`text-xs border-0 ${compBadge}`}>{q.compliance_status}</Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{formatDateTime(q.received_at)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => openReview(q.id)}>
-                          Review
-                        </Button>
-                      </TableCell>
-                    </TableRow>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
+                          {formatDateTime(g.latest_received)}
+                        </TableCell>
+                      </TableRow>
+                      {isOpen && (
+                        <TableRow className="bg-muted/20 hover:bg-muted/20">
+                          <TableCell colSpan={8} className="p-0">
+                            <div className="p-3">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("blind_quote_ref")}>Blind Ref {sortFieldQ==="blind_quote_ref"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("channel")}>Channel {sortFieldQ==="channel"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("total_landed_value")}>Total Landed {sortFieldQ==="total_landed_value"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                                    <TableHead>Payment Terms</TableHead>
+                                    <TableHead>Warranty</TableHead>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("parse_status")}>Parse Status {sortFieldQ==="parse_status"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("compliance_status")}>Compliance {sortFieldQ==="compliance_status"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("received_at")}>Received {sortFieldQ==="received_at"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                                    <TableHead className="text-right">Review</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {g.quotes.map((q) => {
+                                    const ps = parseStatusConfig[q.parse_status] ?? parseStatusConfig.pending;
+                                    const compBadge = complianceBadge(q.compliance_status);
+                                    return (
+                                      <TableRow key={q.id} className={(q.is_legacy || q.channel === "legacy") ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-muted/30"}>
+                                        <TableCell className="font-mono text-primary">
+                                          <div className="flex flex-col gap-1">
+                                            <span>{q.blind_quote_ref}</span>
+                                            <div className="flex flex-wrap gap-1">
+                                              {(q.is_legacy || q.channel === "legacy") && (
+                                                <Badge className="text-xs border bg-amber-100 text-amber-800 border-amber-300">📄 LEGACY</Badge>
+                                              )}
+                                              {q.channel === "phone" && (
+                                                <Badge className="text-xs border bg-gray-100 text-gray-600 border-gray-300">📞 PHONE</Badge>
+                                              )}
+                                              {q.submitted_by_human && !(q.is_legacy || q.channel === "legacy") && (
+                                                <Badge className="text-xs border bg-purple-100 text-purple-800 border-purple-300">✋ MANUAL</Badge>
+                                              )}
+                                              {q.supplier_id && supplierProfileMap[q.supplier_id] === false && (
+                                                <Badge className="text-xs border bg-blue-100 text-blue-800 border-blue-300">🆕 NEW VENDOR</Badge>
+                                              )}
+                                              {q.parse_status === "needs_review" && (
+                                                <Badge className="text-xs border bg-red-100 text-red-800 border-red-300">⚠️ REVIEW</Badge>
+                                              )}
+                                              {Number(q.total_quoted_value ?? 0) === 0 && Number(q.total_landed_value ?? 0) === 0 && q.parse_status !== "failed" && (
+                                                <Badge className="text-xs border bg-red-100 text-red-800 border-red-300" title="Quote has no extracted items or totals — click Review to parse with AI">⚠️ NO DATA</Badge>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </TableCell>
+                                        <TableCell>
+                                          <Badge className={`text-xs border-0 ${channelBadge(q.channel)}`}>{q.channel}</Badge>
+                                        </TableCell>
+                                        <TableCell className="text-muted-foreground">{canViewPrices ? formatCurrency(q.total_landed_value) : "—"}</TableCell>
+                                        <TableCell className="text-muted-foreground text-xs max-w-[150px] truncate">{q.payment_terms ?? "—"}</TableCell>
+                                        <TableCell className="text-muted-foreground">{q.warranty_months ? `${q.warranty_months} mo` : "—"}</TableCell>
+                                        <TableCell>
+                                          <Badge className={`text-xs border-0 ${ps.badge}`}>{ps.label}</Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                          <Badge className={`text-xs border-0 ${compBadge}`}>{q.compliance_status}</Badge>
+                                        </TableCell>
+                                        <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{formatDateTime(q.received_at)}</TableCell>
+                                        <TableCell className="text-right">
+                                          <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); openReview(q.id); }}>
+                                            Review
+                                          </Button>
+                                        </TableCell>
+                                      </TableRow>
+                                    );
+                                  })}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </React.Fragment>
                   );
                 })
               )}
