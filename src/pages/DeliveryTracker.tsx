@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useDebounce } from "@/hooks/useDebounce";
 
@@ -166,7 +165,6 @@ const TIMELINE_STEPS: { key: string; label: string }[] = [
 
 export default function DeliveryTracker() {
   const { user, canApprove, canViewPrices, isEmployee } = useAuth();
-  const navigate = useNavigate();
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -860,18 +858,6 @@ export default function DeliveryTracker() {
                       <Badge className="bg-green-100 text-green-800 border-green-200 text-xs border-0">
                         GRN: {po.grn.grn_number} confirmed
                       </Badge>
-                    )}
-                    {/* After GRN is confirmed, allow site receiver to log stock-in */}
-                    {po.grn && canConfirmGrn && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="border-primary/40 text-primary hover:bg-primary/10"
-                        onClick={() => navigate(`/stock?po=${po.id}`)}
-                        title="Log the delivered material into site stock"
-                      >
-                        📦 Log to Stock
-                      </Button>
                     )}
                   </div>
                 </CardContent>

@@ -67,7 +67,9 @@ const ApprovePoPage = lazyWithRetry(() => import("@/pages/ApprovePoPage"));
 const PRReview = lazyWithRetry(() => import("@/pages/PRReview"));
 const KanbanBoard = lazyWithRetry(() => import("@/pages/KanbanBoard"));
 const Analytics = lazyWithRetry(() => import("@/pages/Analytics"));
-const StockManagement = lazyWithRetry(() => import("@/pages/StockManagement"));
+const SiteStock = lazyWithRetry(() => import("@/pages/SiteStock"));
+const ProjectBOQ = lazyWithRetry(() => import("@/pages/ProjectBOQ"));
+const StockOverview = lazyWithRetry(() => import("@/pages/StockOverview"));
 const NotFound = lazyWithRetry(() => import("@/pages/NotFound"));
 
 const Loader = () => (
@@ -117,7 +119,9 @@ const App = () => (
               <Route path="/pr-review" element={<Protected><PRReview /></Protected>} />
               <Route path="/kanban" element={<Protected><KanbanBoard /></Protected>} />
               <Route path="/analytics" element={<Protected><Analytics /></Protected>} />
-              <Route path="/stock" element={<Protected><StockManagement /></Protected>} />
+              <Route path="/stock" element={<Protected><SiteStock /></Protected>} />
+              <Route path="/boq" element={<Protected><ProjectBOQ /></Protected>} />
+              <Route path="/stock-overview" element={<Protected><StockOverview /></Protected>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </React.Suspense>

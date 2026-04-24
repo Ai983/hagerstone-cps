@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, Upload, ClipboardCheck, KanbanSquare, LineChart, Boxes } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, Upload, ClipboardCheck, KanbanSquare, LineChart, Boxes, ListChecks } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -14,7 +14,8 @@ const NAV = [
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Purchase Orders", url: "/purchase-orders", icon: ShoppingCart, roles: ["procurement_executive","procurement_head","it_head","management","finance"] },
   { title: "Delivery Tracker", url: "/delivery", icon: Truck, roles: ["all"] },
-  { title: "Stock", url: "/stock", icon: Boxes, roles: ["all"] },
+  { title: "BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive","procurement_head","it_head","management"] },
+  { title: "Stock Overview", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor"] },
   { title: "Supplier Master", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Item Master", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head","it_head"] },
   { title: "Invoice Upload", url: "/invoices/upload", icon: Upload, roles: ["procurement_executive","procurement_head","it_head","management"] },

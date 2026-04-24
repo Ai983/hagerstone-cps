@@ -240,39 +240,47 @@ export default function Dashboard() {
         setPrImages(imageRows.slice(0, 12));
       }
 
-      // Low-stock items — for everyone except those without stock view
+      // Low-stock items — pulls stock and compares to the project's BOQ planned quantity
       if (user?.id) {
         let stockQuery = supabase
           .from("cps_stock")
-          .select("id, project_site, current_qty, unit, min_threshold, item_id, cps_items(name)");
-        // For site users: restrict to their sites
+          .select("id, project_code, current_qty, unit, item_id, cps_items(name)");
+        // For site users: restrict to project_codes on their own PRs
         if (user.role === "requestor" || user.role === "site_receiver") {
-          const { data: mySites } = await supabase
+          const { data: myProjects } = await supabase
             .from("cps_purchase_requisitions")
-            .select("project_site")
+            .select("project_code")
             .eq("requested_by", user.id);
-          const siteList = Array.from(new Set((mySites ?? []).map((r: { project_site: string }) => r.project_site).filter(Boolean)));
-          if (siteList.length === 0) {
+          const codes = Array.from(new Set((myProjects ?? [])
+            .map((r: { project_code: string | null }) => r.project_code)
+            .filter((c): c is string => !!c)));
+          if (codes.length === 0) {
             setLowStockItems([]);
           } else {
-            stockQuery = stockQuery.in("project_site", siteList);
+            stockQuery = stockQuery.in("project_code", codes);
           }
         }
         const { data: stockData } = await stockQuery;
+        // Pull BOQ planned quantities for these stock rows so we can flag low-stock vs plan
+        const { data: boqData } = await supabase
+          .from("cps_project_boqs")
+          .select("project_code, item_id, planned_quantity");
+        const boqByKey = new Map<string, number>();
+        (boqData ?? []).forEach((b: any) => boqByKey.set(`${b.project_code}::${b.item_id}`, Number(b.planned_quantity)));
+
         const lowItems = ((stockData ?? []) as any[])
-          .filter((s) => {
-            const qty = Number(s.current_qty);
-            const threshold = s.min_threshold != null ? Number(s.min_threshold) : null;
-            return qty <= 0 || (threshold != null && qty <= threshold);
+          .map((s) => {
+            const planned = boqByKey.get(`${s.project_code}::${s.item_id}`) ?? null;
+            return {
+              id: s.id,
+              project_site: s.project_code, // renamed conceptually — UI prop still called project_site
+              current_qty: Number(s.current_qty),
+              min_threshold: planned, // use planned qty as the low-stock reference
+              unit: s.unit,
+              item_name: s.cps_items?.name ?? "Unknown",
+            };
           })
-          .map((s) => ({
-            id: s.id,
-            project_site: s.project_site,
-            current_qty: Number(s.current_qty),
-            min_threshold: s.min_threshold != null ? Number(s.min_threshold) : null,
-            unit: s.unit,
-            item_name: s.cps_items?.name ?? "Unknown",
-          }))
+          .filter((s) => s.current_qty <= 0 || (s.min_threshold != null && s.current_qty < s.min_threshold))
           .sort((a, b) => a.current_qty - b.current_qty)
           .slice(0, 8);
         setLowStockItems(lowItems);
