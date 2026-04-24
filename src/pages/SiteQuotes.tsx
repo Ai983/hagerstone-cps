@@ -226,6 +226,23 @@ export default function SiteQuotes() {
           .select("id").single();
         if (supErr) throw supErr;
         supplierId = (created as any).id as string;
+      } else {
+        // Existing vendor — if site just filled a previously-empty mobile / GSTIN, enrich the master
+        const patch: Record<string, string> = {};
+        if (!supplierMatch!.whatsapp && !supplierMatch!.phone && newMobile.trim()) {
+          patch.whatsapp = newMobile.trim();
+          patch.phone = newMobile.trim();
+        }
+        if (!supplierMatch!.gstin && newGstin.trim()) {
+          patch.gstin = newGstin.trim();
+        }
+        if (Object.keys(patch).length > 0) {
+          const { error: enrichErr } = await supabase
+            .from("cps_suppliers")
+            .update(patch as any)
+            .eq("id", supplierId);
+          if (enrichErr) throw enrichErr;
+        }
       }
 
       // 2. Upload the file
@@ -450,8 +467,11 @@ export default function SiteQuotes() {
                 value={newMobile}
                 onChange={(e) => setNewMobile(e.target.value)}
                 placeholder="10-digit number"
-                disabled={!!supplierMatch}
+                disabled={!!(supplierMatch && (supplierMatch.whatsapp || supplierMatch.phone))}
               />
+              {supplierMatch && !supplierMatch.whatsapp && !supplierMatch.phone && (
+                <p className="text-[10px] text-amber-700">Mobile missing for this vendor — add it to enrich the master</p>
+              )}
             </div>
 
             <div className="space-y-1">
@@ -460,8 +480,11 @@ export default function SiteQuotes() {
                 value={newGstin}
                 onChange={(e) => setNewGstin(e.target.value.toUpperCase())}
                 placeholder="15-char GSTIN"
-                disabled={!!supplierMatch}
+                disabled={!!(supplierMatch && supplierMatch.gstin)}
               />
+              {supplierMatch && !supplierMatch.gstin && (
+                <p className="text-[10px] text-amber-700">GSTIN missing for this vendor — add it to enrich the master</p>
+              )}
             </div>
 
             <div className="space-y-2">
