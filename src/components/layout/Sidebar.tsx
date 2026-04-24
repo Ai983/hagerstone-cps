@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, Upload, ClipboardCheck, KanbanSquare, LineChart, Boxes, ListChecks } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -18,7 +18,6 @@ const NAV = [
   { title: "Stock Overview", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor"] },
   { title: "Supplier Master", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Item Master", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head","it_head"] },
-  { title: "Invoice Upload", url: "/invoices/upload", icon: Upload, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor","procurement_head","it_head","management"] },
 ];
 
@@ -44,28 +43,28 @@ export function AppSidebar() {
   return (
     <div className={cn("hidden lg:flex flex-col shrink-0 transition-all duration-200 border-r", "bg-sidebar border-sidebar-border", collapsed ? "w-16" : "w-60")}>
       {/* Logo */}
-      <div className="flex items-center justify-between p-4 border-b border-sidebar-border">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-sidebar-border shrink-0">
         {!collapsed && (
           <div className="flex items-center gap-2">
-            <Building2 className="h-6 w-6 text-sidebar-primary shrink-0" />
+            <Building2 className="h-5 w-5 text-sidebar-primary shrink-0" />
             <div>
               <p className="text-sm font-bold text-sidebar-foreground leading-tight">Hagerstone</p>
-              <p className="text-xs text-sidebar-foreground/60">CPS v1.0</p>
+              <p className="text-[10px] text-sidebar-foreground/60">CPS v1.0</p>
             </div>
           </div>
         )}
-        {collapsed && <Building2 className="h-6 w-6 text-sidebar-primary mx-auto" />}
+        {collapsed && <Building2 className="h-5 w-5 text-sidebar-primary mx-auto" />}
         <button onClick={() => setCollapsed(!collapsed)} className={cn("h-6 w-6 flex items-center justify-center rounded text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent", collapsed && "mx-auto mt-0")}>
           {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </button>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
+      <nav className="flex-1 min-h-0 p-1.5 space-y-0.5 overflow-y-auto">
         {visible.map(item => (
           <NavLink key={item.url} to={item.url}
             className={({ isActive }) => cn(
-              "flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors",
+              "flex items-center gap-3 px-3 py-1.5 rounded-md text-[13px] transition-colors",
               collapsed && "justify-center px-2",
               isActive ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium" : "text-sidebar-foreground hover:bg-sidebar-accent/50"
             )}
@@ -78,11 +77,11 @@ export function AppSidebar() {
       </nav>
 
       {/* User footer */}
-      <div className="p-3 border-t border-sidebar-border">
+      <div className="p-2 border-t border-sidebar-border shrink-0">
         {!collapsed ? (
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <div className="flex items-center gap-2 px-1">
-              <div className="h-8 w-8 rounded-full bg-sidebar-primary/20 flex items-center justify-center shrink-0">
+              <div className="h-7 w-7 rounded-full bg-sidebar-primary/20 flex items-center justify-center shrink-0">
                 <span className="text-xs font-bold text-sidebar-primary">{user?.name?.charAt(0)}</span>
               </div>
               <div className="min-w-0">
@@ -90,7 +89,7 @@ export function AppSidebar() {
               </div>
             </div>
             <button onClick={async () => { await signOut(); navigate("/login"); }}
-              className="w-full flex items-center justify-center gap-2 text-xs px-3 py-2 rounded-md border border-sidebar-border text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors">
+              className="w-full flex items-center justify-center gap-2 text-xs px-3 py-1.5 rounded-md border border-sidebar-border text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors">
               <LogOut className="h-3.5 w-3.5" /> Sign Out
             </button>
           </div>
