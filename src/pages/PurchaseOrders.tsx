@@ -1430,7 +1430,7 @@ export default function PurchaseOrders() {
         const { data: newPoData, error: cloneErr } = await supabase
           .from("cps_purchase_orders")
           .insert([{
-            po_number: viewPo.po_number, // same number, different version
+            po_number: viewPo.po_number + `-R${newVersion - 1}`, // e.g. HI-PO-2026-0035-R1
             rfq_id: viewPo.rfq_id,
             pr_id: viewPo.pr_id,
             supplier_id: viewPo.supplier_id,
