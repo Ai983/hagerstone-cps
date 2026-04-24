@@ -13,7 +13,7 @@ const NAV = [
   { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Purchase Orders", url: "/purchase-orders", icon: ShoppingCart, roles: ["procurement_executive","procurement_head","it_head","management","finance"] },
-  { title: "Delivery Tracker", url: "/delivery", icon: Truck, roles: ["all"] },
+  { title: "Delivery Tracker", url: "/delivery", icon: Truck, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor"] },
   { title: "BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Stock Overview", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor"] },
   { title: "Supplier Master", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
@@ -26,7 +26,6 @@ const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Meri Requests", url: "/requisitions", icon: FileText },
   { title: "Upload Quotes", url: "/site-quotes", icon: Trophy },
-  { title: "Delivery Status", url: "/delivery", icon: Truck },
   { title: "Stock", url: "/stock", icon: Boxes },
   { title: "Saman List", url: "/items", icon: Package },
 ];
