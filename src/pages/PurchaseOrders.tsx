@@ -367,6 +367,11 @@ export default function PurchaseOrders() {
   const [reviseCancelReason, setReviseCancelReason] = useState("");
   const [reviseCancelSaving, setReviseCancelSaving] = useState(false);
 
+  // Revised quote upload state (shown in edit mode for revision POs)
+  const [revisedQuoteFile, setRevisedQuoteFile] = useState<File | null>(null);
+  const [revisedQuoteParsing, setRevisedQuoteParsing] = useState(false);
+  const [revisedQuoteResult, setRevisedQuoteResult] = useState<{ matched: number; total: number; quoteRef: string } | null>(null);
+
   const eligibleRfqsOptions = eligibleRfqs;
 
   const filteredRows = useMemo(() => {
@@ -1623,6 +1628,153 @@ export default function PurchaseOrders() {
 
   const cancelEditPo = () => {
     setEditMode(false);
+    setRevisedQuoteFile(null);
+    setRevisedQuoteResult(null);
+  };
+
+  const parseRevisedQuote = async () => {
+    if (!revisedQuoteFile || !viewPo) return;
+    setRevisedQuoteParsing(true);
+    try {
+      // 1. Convert file to base64
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(revisedQuoteFile);
+      });
+
+      const mediaType = revisedQuoteFile.type as string;
+      const isPdf = mediaType === "application/pdf";
+      const contentBlock = isPdf
+        ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
+        : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
+
+      const itemDescriptions = editLineItems.map((li, i) => `${i + 1}. ${li.description ?? ""}`).join("\n");
+
+      // 2. Call claude-proxy edge function
+      const { data, error: fnErr } = await supabase.functions.invoke("claude-proxy", {
+        body: {
+          model: "claude-opus-4-5",
+          max_tokens: 1500,
+          messages: [{
+            role: "user",
+            content: [
+              contentBlock,
+              {
+                type: "text",
+                text: `Extract quotation details from this supplier quote document.\n\nPO line items to match:\n${itemDescriptions}\n\nReturn ONLY valid JSON (no markdown):\n{\n  "payment_terms": "string or empty",\n  "delivery_days": number or null,\n  "line_items": [\n    {\n      "description": "item description as in quote",\n      "rate": number,\n      "unit": "string",\n      "gst_percent": number or null,\n      "brand": "string or empty",\n      "hsn_code": "string or empty"\n    }\n  ]\n}`,
+              },
+            ],
+          }],
+        },
+      });
+      if (fnErr) throw new Error("AI parse failed: " + fnErr.message);
+
+      const raw = (data as any)?.content?.[0]?.text || "{}";
+      const extracted = JSON.parse(raw.replace(/```json|```/g, "").trim());
+
+      // 3. Upload file to cps-quotes storage
+      const safeName = revisedQuoteFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storagePath = `po-revisions/${viewPo.id}/${Date.now()}_${safeName}`;
+      const { data: fileData, error: uploadErr } = await supabase.storage
+        .from("cps-quotes")
+        .upload(storagePath, revisedQuoteFile);
+      if (uploadErr) throw new Error("File upload failed: " + uploadErr.message);
+
+      // 4. Create new cps_quotes record (old quote stays intact for audit)
+      const totalQuotedValue = (extracted.line_items ?? []).reduce((sum: number, li: any) => {
+        const rate = Number(li.rate ?? 0);
+        const gst = Number(li.gst_percent ?? 18);
+        return sum + rate * (1 + gst / 100);
+      }, 0);
+
+      const { data: newQuote, error: quoteErr } = await supabase
+        .from("cps_quotes")
+        .insert([{
+          rfq_id: viewPo.rfq_id,
+          supplier_id: viewPo.supplier_id,
+          raw_file_path: fileData.path,
+          raw_file_type: revisedQuoteFile.type,
+          parse_status: "parsed",
+          channel: "po_revision",
+          payment_terms: extracted.payment_terms || null,
+          delivery_terms: extracted.delivery_days ? `${extracted.delivery_days} working days` : null,
+          total_quoted_value: totalQuotedValue || null,
+          ai_parsed_data: extracted,
+          ai_parse_confidence: 85,
+          parse_notes: `Revised quote uploaded for PO revision ${viewPo.po_number}`,
+          notes: `Revised quote for PO revision ${viewPo.po_number}. Original PO ID: ${viewPo.parent_po_id ?? viewPo.id}`,
+        }])
+        .select("id,blind_quote_ref")
+        .single();
+      if (quoteErr) throw new Error("Failed to save quote record: " + quoteErr.message);
+
+      const newQuoteId = (newQuote as any).id as string;
+      const quoteRef = (newQuote as any).blind_quote_ref as string ?? "—";
+
+      // 5. Match parsed line items to editLineItems and update rates
+      let matchCount = 0;
+      const updatedItems = editLineItems.map((li) => {
+        const desc = (li.description ?? "").toLowerCase();
+        const match = (extracted.line_items ?? []).find((ai: any) => {
+          const aiDesc = (ai.description ?? "").toLowerCase();
+          return desc.includes(aiDesc.substring(0, 8)) || aiDesc.includes(desc.substring(0, 8));
+        });
+        if (!match) return li;
+        matchCount++;
+        const rate = Number(match.rate ?? li.rate ?? 0);
+        const gst = Number(match.gst_percent ?? li.gst_percent ?? 18);
+        const qty = Number(li.quantity ?? 0);
+        return {
+          ...li,
+          rate,
+          gst_percent: gst,
+          brand: (match.brand || li.brand) ?? null,
+          hsn_code: (match.hsn_code || li.hsn_code) ?? null,
+          gst_amount: qty * rate * gst / 100,
+          total_value: qty * rate + qty * rate * gst / 100,
+        };
+      });
+      setEditLineItems(updatedItems);
+
+      // 6. Insert cps_quote_line_items for matched items
+      const quoteLineItems = updatedItems
+        .filter((li) => {
+          const desc = (li.description ?? "").toLowerCase();
+          return (extracted.line_items ?? []).some((ai: any) => {
+            const aiDesc = (ai.description ?? "").toLowerCase();
+            return desc.includes(aiDesc.substring(0, 8)) || aiDesc.includes(desc.substring(0, 8));
+          });
+        })
+        .map((li) => ({
+          quote_id: newQuoteId,
+          original_description: li.description,
+          brand: li.brand || null,
+          quantity: li.quantity,
+          unit: li.unit,
+          rate: li.rate,
+          gst_percent: li.gst_percent,
+          total_landed_rate: Number(li.rate ?? 0) * (1 + Number(li.gst_percent ?? 0) / 100),
+          hsn_code: li.hsn_code || null,
+          confidence_score: 85,
+          human_corrected: false,
+          ai_suggested: true,
+        }));
+      if (quoteLineItems.length > 0) {
+        await supabase.from("cps_quote_line_items").insert(quoteLineItems);
+      }
+
+      // 7. Update payment terms in edit form if AI extracted them
+      if (extracted.payment_terms) setEditPaymentTerms(extracted.payment_terms);
+
+      setRevisedQuoteResult({ matched: matchCount, total: editLineItems.length, quoteRef });
+      toast.success(`Quote parsed — ${matchCount} of ${editLineItems.length} items matched. Saved as ${quoteRef}.`);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to parse revised quote");
+    } finally {
+      setRevisedQuoteParsing(false);
+    }
   };
 
   const updateEditLineItem = (idx: number, field: keyof PoLineItemRow, value: string | number) => {
@@ -2581,6 +2733,51 @@ export default function PurchaseOrders() {
                     </div>
                   )}
                 </div>
+
+                {/* Upload Revised Quote — only shown in edit mode for revision POs */}
+                {editMode && viewPo.parent_po_id && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
+                    <div className="font-medium text-sm text-amber-900 flex items-center gap-2">
+                      <Upload className="h-4 w-4" />
+                      Upload Revised Quote from Supplier
+                      <span className="font-normal text-amber-700">(Optional — AI will auto-fill rates)</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Input
+                        type="file"
+                        accept=".pdf,.jpg,.jpeg,.png,.xlsx"
+                        className="h-9 text-sm max-w-xs bg-white"
+                        onChange={(e) => {
+                          setRevisedQuoteFile(e.target.files?.[0] ?? null);
+                          setRevisedQuoteResult(null);
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!revisedQuoteFile || revisedQuoteParsing}
+                        onClick={parseRevisedQuote}
+                        className="shrink-0"
+                      >
+                        {revisedQuoteParsing ? (
+                          <span className="flex items-center gap-1.5">
+                            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                            Parsing…
+                          </span>
+                        ) : "Parse Quote"}
+                      </Button>
+                    </div>
+                    {revisedQuoteResult && (
+                      <div className="flex items-start gap-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded p-2.5">
+                        <span className="text-green-600 mt-0.5">✓</span>
+                        <div>
+                          <span className="font-medium">Parsed — {revisedQuoteResult.matched} of {revisedQuoteResult.total} items matched. Rates updated.</span>
+                          <div className="text-xs text-green-700 mt-0.5">Saved as {revisedQuoteResult.quoteRef}. Review the line items below before saving.</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Line Items Table */}
                 <div className="space-y-3">
