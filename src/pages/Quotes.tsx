@@ -61,6 +61,7 @@ type QuoteListRow = {
   is_legacy: boolean | null;
   legacy_vendor_name: string | null;
   submitted_by_human: boolean | null;
+  is_site_submitted: boolean | null;
 };
 
 type QuoteLineItem = {
@@ -331,7 +332,7 @@ export default function Quotes() {
 
       const { data, error } = await supabase
         .from("cps_quotes")
-        .select("id, blind_quote_ref, rfq_id, quote_number, received_at, channel, parse_status, parse_confidence, compliance_status, payment_terms, delivery_terms, warranty_months, validity_days, total_quoted_value, total_landed_value, commercial_score, submitted_by_human, reviewed_at, supplier_id, ai_parse_confidence, freight_terms, reviewed_by, raw_file_path, missing_fields, ai_summary, ai_parsed_data, is_legacy, legacy_vendor_name")
+        .select("id, blind_quote_ref, rfq_id, quote_number, received_at, channel, parse_status, parse_confidence, compliance_status, payment_terms, delivery_terms, warranty_months, validity_days, total_quoted_value, total_landed_value, commercial_score, submitted_by_human, reviewed_at, supplier_id, ai_parse_confidence, freight_terms, reviewed_by, raw_file_path, missing_fields, ai_summary, ai_parsed_data, is_legacy, legacy_vendor_name, is_site_submitted")
         .order("received_at", { ascending: false });
       if (error) throw error;
 
@@ -1615,7 +1616,10 @@ Rules:
                                               {q.channel === "phone" && (
                                                 <Badge className="text-xs border bg-gray-100 text-gray-600 border-gray-300">📞 PHONE</Badge>
                                               )}
-                                              {q.submitted_by_human && !(q.is_legacy || q.channel === "legacy") && (
+                                              {q.is_site_submitted && (
+                                                <Badge className="text-xs border bg-amber-100 text-amber-800 border-amber-300" title="Uploaded by site engineer">🏆 SITE</Badge>
+                                              )}
+                                              {q.submitted_by_human && !q.is_site_submitted && !(q.is_legacy || q.channel === "legacy") && (
                                                 <Badge className="text-xs border bg-purple-100 text-purple-800 border-purple-300">✋ MANUAL</Badge>
                                               )}
                                               {q.supplier_id && supplierProfileMap[q.supplier_id] === false && (

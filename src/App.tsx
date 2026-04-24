@@ -68,6 +68,7 @@ const PRReview = lazyWithRetry(() => import("@/pages/PRReview"));
 const KanbanBoard = lazyWithRetry(() => import("@/pages/KanbanBoard"));
 const Analytics = lazyWithRetry(() => import("@/pages/Analytics"));
 const SiteStock = lazyWithRetry(() => import("@/pages/SiteStock"));
+const SiteQuotes = lazyWithRetry(() => import("@/pages/SiteQuotes"));
 const ProjectBOQ = lazyWithRetry(() => import("@/pages/ProjectBOQ"));
 const StockOverview = lazyWithRetry(() => import("@/pages/StockOverview"));
 const NotFound = lazyWithRetry(() => import("@/pages/NotFound"));
@@ -120,6 +121,7 @@ const App = () => (
               <Route path="/kanban" element={<Protected><KanbanBoard /></Protected>} />
               <Route path="/analytics" element={<Protected><Analytics /></Protected>} />
               <Route path="/stock" element={<Protected><SiteStock /></Protected>} />
+              <Route path="/site-quotes" element={<Protected><SiteQuotes /></Protected>} />
               <Route path="/boq" element={<Protected><ProjectBOQ /></Protected>} />
               <Route path="/stock-overview" element={<Protected><StockOverview /></Protected>} />
               <Route path="*" element={<NotFound />} />

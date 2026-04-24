@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +25,7 @@ const NAV = [
 const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Meri Requests", url: "/requisitions", icon: FileText },
+  { title: "Upload Quotes", url: "/site-quotes", icon: Trophy },
   { title: "Delivery Status", url: "/delivery", icon: Truck },
   { title: "Stock", url: "/stock", icon: Boxes },
   { title: "Saman List", url: "/items", icon: Package },

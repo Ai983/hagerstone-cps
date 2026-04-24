@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FileText, Send, ShoppingCart, Truck, MessageSquare,
-  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, ClipboardCheck, Boxes, ListChecks,
+  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, ClipboardCheck, Boxes, ListChecks, Trophy,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
@@ -30,8 +30,8 @@ const ADMIN_MORE = [
 const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Meri Requests", url: "/requisitions", icon: FileText },
+  { title: "Quotes", url: "/site-quotes", icon: Trophy },
   { title: "Stock", url: "/stock", icon: Boxes },
-  { title: "Delivery", url: "/delivery", icon: Truck },
 ];
 
 const ROLE_LABELS: Record<string, string> = {
