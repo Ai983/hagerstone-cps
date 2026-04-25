@@ -213,6 +213,7 @@ export default function Quotes() {
   const debouncedSearch = useDebounce(search);
   const [rfqFilter, setRfqFilter] = useState<string>("all");
   const [parseStatusFilter, setParseStatusFilter] = useState<QuoteParseStatus | "all">("all");
+  const [complianceFilter, setComplianceFilter] = useState<QuoteComplianceStatus | "all">("all");
   const [sortFieldQ, setSortFieldQ] = useState("received_at");
   const [sortDirQ, setSortDirQ] = useState<"asc" | "desc">("desc");
 
@@ -416,7 +417,8 @@ export default function Quotes() {
         : row.blind_quote_ref.toLowerCase().includes(q) || row.quote_number.toLowerCase().includes(q);
       const matchesRfq = rfqFilter === "all" ? true : row.rfq_id === rfqFilter;
       const matchesParseStatus = parseStatusFilter === "all" ? true : row.parse_status === parseStatusFilter;
-      return matchesSearch && matchesRfq && matchesParseStatus;
+      const matchesCompliance = complianceFilter === "all" ? true : row.compliance_status === complianceFilter;
+      return matchesSearch && matchesRfq && matchesParseStatus && matchesCompliance;
     });
     return [...list].sort((a, b) => {
       const av = (a as any)[sortFieldQ] ?? "";
@@ -424,7 +426,7 @@ export default function Quotes() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirQ === "asc" ? cmp : -cmp;
     });
-  }, [quotes, debouncedSearch, rfqFilter, parseStatusFilter, sortFieldQ, sortDirQ]);
+  }, [quotes, debouncedSearch, rfqFilter, parseStatusFilter, complianceFilter, sortFieldQ, sortDirQ]);
 
   const stats = useMemo(() => {
     const total = quotes.length;
@@ -453,7 +455,7 @@ export default function Quotes() {
   // Reset to first page whenever filters/search change
   useEffect(() => {
     setPage(0);
-  }, [debouncedSearch, rfqFilter, parseStatusFilter]);
+  }, [debouncedSearch, rfqFilter, parseStatusFilter, complianceFilter]);
 
   const groupedByPr = useMemo<GroupedPrRow[]>(() => {
     const groups = new Map<string, GroupedPrRow>();
@@ -1429,10 +1431,10 @@ Rules:
         <Card
           role="button"
           tabIndex={0}
-          onClick={() => setParseStatusFilter("approved")}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setParseStatusFilter("approved"); } }}
+          onClick={() => { setParseStatusFilter("all"); setComplianceFilter("pending"); }}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setParseStatusFilter("all"); setComplianceFilter("pending"); } }}
           className="cursor-pointer hover:bg-muted/40 transition-colors"
-          title="Quotes parsed by AI but not yet judged compliant — click to filter"
+          title="Quotes awaiting procurement's compliance decision — click to filter"
         >
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Needs Review</CardTitle>
@@ -1499,6 +1501,17 @@ Rules:
             <SelectItem value="failed">failed</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={complianceFilter} onValueChange={(v) => setComplianceFilter(v as any)}>
+          <SelectTrigger className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Compliance</SelectItem>
+            <SelectItem value="pending">pending</SelectItem>
+            <SelectItem value="compliant">compliant</SelectItem>
+            <SelectItem value="non_compliant">non_compliant</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="hidden lg:block space-y-3">
@@ -1550,11 +1563,11 @@ Rules:
                           ? "No quotes received yet"
                           : "No quotes match the current filter"}
                       </div>
-                      {quotes.length > 0 && (debouncedSearch || rfqFilter !== "all" || parseStatusFilter !== "all") && (
+                      {quotes.length > 0 && (debouncedSearch || rfqFilter !== "all" || parseStatusFilter !== "all" || complianceFilter !== "all") && (
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => { setSearch(""); setRfqFilter("all"); setParseStatusFilter("all"); }}
+                          onClick={() => { setSearch(""); setRfqFilter("all"); setParseStatusFilter("all"); setComplianceFilter("all"); }}
                         >
                           Clear filters
                         </Button>
