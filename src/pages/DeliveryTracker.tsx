@@ -632,6 +632,19 @@ export default function DeliveryTracker() {
       const supplierId = feedbackPo.supplier_id;
       if (!supplierId) throw new Error("No supplier for this PO");
 
+      // Guard against duplicate submissions — one feedback per (grn, user)
+      const { data: existing } = await supabase
+        .from("cps_vendor_feedback")
+        .select("id")
+        .eq("grn_id", feedbackGrnId)
+        .eq("submitted_by", user.id)
+        .limit(1);
+      if (existing && existing.length > 0) {
+        toast.error("Aapne is GRN ka feedback already submit kiya hai");
+        setFeedbackOpen(false);
+        return;
+      }
+
       const overall = (fbDelivery + fbQuality + fbPackaging + fbCommunication + fbPricing) / 5;
 
       await supabase.from("cps_vendor_feedback").insert([{
