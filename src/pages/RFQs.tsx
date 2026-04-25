@@ -934,13 +934,13 @@ export default function RFQs() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Request for Quotations</h1>
-          <p className="text-muted-foreground text-sm mt-1">Step 4 of procurement — create and dispatch RFQs.</p>
+          <h1 className="text-2xl font-bold text-foreground">RFQs (Vendor Quote Requests)</h1>
+          <p className="text-muted-foreground text-sm mt-1">Vendors ko quote request bhejo aur status track karo</p>
         </div>
         {canCreateRFQ && (
           <Button onClick={openDialog}>
             <Plus className="h-4 w-4 mr-2" />
-            Create RFQ
+            Naya RFQ Banao
           </Button>
         )}
       </div>

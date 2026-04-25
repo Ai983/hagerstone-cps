@@ -191,14 +191,14 @@ export default function ProjectBOQ() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">Project BOQ</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Define the Bill of Quantities for each project — the site team uses this list when updating stock.
+            Har project ke liye BOQ items add karo — site team isi list ke hisab se stock update karega.
           </p>
         </div>
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
         <Select value={projectCode} onValueChange={setProjectCode}>
-          <SelectTrigger className="w-72"><SelectValue placeholder="Select a project…" /></SelectTrigger>
+          <SelectTrigger className="w-72"><SelectValue placeholder="Project chuno…" /></SelectTrigger>
           <SelectContent>
             {projects.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
           </SelectContent>
@@ -207,7 +207,7 @@ export default function ProjectBOQ() {
         <div className="relative flex-1 min-w-[220px] max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search BOQ items…"
+            placeholder="BOQ items search karo…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
@@ -216,7 +216,7 @@ export default function ProjectBOQ() {
         </div>
 
         <Button onClick={openAdd} disabled={!projectCode}>
-          <Plus className="h-4 w-4 mr-1.5" /> Add Item to BOQ
+          <Plus className="h-4 w-4 mr-1.5" /> Naya Item Add Karo
         </Button>
       </div>
 
@@ -224,7 +224,7 @@ export default function ProjectBOQ() {
         <Card>
           <CardContent className="py-14 text-center space-y-3">
             <Package className="h-10 w-10 text-muted-foreground mx-auto" />
-            <p className="text-muted-foreground text-sm">Pick a project to view or edit its BOQ</p>
+            <p className="text-muted-foreground text-sm">BOQ dekhne ke liye project chuno</p>
           </CardContent>
         </Card>
       ) : (

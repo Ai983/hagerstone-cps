@@ -135,13 +135,13 @@ export default function StockOverview() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Stock Overview</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Live stock across every project. Items added by site outside the BOQ are tagged <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300 mx-1">EXTRA</Badge>.
+          Har project ka live stock yahan dikhta hai. BOQ ke baahar jo items site team ne add kiye hain unpe <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300 mx-1">EXTRA</Badge> tag lagta hai.
         </p>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Projects Tracked</div><div className="text-2xl font-bold">{stats.projects}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Stock Lines</div><div className="text-2xl font-bold">{stats.totalRows}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Projects Track Ho Rahe</div><div className="text-2xl font-bold">{stats.projects}</div></CardContent></Card>
+        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Stock Items</div><div className="text-2xl font-bold">{stats.totalRows}</div></CardContent></Card>
         <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground text-amber-700">Extra Items</div><div className="text-2xl font-bold text-amber-700">{stats.extras}</div></CardContent></Card>
       </div>
 
@@ -149,19 +149,19 @@ export default function StockOverview() {
         <Select value={projectFilter} onValueChange={setProjectFilter}>
           <SelectTrigger className="w-56"><SelectValue placeholder="All projects" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Projects</SelectItem>
+            <SelectItem value="all">Saare Projects</SelectItem>
             {projects.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
           </SelectContent>
         </Select>
 
         <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
           <input type="checkbox" checked={extrasOnly} onChange={(e) => setExtrasOnly(e.target.checked)} className="rounded" />
-          <span>Extras only</span>
+          <span>Sirf Extras</span>
         </label>
 
         <div className="relative flex-1 min-w-[220px] max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search item or project…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+          <Input placeholder="Item ya project search karo…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
       </div>
 

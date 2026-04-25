@@ -834,7 +834,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
           <p className="text-muted-foreground text-sm mt-1">{stats.active} active suppliers</p>
         </div>
         {canManageSuppliers && (
-          <Button onClick={openAdd}><Plus className="h-4 w-4 mr-2" />Add Supplier</Button>
+          <Button onClick={openAdd}><Plus className="h-4 w-4 mr-2" />Naya Supplier Add Karo</Button>
         )}
       </div>
 

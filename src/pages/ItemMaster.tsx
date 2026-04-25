@@ -407,12 +407,12 @@ export default function ItemMaster() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Item Master</h1>
-          <p className="text-muted-foreground text-sm mt-1">{items.length} items{items.filter(i => i.benchmark_rate != null).length > 0 ? ` · ${items.filter(i => i.benchmark_rate != null).length} with benchmark pricing` : ""}</p>
+          <p className="text-muted-foreground text-sm mt-1">{items.length} items{items.filter(i => i.benchmark_rate != null).length > 0 ? ` · ${items.filter(i => i.benchmark_rate != null).length} ka benchmark rate hai` : ""}</p>
         </div>
         {canManageSuppliers && activeTab === "items" && (
           <Button onClick={openAdd}>
             <Plus className="h-4 w-4 mr-2" />
-            Add Item
+            Naya Item Add Karo
           </Button>
         )}
       </div>

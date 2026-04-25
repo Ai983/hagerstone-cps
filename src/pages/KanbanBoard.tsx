@@ -568,9 +568,9 @@ export default function KanbanBoard() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Procurement Kanban</h1>
+          <h1 className="text-2xl font-bold text-foreground">Kanban Board</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            End-to-end pipeline from PR to GRN — live view of where each request stands
+            Har PR kis stage par hai — start se PR band hone tak ka live view
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={fetchAll} disabled={loading}>
@@ -583,7 +583,7 @@ export default function KanbanBoard() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card className="shadow-sm">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground mb-1">Active in Pipeline</div>
+            <div className="text-xs text-muted-foreground mb-1">Pipeline Mein</div>
             <div className="text-2xl font-bold text-foreground">
               {loading ? <Skeleton className="h-7 w-12" /> : overallStats.totalActive}
             </div>
@@ -591,7 +591,7 @@ export default function KanbanBoard() {
         </Card>
         <Card className="shadow-sm">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground mb-1">Closed</div>
+            <div className="text-xs text-muted-foreground mb-1">Band Ho Chuki</div>
             <div className="text-2xl font-bold text-foreground">
               {loading ? <Skeleton className="h-7 w-12" /> : overallStats.totalClosed}
             </div>
@@ -599,7 +599,7 @@ export default function KanbanBoard() {
         </Card>
         <Card className="shadow-sm">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground mb-1">Total PO Value</div>
+            <div className="text-xs text-muted-foreground mb-1">Total PO Amount</div>
             <div className="text-2xl font-bold text-foreground">
               {loading ? <Skeleton className="h-7 w-24" /> : fmtCurrency(overallStats.totalValue)}
             </div>
@@ -607,7 +607,7 @@ export default function KanbanBoard() {
         </Card>
         <Card className="shadow-sm">
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground mb-1">Avg Cycle Age</div>
+            <div className="text-xs text-muted-foreground mb-1">Avg Cycle Time</div>
             <div className="text-2xl font-bold text-foreground">
               {loading ? <Skeleton className="h-7 w-16" /> : `${overallStats.avgAge.toFixed(0)}d`}
             </div>
@@ -620,16 +620,16 @@ export default function KanbanBoard() {
         <div className="relative flex-1 min-w-[220px] max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search PR, RFQ, PO, supplier, project..."
+            placeholder="PR, RFQ, PO, supplier ya project search karo…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
           />
         </div>
         <Select value={projectFilter} onValueChange={setProjectFilter}>
-          <SelectTrigger className="w-56"><SelectValue placeholder="All projects" /></SelectTrigger>
+          <SelectTrigger className="w-56"><SelectValue placeholder="Saare projects" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Projects</SelectItem>
+            <SelectItem value="all">Saare Projects</SelectItem>
             {projectOptions.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
           </SelectContent>
         </Select>

@@ -211,10 +211,10 @@ export default function AuditLog() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Audit Log</h1>
-          <p className="text-muted-foreground text-sm mt-1">Complete immutable record of all system actions</p>
+          <p className="text-muted-foreground text-sm mt-1">System me hua har action ka permanent record</p>
         </div>
         <Badge className="bg-muted text-muted-foreground border-border/80 text-xs border-0">
-          Read Only — No edits or deletions permitted
+          Read Only — Edit ya delete nahi ho sakta
         </Badge>
       </div>
 

@@ -420,7 +420,7 @@ export default function Analytics() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">Analytics</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Procurement performance across projects, suppliers, and categories
+            Projects, suppliers aur categories ke hisaab se procurement performance
           </p>
         </div>
         <div className="flex items-center gap-2">

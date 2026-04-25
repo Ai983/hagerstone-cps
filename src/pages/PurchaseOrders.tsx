@@ -1919,24 +1919,24 @@ export default function PurchaseOrders() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Purchase Orders</h1>
-          <p className="text-muted-foreground text-sm mt-1">Steps 16–18 — approve and generate POs</p>
+          <p className="text-muted-foreground text-sm mt-1">PO approve karo aur supplier ko bhejo</p>
         </div>
         {isProcurementHead && (
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => setLegacyModalOpen(true)}>
               <Upload className="h-4 w-4 mr-2" />
-              Upload Legacy PO
+              Purana PO Upload
             </Button>
             <Button onClick={() => preloadCreate()} disabled={createLoading}>
               <Plus className="h-4 w-4 mr-2" />
-              Create PO
+              Naya PO Banao
             </Button>
           </div>
         )}
       </div>
 
       <div className="grid grid-cols-1 gap-3">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">Total POs</CardTitle>
@@ -1947,7 +1947,7 @@ export default function PurchaseOrders() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Pending Approval</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Approval Pending</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.pending}</div>
@@ -1955,7 +1955,7 @@ export default function PurchaseOrders() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Approved/Active</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Approve / Active</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.active}</div>
@@ -1963,7 +1963,7 @@ export default function PurchaseOrders() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Value</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Total Amount</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-foreground">{loading ? "—" : formatCurrency(stats.totalValue, canViewPrices)}</div>

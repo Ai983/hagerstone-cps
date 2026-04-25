@@ -2007,15 +2007,15 @@ Rules:
         <Card>
           <CardHeader>
             <CardTitle>Comparison Sheet</CardTitle>
-            <CardDescription>Generate a new comparison sheet for this RFQ.</CardDescription>
+            <CardDescription>Is RFQ ke liye ek nayi comparison sheet banao.</CardDescription>
           </CardHeader>
           <CardContent className="flex items-center justify-center flex-col gap-3 py-12 text-center">
             <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center">
               <Sparkles className="h-6 w-6 text-primary" />
             </div>
-            <div className="text-muted-foreground">No comparison sheet exists yet.</div>
+            <div className="text-muted-foreground">Abhi koi comparison sheet nahi bani hai.</div>
             <Button onClick={generateSheetIfMissing} disabled={generating}>
-              {generating ? "Generating..." : "Generate Comparison Sheet"}
+              {generating ? "Ban rahi hai..." : "Comparison Sheet Banao"}
             </Button>
           </CardContent>
         </Card>

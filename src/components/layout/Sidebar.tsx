@@ -14,10 +14,10 @@ const NAV = [
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Purchase Orders", url: "/purchase-orders", icon: ShoppingCart, roles: ["procurement_executive","procurement_head","it_head","management","finance"] },
   { title: "Delivery Tracker", url: "/delivery", icon: Truck, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor"] },
-  { title: "BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive","procurement_head","it_head","management"] },
+  { title: "Project BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Stock Overview", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor"] },
-  { title: "Supplier Master", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
-  { title: "Item Master", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head","it_head"] },
+  { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
+  { title: "Items", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head","it_head"] },
   { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor","procurement_head","it_head","management"] },
 ];
 
