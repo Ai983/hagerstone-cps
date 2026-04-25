@@ -102,15 +102,30 @@ export default function SiteQuotes() {
         (rfqRows ?? []).forEach((r: any) => { if (r.pr_id) rfqMap.set(r.pr_id, { id: r.id, rfq_number: r.rfq_number }); });
       }
 
-      const options: PrOption[] = (prRows ?? []).map((p: any) => ({
-        id: p.id,
-        pr_number: p.pr_number,
-        project_code: p.project_code,
-        project_site: p.project_site,
-        status: p.status,
-        rfq_id: rfqMap.get(p.id)?.id ?? null,
-        rfq_number: rfqMap.get(p.id)?.rfq_number ?? null,
-      }));
+      // Cut-off: drop any PR whose RFQ already has a comparison sheet — once
+      // procurement starts the comparison, no more late entries (matches the
+      // RFQ-deadline rule for external vendors).
+      const rfqIds = Array.from(rfqMap.values()).map((r) => r.id);
+      const lockedRfqIds = new Set<string>();
+      if (rfqIds.length > 0) {
+        const { data: compRows } = await supabase
+          .from("cps_comparison_sheets")
+          .select("rfq_id")
+          .in("rfq_id", rfqIds);
+        (compRows ?? []).forEach((c: any) => { if (c.rfq_id) lockedRfqIds.add(c.rfq_id); });
+      }
+
+      const options: PrOption[] = (prRows ?? [])
+        .map((p: any) => ({
+          id: p.id,
+          pr_number: p.pr_number,
+          project_code: p.project_code,
+          project_site: p.project_site,
+          status: p.status,
+          rfq_id: rfqMap.get(p.id)?.id ?? null,
+          rfq_number: rfqMap.get(p.id)?.rfq_number ?? null,
+        }))
+        .filter((p: PrOption) => !p.rfq_id || !lockedRfqIds.has(p.rfq_id));
       setPrs(options);
 
       // Load supplier master for autocomplete
@@ -355,7 +370,7 @@ export default function SiteQuotes() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Mere Quotes — Upload & Earn</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Raise PR ke baad apne vendor ka quote upload karo. Jab aapke vendor se PO ban jaye, invoice upload karo — procurement invoice verify karegi, fir aapko {POINTS_PER_WIN} points milenge.
+          Raise PR ke baad apne vendor ka quote upload karo — comparison shuru hone se pehle. Jab aapke vendor se PO ban jaye, invoice upload karo — procurement verify karegi, fir aapko {POINTS_PER_WIN} points milenge.
         </p>
       </div>
 
@@ -399,7 +414,7 @@ export default function SiteQuotes() {
         <Card>
           <CardContent className="py-14 text-center space-y-3">
             <FileText className="h-10 w-10 text-muted-foreground mx-auto" />
-            <p className="text-muted-foreground text-sm">Abhi koi active PR nahi hai — PR raise karne ke baad yahan quote upload kar sakte ho.</p>
+            <p className="text-muted-foreground text-sm">Abhi koi PR window mein nahi hai — comparison shuru hote hi quote upload band ho jata hai. Naya PR raise karke wahan quote add karo.</p>
           </CardContent>
         </Card>
       ) : !selectedPrId ? (
