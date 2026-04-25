@@ -207,6 +207,7 @@ export default function ComparisonSheetPage() {
   const [loading, setLoading] = useState(true);
   const [sheet, setSheet] = useState<ComparisonSheetRow | null>(null);
   const [rfq, setRfq] = useState<RfqRow | null>(null);
+  const [existingPo, setExistingPo] = useState<{ id: string; po_number: string } | null>(null);
   const [prLineItems, setPrLineItems] = useState<PrLineItem[]>([]);
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
 
@@ -349,6 +350,16 @@ export default function ComparisonSheetPage() {
 
       const sRow = sheetRow as ComparisonSheetRow;
       setSheet(sRow);
+
+      // Check if a PO has already been raised against this comparison sheet
+      // (prevents the "Create PO" button from showing twice and creating duplicates)
+      const { data: existingPoRows } = await supabase
+        .from("cps_purchase_orders")
+        .select("id, po_number")
+        .eq("comparison_sheet_id", sRow.id)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      setExistingPo(((existingPoRows ?? [])[0] as any) ?? null);
 
       // Load quotes + suppliers.
       const { data: quotesRows, error: quotesErr } = await supabase
@@ -1652,6 +1663,17 @@ Rules:
     if (!sheet || !rfq || !user) return;
     setCreatingPO(true);
     try {
+      // Guard against duplicate PO creation — race condition or manual API call
+      const { data: dupCheck } = await supabase
+        .from("cps_purchase_orders")
+        .select("id, po_number")
+        .eq("comparison_sheet_id", sheet.id)
+        .limit(1);
+      if (dupCheck && dupCheck.length > 0) {
+        toast.error(`PO already exists for this comparison sheet (${(dupCheck[0] as any).po_number})`);
+        setExistingPo(dupCheck[0] as any);
+        return;
+      }
       const supplierId = sheet.reviewer_recommendation;
       if (!supplierId) {
         toast.error("No recommended supplier selected");
@@ -3259,14 +3281,29 @@ Rules:
                 </span>
               )}
               {sheet.status === "approved" && (
-                <Button
-                  size="sm"
-                  className="ml-auto bg-green-600 hover:bg-green-700 text-white"
-                  onClick={openBankDialogForCreate}
-                  disabled={creatingPO}
-                >
-                  {creatingPO ? "Creating PO..." : "Create PO →"}
-                </Button>
+                existingPo ? (
+                  <div className="ml-auto flex items-center gap-2">
+                    <Badge className="bg-blue-100 text-blue-800 border-0">
+                      PO already created — {existingPo.po_number}
+                    </Badge>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => navigate("/purchase-orders")}
+                    >
+                      View PO →
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="ml-auto bg-green-600 hover:bg-green-700 text-white"
+                    onClick={openBankDialogForCreate}
+                    disabled={creatingPO}
+                  >
+                    {creatingPO ? "Creating PO..." : "Create PO →"}
+                  </Button>
+                )
               )}
             </div>
             {sheet.approval_notes && (
