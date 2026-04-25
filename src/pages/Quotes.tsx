@@ -212,8 +212,9 @@ export default function Quotes() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
   const [rfqFilter, setRfqFilter] = useState<string>("all");
-  const [parseStatusFilter, setParseStatusFilter] = useState<QuoteParseStatus | "all">("all");
-  const [complianceFilter, setComplianceFilter] = useState<QuoteComplianceStatus | "all">("all");
+  // Single combined status filter — Hinglish labels mapped to underlying parse + compliance states
+  type StatusFilter = "all" | "review_karna_hai" | "ok_hai" | "reject_kiya" | "ai_pending";
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortFieldQ, setSortFieldQ] = useState("received_at");
   const [sortDirQ, setSortDirQ] = useState<"asc" | "desc">("desc");
 
@@ -416,9 +417,21 @@ export default function Quotes() {
         ? true
         : row.blind_quote_ref.toLowerCase().includes(q) || row.quote_number.toLowerCase().includes(q);
       const matchesRfq = rfqFilter === "all" ? true : row.rfq_id === rfqFilter;
-      const matchesParseStatus = parseStatusFilter === "all" ? true : row.parse_status === parseStatusFilter;
-      const matchesCompliance = complianceFilter === "all" ? true : row.compliance_status === complianceFilter;
-      return matchesSearch && matchesRfq && matchesParseStatus && matchesCompliance;
+
+      let matchesStatus = true;
+      if (statusFilter === "review_karna_hai") {
+        // Procurement ko abhi compliance decision lena hai
+        matchesStatus = row.compliance_status === "pending"
+          && (row.parse_status === "parsed" || row.parse_status === "approved" || row.parse_status === "needs_review");
+      } else if (statusFilter === "ok_hai") {
+        matchesStatus = row.compliance_status === "compliant";
+      } else if (statusFilter === "reject_kiya") {
+        matchesStatus = row.compliance_status === "non_compliant";
+      } else if (statusFilter === "ai_pending") {
+        matchesStatus = row.parse_status === "pending" || row.parse_status === "failed";
+      }
+
+      return matchesSearch && matchesRfq && matchesStatus;
     });
     return [...list].sort((a, b) => {
       const av = (a as any)[sortFieldQ] ?? "";
@@ -426,7 +439,7 @@ export default function Quotes() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirQ === "asc" ? cmp : -cmp;
     });
-  }, [quotes, debouncedSearch, rfqFilter, parseStatusFilter, complianceFilter, sortFieldQ, sortDirQ]);
+  }, [quotes, debouncedSearch, rfqFilter, statusFilter, sortFieldQ, sortDirQ]);
 
   const stats = useMemo(() => {
     const total = quotes.length;
@@ -455,7 +468,7 @@ export default function Quotes() {
   // Reset to first page whenever filters/search change
   useEffect(() => {
     setPage(0);
-  }, [debouncedSearch, rfqFilter, parseStatusFilter, complianceFilter]);
+  }, [debouncedSearch, rfqFilter, statusFilter]);
 
   const groupedByPr = useMemo<GroupedPrRow[]>(() => {
     const groups = new Map<string, GroupedPrRow>();
@@ -1389,19 +1402,19 @@ Rules:
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Quotes</h1>
-          <p className="text-muted-foreground text-sm mt-1">Review incoming supplier quotes — Steps 6–9</p>
+          <h1 className="text-2xl font-bold text-foreground">Vendor Quotes</h1>
+          <p className="text-muted-foreground text-sm mt-1">Vendors ke quotes yahan dikhte hain — review karke OK ya reject karo</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button onClick={() => setLegacyModalOpen(true)} variant="default">
             <Paperclip className="h-4 w-4 mr-2" />
-            + Upload Legacy Quote
+            Purana Quote Upload
           </Button>
           <Button onClick={openLogDialog} variant="outline">
             <Plus className="h-4 w-4 mr-2" />
-            Log Quote Manually
+            Manually Quote Add
           </Button>
         </div>
       </div>
@@ -1410,17 +1423,23 @@ Rules:
       {!loading && loadError && (
         <Card className="border-destructive/30 bg-destructive/5">
           <CardContent className="py-6 flex flex-col items-center gap-3 text-center">
-            <div className="text-destructive font-medium">Unable to load quotes</div>
+            <div className="text-destructive font-medium">Quotes load nahi hue</div>
             <div className="text-sm text-muted-foreground max-w-md">{loadError}</div>
             <Button variant="outline" size="sm" onClick={fetchQuotes}>
-              Retry
+              Phir se try karo
             </Button>
           </CardContent>
         </Card>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-        <Card>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card
+          role="button"
+          tabIndex={0}
+          onClick={() => setStatusFilter("all")}
+          className="cursor-pointer hover:bg-muted/40 transition-colors"
+          title="Saare quotes dekho"
+        >
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Quotes</CardTitle>
           </CardHeader>
@@ -1431,29 +1450,35 @@ Rules:
         <Card
           role="button"
           tabIndex={0}
-          onClick={() => { setParseStatusFilter("all"); setComplianceFilter("pending"); }}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setParseStatusFilter("all"); setComplianceFilter("pending"); } }}
-          className="cursor-pointer hover:bg-muted/40 transition-colors"
-          title="Quotes awaiting procurement's compliance decision — click to filter"
+          onClick={() => setStatusFilter("review_karna_hai")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("review_karna_hai"); } }}
+          className="cursor-pointer hover:bg-amber-50 transition-colors border-amber-200"
+          title="Inka decision lena baki hai — click karke filter karo"
         >
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Needs Review</CardTitle>
+            <CardTitle className="text-sm font-medium text-amber-800">Review Karna Hai</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground">{stats.needsReview}</div>
+            <div className="text-2xl font-bold text-amber-900">{stats.needsReview}</div>
+          </CardContent>
+        </Card>
+        <Card
+          role="button"
+          tabIndex={0}
+          onClick={() => setStatusFilter("ok_hai")}
+          className="cursor-pointer hover:bg-green-50 transition-colors border-green-200"
+          title="Approve ho chuke quotes"
+        >
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-green-800">OK Hai</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-900">{stats.compliant}</div>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Compliant</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-foreground">{stats.compliant}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Avg Confidence</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">AI Confidence</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-foreground">
@@ -1463,23 +1488,23 @@ Rules:
         </Card>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[260px]">
+      {/* Filters — sirf 3 cheezein: search, RFQ, status */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 flex-wrap">
+        <div className="relative w-full sm:flex-1 sm:min-w-[260px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search blind ref (QT-...) or quote reference"
+            placeholder="QT number ya quote ref se search karo…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
           />
         </div>
         <Select value={rfqFilter} onValueChange={setRfqFilter}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger className="w-full sm:w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All RFQs</SelectItem>
+            <SelectItem value="all">Saare RFQs</SelectItem>
             {rfqs.map((r) => (
               <SelectItem key={r.id} value={r.id}>
                 {r.rfq_number}
@@ -1487,29 +1512,16 @@ Rules:
             ))}
           </SelectContent>
         </Select>
-        <Select value={parseStatusFilter} onValueChange={(v) => setParseStatusFilter(v as any)}>
-          <SelectTrigger className="w-44">
+        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
+          <SelectTrigger className="w-full sm:w-52">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Parse Status</SelectItem>
-            <SelectItem value="pending">pending</SelectItem>
-            <SelectItem value="parsed">parsed</SelectItem>
-            <SelectItem value="needs_review">needs_review</SelectItem>
-            <SelectItem value="reviewed">reviewed</SelectItem>
-            <SelectItem value="approved">approved</SelectItem>
-            <SelectItem value="failed">failed</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={complianceFilter} onValueChange={(v) => setComplianceFilter(v as any)}>
-          <SelectTrigger className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Compliance</SelectItem>
-            <SelectItem value="pending">pending</SelectItem>
-            <SelectItem value="compliant">compliant</SelectItem>
-            <SelectItem value="non_compliant">non_compliant</SelectItem>
+            <SelectItem value="all">Saare Status</SelectItem>
+            <SelectItem value="review_karna_hai">Review Karna Hai</SelectItem>
+            <SelectItem value="ok_hai">OK Hai</SelectItem>
+            <SelectItem value="reject_kiya">Reject Kiya</SelectItem>
+            <SelectItem value="ai_pending">AI Parse Pending</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -1517,12 +1529,12 @@ Rules:
       <div className="hidden lg:block space-y-3">
       {!loading && groupedByPr.length > 0 && (
         <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, groupedByPr.length)} of {groupedByPr.length} PRs</span>
+          <span>{groupedByPr.length} PRs me se {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, groupedByPr.length)} dikha rahe hain</span>
           {totalPages > 1 && (
             <div className="flex items-center gap-1">
-              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Prev</Button>
+              <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Pichla</Button>
               <span className="text-xs px-2">Page {page + 1}/{totalPages}</span>
-              <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Next</Button>
+              <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Agla</Button>
             </div>
           )}
         </div>
@@ -1533,13 +1545,13 @@ Rules:
             <TableHeader>
               <TableRow>
                 <TableHead className="w-10"></TableHead>
-                <TableHead>PR Number</TableHead>
-                <TableHead>Project Name</TableHead>
-                <TableHead>Project Site</TableHead>
-                <TableHead>Raised By</TableHead>
+                <TableHead>PR No.</TableHead>
+                <TableHead>Project</TableHead>
+                <TableHead>Site</TableHead>
+                <TableHead>Raise Kiya</TableHead>
                 <TableHead>RFQ</TableHead>
                 <TableHead className="text-center">Quotes</TableHead>
-                <TableHead>Latest Received</TableHead>
+                <TableHead>Aakhri Quote</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1560,16 +1572,16 @@ Rules:
                       <Flag className="h-5 w-5" />
                       <div className="text-sm">
                         {quotes.length === 0
-                          ? "No quotes received yet"
-                          : "No quotes match the current filter"}
+                          ? "Abhi koi quote nahi aaya"
+                          : "Is filter pe koi quote nahi mila"}
                       </div>
-                      {quotes.length > 0 && (debouncedSearch || rfqFilter !== "all" || parseStatusFilter !== "all" || complianceFilter !== "all") && (
+                      {quotes.length > 0 && (debouncedSearch || rfqFilter !== "all" || statusFilter !== "all") && (
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => { setSearch(""); setRfqFilter("all"); setParseStatusFilter("all"); setComplianceFilter("all"); }}
+                          onClick={() => { setSearch(""); setRfqFilter("all"); setStatusFilter("all"); }}
                         >
-                          Clear filters
+                          Filter hatao
                         </Button>
                       )}
                     </div>
@@ -1717,7 +1729,7 @@ Rules:
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)
         ) : filteredQuotes.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">
-            {quotes.length === 0 ? "No quotes received yet" : "No quotes match the current filter"}
+            {quotes.length === 0 ? "Abhi koi quote nahi aaya" : "Is filter pe koi quote nahi mila"}
           </div>
         ) : (
           filteredQuotes.map((q) => {
