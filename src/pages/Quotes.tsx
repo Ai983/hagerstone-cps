@@ -415,7 +415,7 @@ export default function Quotes() {
     const list = quotes.filter((row) => {
       const matchesSearch = !q
         ? true
-        : row.blind_quote_ref.toLowerCase().includes(q) || row.quote_number.toLowerCase().includes(q);
+        : (row.blind_quote_ref ?? "").toLowerCase().includes(q) || (row.quote_number ?? "").toLowerCase().includes(q);
       const matchesRfq = rfqFilter === "all" ? true : row.rfq_id === rfqFilter;
 
       let matchesStatus = true;

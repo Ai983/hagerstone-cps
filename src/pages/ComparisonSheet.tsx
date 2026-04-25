@@ -365,7 +365,8 @@ export default function ComparisonSheetPage() {
       const { data: quotesRows, error: quotesErr } = await supabase
         .from("cps_quotes")
         .select("id,rfq_id,supplier_id,parse_status,total_quoted_value,total_landed_value,commercial_score,compliance_status,payment_terms,delivery_terms,warranty_months,validity_days,raw_file_path,raw_file_type,legacy_file_url,channel,is_legacy")
-        .eq("rfq_id", rfqId);
+        .eq("rfq_id", rfqId)
+        .neq("channel", "po_revision");
       if (quotesErr) throw quotesErr;
 
       const quotes = (quotesRows ?? []) as QuoteRow[];
@@ -631,7 +632,7 @@ export default function ComparisonSheetPage() {
         return;
       }
 
-      const { data: quotes, error: qErr } = await supabase.from("cps_quotes").select("id").eq("rfq_id", rfqId);
+      const { data: quotes, error: qErr } = await supabase.from("cps_quotes").select("id").eq("rfq_id", rfqId).neq("channel", "po_revision");
       if (qErr) throw qErr;
       const total = (quotes ?? []).length;
 

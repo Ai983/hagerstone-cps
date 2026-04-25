@@ -1906,10 +1906,11 @@ export default function PurchaseOrders() {
   };
 
   const stats = useMemo(() => {
-    const total = rows.length;
-    const pending = rows.filter((r) => r.status === "pending_approval").length;
-    const active = rows.filter((r) => ["approved", "sent", "acknowledged", "dispatched", "delivered"].includes(String(r.status))).length;
-    const totalValue = rows.reduce((acc, r) => acc + Number(r.grand_total ?? 0), 0);
+    const liveRows = rows.filter((r) => r.status !== "superseded" && r.status !== "cancelled");
+    const total = liveRows.length;
+    const pending = liveRows.filter((r) => r.status === "pending_approval").length;
+    const active = liveRows.filter((r) => ["approved", "sent", "acknowledged", "dispatched", "delivered"].includes(String(r.status))).length;
+    const totalValue = liveRows.reduce((acc, r) => acc + Number(r.grand_total ?? 0), 0);
     return { total, pending, active, totalValue };
   }, [rows]);
 
@@ -2782,102 +2783,131 @@ export default function PurchaseOrders() {
                 {/* Line Items Table */}
                 <div className="space-y-3">
                   <div className="font-medium">Line Items</div>
+                  {/* EDIT MODE — card layout, no horizontal scroll */}
+                  {editMode ? (
+                    <div className="space-y-2">
+                      {editLineItems.length === 0 && (
+                        <div className="text-center py-6 text-muted-foreground text-sm border rounded-lg border-dashed">No line items — click Add below</div>
+                      )}
+                      {editLineItems.map((li, idx) => {
+                        const qty = Number(li.quantity ?? 0);
+                        const rate = Number(li.rate ?? 0);
+                        const gst = Number(li.gst_percent ?? 0);
+                        const lineTotal = qty * rate * (1 + gst / 100);
+                        return (
+                          <div key={li.id} className="border rounded-lg p-3 bg-muted/30 space-y-2">
+                            {/* Row 1: number + description + delete */}
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground font-medium w-5 shrink-0">{idx + 1}</span>
+                              <Input
+                                value={li.description ?? ""}
+                                onChange={(e) => updateEditLineItem(idx, "description", e.target.value)}
+                                placeholder="Item description"
+                                className="h-8 text-sm flex-1"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => deleteEditLineItem(idx)}
+                                className="h-7 w-7 shrink-0 flex items-center justify-center rounded hover:bg-red-50 text-red-400 hover:text-red-600"
+                                title="Remove item"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                            {/* Row 2: qty / unit / rate / gst / auto total */}
+                            <div className="flex items-center gap-2 flex-wrap pl-7">
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-[10px] text-muted-foreground">Qty</span>
+                                <Input type="number" value={li.quantity ?? 0} onChange={(e) => updateEditLineItem(idx, "quantity", Number(e.target.value))} className="h-8 text-sm w-20" />
+                              </div>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-[10px] text-muted-foreground">Unit</span>
+                                <Input value={li.unit ?? ""} onChange={(e) => updateEditLineItem(idx, "unit", e.target.value)} placeholder="nos" className="h-8 text-sm w-20" />
+                              </div>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-[10px] text-muted-foreground">Rate (₹)</span>
+                                <Input type="number" value={li.rate ?? 0} onChange={(e) => updateEditLineItem(idx, "rate", Number(e.target.value))} className="h-8 text-sm w-28 text-right" />
+                              </div>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-[10px] text-muted-foreground">GST %</span>
+                                <Input type="number" value={li.gst_percent ?? 0} onChange={(e) => updateEditLineItem(idx, "gst_percent", Number(e.target.value))} className="h-8 text-sm w-16" />
+                              </div>
+                              <div className="flex flex-col gap-0.5 ml-1">
+                                <span className="text-[10px] text-muted-foreground">Total (incl. GST)</span>
+                                <div className="h-8 flex items-center text-sm font-semibold text-primary px-2 bg-background border rounded-md min-w-[90px]">
+                                  {canViewPrices ? `₹${lineTotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                                </div>
+                              </div>
+                            </div>
+                            {/* Row 3: brand / hsn (secondary) */}
+                            <div className="flex items-center gap-2 flex-wrap pl-7">
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-[10px] text-muted-foreground">Brand / Make</span>
+                                <Input value={li.brand ?? ""} onChange={(e) => updateEditLineItem(idx, "brand", e.target.value)} placeholder="Optional" className="h-7 text-xs w-40" />
+                              </div>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-[10px] text-muted-foreground">HSN Code</span>
+                                <Input value={li.hsn_code ?? ""} onChange={(e) => updateEditLineItem(idx, "hsn_code", e.target.value)} placeholder="Optional" className="h-7 text-xs w-28" />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <button
+                        type="button"
+                        onClick={addEditLineItem}
+                        className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-medium px-3 py-2 rounded-lg border border-dashed border-primary/40 hover:border-primary/70 hover:bg-primary/5 w-full justify-center mt-1"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Add Line Item
+                      </button>
+                    </div>
+                  ) : (
+                  /* VIEW MODE — compact table */
                   <div className="overflow-x-auto">
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead className="w-[70px]">Sr.No</TableHead>
+                          <TableHead className="w-8">#</TableHead>
                           <TableHead>Description</TableHead>
-                          <TableHead>Brand/Make</TableHead>
-                          <TableHead>HSN</TableHead>
-                          <TableHead>Qty</TableHead>
-                          <TableHead>Unit</TableHead>
-                          <TableHead className="text-right">Rate {canViewPrices ? "(₹)" : ""}</TableHead>
-                          <TableHead>GST%</TableHead>
-                          <TableHead className="text-right">GST Amt</TableHead>
-                          <TableHead className="text-right">Total {canViewPrices ? "(₹)" : ""}</TableHead>
-                          {editMode && <TableHead className="w-8"></TableHead>}
+                          <TableHead className="w-14">Qty</TableHead>
+                          <TableHead className="w-14">Unit</TableHead>
+                          <TableHead className="text-right w-24">Rate (₹)</TableHead>
+                          <TableHead className="w-14">GST%</TableHead>
+                          <TableHead className="text-right w-24">GST Amt</TableHead>
+                          <TableHead className="text-right w-28">Total (₹)</TableHead>
+                          <TableHead className="w-28">Brand/Make</TableHead>
+                          <TableHead className="w-20">HSN</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {(editMode ? editLineItems : viewPoLineItems).length === 0 && (
+                        {viewPoLineItems.length === 0 && (
                           <TableRow>
-                            <TableCell colSpan={editMode ? 11 : 10} className="text-center py-6 text-muted-foreground text-sm">
+                            <TableCell colSpan={10} className="text-center py-6 text-muted-foreground text-sm">
                               {viewPo.source === "legacy"
                                 ? "No itemised line items — this is a legacy PO uploaded as a PDF. See Payment Schedule below for amounts."
                                 : "No line items"}
                             </TableCell>
                           </TableRow>
                         )}
-                        {(editMode ? editLineItems : viewPoLineItems).map((li, idx) => (
+                        {viewPoLineItems.map((li, idx) => (
                           <TableRow key={li.id}>
-                            <TableCell className="text-muted-foreground">{idx + 1}</TableCell>
-                            <TableCell className="min-w-[240px]">
-                              {editMode ? (
-                                <Input value={li.description ?? ""} onChange={(e) => updateEditLineItem(idx, "description", e.target.value)} className="h-8 text-sm" />
-                              ) : (li.description ?? "—")}
-                            </TableCell>
-                            <TableCell>
-                              {editMode ? (
-                                <Input value={li.brand ?? ""} onChange={(e) => updateEditLineItem(idx, "brand", e.target.value)} className="h-8 text-sm w-24" />
-                              ) : (li.brand ?? "—")}
-                            </TableCell>
-                            <TableCell>
-                              {editMode ? (
-                                <Input value={li.hsn_code ?? ""} onChange={(e) => updateEditLineItem(idx, "hsn_code", e.target.value)} className="h-8 text-sm w-20" />
-                              ) : (li.hsn_code ?? "—")}
-                            </TableCell>
-                            <TableCell>
-                              {editMode ? (
-                                <Input type="number" value={li.quantity ?? 0} onChange={(e) => updateEditLineItem(idx, "quantity", Number(e.target.value))} className="h-8 text-sm w-16" />
-                              ) : (li.quantity ?? 0)}
-                            </TableCell>
-                            <TableCell>
-                              {editMode ? (
-                                <Input value={li.unit ?? ""} onChange={(e) => updateEditLineItem(idx, "unit", e.target.value)} className="h-8 text-sm w-16" />
-                              ) : (li.unit ?? "—")}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {editMode ? (
-                                <Input type="number" value={li.rate ?? 0} onChange={(e) => updateEditLineItem(idx, "rate", Number(e.target.value))} className="h-8 text-sm w-20 text-right" />
-                              ) : formatCurrency(li.rate, canViewPrices)}
-                            </TableCell>
-                            <TableCell>
-                              {editMode ? (
-                                <Input type="number" value={li.gst_percent ?? 0} onChange={(e) => updateEditLineItem(idx, "gst_percent", Number(e.target.value))} className="h-8 text-sm w-16" />
-                              ) : (li.gst_percent ?? "—")}
-                            </TableCell>
+                            <TableCell className="text-muted-foreground text-xs">{idx + 1}</TableCell>
+                            <TableCell>{li.description ?? "—"}</TableCell>
+                            <TableCell>{li.quantity ?? 0}</TableCell>
+                            <TableCell>{li.unit ?? "—"}</TableCell>
+                            <TableCell className="text-right">{formatCurrency(li.rate, canViewPrices)}</TableCell>
+                            <TableCell>{li.gst_percent ?? "—"}</TableCell>
                             <TableCell className="text-right">{formatCurrency(li.gst_amount, canViewPrices)}</TableCell>
                             <TableCell className="text-right font-medium">{formatCurrency(li.total_value, canViewPrices)}</TableCell>
-                            {editMode && (
-                              <TableCell>
-                                <button
-                                  type="button"
-                                  onClick={() => deleteEditLineItem(idx)}
-                                  className="h-7 w-7 flex items-center justify-center rounded hover:bg-red-50 text-red-400 hover:text-red-600"
-                                  title="Remove this line item"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              </TableCell>
-                            )}
+                            <TableCell>{li.brand ?? "—"}</TableCell>
+                            <TableCell>{li.hsn_code ?? "—"}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
                     </Table>
-                    {editMode && (
-                      <div className="pt-2 pb-1">
-                        <button
-                          type="button"
-                          onClick={addEditLineItem}
-                          className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-medium px-2 py-1 rounded hover:bg-primary/5"
-                        >
-                          <Plus className="h-3.5 w-3.5" />
-                          Add Line Item
-                        </button>
-                      </div>
-                    )}
                   </div>
+                  )}
 
                   {/* Footer totals — derive from payment schedule when line items are empty (legacy POs) */}
                   {(() => {

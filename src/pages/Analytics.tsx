@@ -167,6 +167,7 @@ export default function Analytics() {
   // Filters
   const filteredPos = useMemo(() => {
     return pos.filter((p) => {
+      if (p.status === "superseded" || p.status === "cancelled") return false;
       if (projectFilter !== "all" && p.project_code !== projectFilter) return false;
       if (periodFilter !== "all" && p.created_at) {
         const d = new Date(p.created_at);
