@@ -703,12 +703,9 @@ export default function PurchaseRequisitions() {
   const [itemsLoading, setItemsLoading] = useState(true);
 
   const isRequestor = user?.role === 'requestor' || user?.role === 'site_receiver';
-  const [lang, setLang] = useState<'en' | 'hi'>(isRequestor ? 'hi' : 'en');
+  // Hinglish is the default for every role — toggle in the header lets anyone switch to English.
+  const [lang, setLang] = useState<'en' | 'hi'>('hi');
   const t = (key: string) => lang === 'hi' ? (hindi[key] ?? key) : key;
-
-  useEffect(() => {
-    if (isRequestor) setLang('hi');
-  }, [isRequestor]);
 
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [projectSelMode, setProjectSelMode] = useState<'select' | 'text'>('select');
