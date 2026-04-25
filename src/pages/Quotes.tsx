@@ -428,7 +428,14 @@ export default function Quotes() {
 
   const stats = useMemo(() => {
     const total = quotes.length;
-    const needsReview = quotes.filter((q) => q.parse_status === "needs_review").length;
+    // "Needs Review" = quotes the AI has finished extracting but procurement hasn't
+    // made a compliance call on yet. parse_status === "needs_review" alone misses
+    // the much larger pile of parsed/approved quotes whose compliance is still pending.
+    const needsReview = quotes.filter((q) => {
+      if (q.parse_status === "needs_review") return true;
+      if (q.compliance_status === "pending" && (q.parse_status === "parsed" || q.parse_status === "approved")) return true;
+      return false;
+    }).length;
     const compliant = quotes.filter((q) => q.compliance_status === "compliant").length;
     const confValues = quotes.map((q) => q.parse_confidence).filter((x): x is number => typeof x === "number" && !Number.isNaN(x));
     const avg = confValues.length ? confValues.reduce((a, b) => a + b, 0) / confValues.length : null;
@@ -1419,7 +1426,14 @@ Rules:
             <div className="text-2xl font-bold text-foreground">{stats.total}</div>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          role="button"
+          tabIndex={0}
+          onClick={() => setParseStatusFilter("approved")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setParseStatusFilter("approved"); } }}
+          className="cursor-pointer hover:bg-muted/40 transition-colors"
+          title="Quotes parsed by AI but not yet judged compliant — click to filter"
+        >
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Needs Review</CardTitle>
           </CardHeader>
@@ -1531,7 +1545,20 @@ Rules:
                   <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
                     <div className="flex items-center justify-center gap-3">
                       <Flag className="h-5 w-5" />
-                      <div className="text-sm">No quotes received yet</div>
+                      <div className="text-sm">
+                        {quotes.length === 0
+                          ? "No quotes received yet"
+                          : "No quotes match the current filter"}
+                      </div>
+                      {quotes.length > 0 && (debouncedSearch || rfqFilter !== "all" || parseStatusFilter !== "all") && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => { setSearch(""); setRfqFilter("all"); setParseStatusFilter("all"); }}
+                        >
+                          Clear filters
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -1676,7 +1703,9 @@ Rules:
         {loading ? (
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)
         ) : filteredQuotes.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">No quotes received yet</div>
+          <div className="text-center py-8 text-muted-foreground text-sm">
+            {quotes.length === 0 ? "No quotes received yet" : "No quotes match the current filter"}
+          </div>
         ) : (
           filteredQuotes.map((q) => {
             const rfq = rfqById[q.rfq_id];
