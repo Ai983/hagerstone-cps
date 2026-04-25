@@ -411,16 +411,11 @@ export default function Quotes() {
   }, []);
 
   const filteredQuotes = useMemo(() => {
-    const q = debouncedSearch.trim().toLowerCase();
     const list = quotes.filter((row) => {
-      const matchesSearch = !q
-        ? true
-        : (row.blind_quote_ref ?? "").toLowerCase().includes(q) || (row.quote_number ?? "").toLowerCase().includes(q);
       const matchesRfq = rfqFilter === "all" ? true : row.rfq_id === rfqFilter;
 
       let matchesStatus = true;
       if (statusFilter === "review_karna_hai") {
-        // Procurement ko abhi compliance decision lena hai
         matchesStatus = row.compliance_status === "pending"
           && (row.parse_status === "parsed" || row.parse_status === "approved" || row.parse_status === "needs_review");
       } else if (statusFilter === "ok_hai") {
@@ -431,7 +426,7 @@ export default function Quotes() {
         matchesStatus = row.parse_status === "pending" || row.parse_status === "failed";
       }
 
-      return matchesSearch && matchesRfq && matchesStatus;
+      return matchesRfq && matchesStatus;
     });
     return [...list].sort((a, b) => {
       const av = (a as any)[sortFieldQ] ?? "";
@@ -502,8 +497,24 @@ export default function Quotes() {
     });
   }, [filteredQuotes, rfqById, prById]);
 
-  const totalPages = Math.max(1, Math.ceil(groupedByPr.length / PAGE_SIZE));
-  const paginatedGroups = groupedByPr.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // Text search at group level — only matches what's VISIBLE in the PR row
+  const searchedGroups = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    if (!q) return groupedByPr;
+    return groupedByPr.filter((g) => {
+      const prNum = (g.pr?.pr_number ?? "").toLowerCase();
+      const site = (g.pr?.project_site ?? "").toLowerCase();
+      const code = (g.pr?.project_code ?? "").toLowerCase();
+      const raisedBy = (g.pr?.requested_by_name ?? "").toLowerCase();
+      const rfqNums = g.rfq_numbers.join(" ").toLowerCase();
+      // blind refs as secondary — user can still find QT-XXXX but it won't false-positive on plain numbers
+      const blindRefs = g.quotes.map((qt) => (qt.blind_quote_ref ?? "")).join(" ").toLowerCase();
+      return prNum.includes(q) || site.includes(q) || code.includes(q) || raisedBy.includes(q) || rfqNums.includes(q) || blindRefs.includes(q);
+    });
+  }, [groupedByPr, debouncedSearch]);
+
+  const totalPages = Math.max(1, Math.ceil(searchedGroups.length / PAGE_SIZE));
+  const paginatedGroups = searchedGroups.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const confidenceEl = (c: number | null) => {
     const conf = confidenceTone(c);
@@ -1493,7 +1504,7 @@ Rules:
         <div className="relative w-full sm:flex-1 sm:min-w-[260px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="QT number ya quote ref se search karo…"
+            placeholder="PR number, RFQ number, site ya vendor se search karo…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
@@ -1527,9 +1538,9 @@ Rules:
       </div>
 
       <div className="hidden lg:block space-y-3">
-      {!loading && groupedByPr.length > 0 && (
+      {!loading && searchedGroups.length > 0 && (
         <div className="flex items-center justify-between text-sm text-muted-foreground">
-          <span>{groupedByPr.length} PRs me se {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, groupedByPr.length)} dikha rahe hain</span>
+          <span>{searchedGroups.length} PRs me se {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, searchedGroups.length)} dikha rahe hain</span>
           {totalPages > 1 && (
             <div className="flex items-center gap-1">
               <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Pichla</Button>
@@ -1565,7 +1576,7 @@ Rules:
                     ))}
                   </TableRow>
                 ))
-              ) : groupedByPr.length === 0 ? (
+              ) : searchedGroups.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
                     <div className="flex items-center justify-center gap-3">
