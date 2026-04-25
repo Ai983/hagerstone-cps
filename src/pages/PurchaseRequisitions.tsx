@@ -719,7 +719,12 @@ export default function PurchaseRequisitions() {
   const [pendingItemReqs, setPendingItemReqs] = useState<PendingItemReq[]>([]);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  // Procurement lands directly on the actionable pile ("Pending Review").
+  // Requestors get reset to "all" by the effect below — they use the Kanban card view, not the triage list.
+  const [statusFilter, setStatusFilter] = useState<string>("review");
+  useEffect(() => {
+    if (isRequestor) setStatusFilter("all");
+  }, [isRequestor]);
   const [sortField, setSortFieldPR] = useState("created_at");
   const [sortDir, setSortDirPR] = useState<"asc" | "desc">("desc");
   const [dateFrom, setDateFrom] = useState("");
