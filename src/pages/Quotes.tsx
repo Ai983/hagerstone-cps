@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger, PopoverClose } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -1420,14 +1420,42 @@ Rules:
           <p className="text-muted-foreground text-sm mt-1">Vendors ke quotes yahan dikhte hain — review karke OK ya reject karo</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Button onClick={() => setLegacyModalOpen(true)} variant="default">
-            <Paperclip className="h-4 w-4 mr-2" />
-            Purana Quote Upload
-          </Button>
-          <Button onClick={openLogDialog} variant="outline">
-            <Plus className="h-4 w-4 mr-2" />
-            Manually Quote Add
-          </Button>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="default">
+                <Plus className="h-4 w-4 mr-2" />
+                Quote Add Karo
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-72 p-2" align="end">
+              <PopoverClose asChild>
+                <button
+                  type="button"
+                  onClick={() => setLegacyModalOpen(true)}
+                  className="w-full text-left rounded-md px-3 py-2.5 hover:bg-muted flex items-start gap-3"
+                >
+                  <Paperclip className="h-4 w-4 mt-0.5 text-primary shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium">PDF / Photo Upload</div>
+                    <div className="text-[11px] text-muted-foreground">Vendor ka PDF ya photo daalo — AI extract karega</div>
+                  </div>
+                </button>
+              </PopoverClose>
+              <PopoverClose asChild>
+                <button
+                  type="button"
+                  onClick={openLogDialog}
+                  className="w-full text-left rounded-md px-3 py-2.5 hover:bg-muted flex items-start gap-3"
+                >
+                  <Plus className="h-4 w-4 mt-0.5 text-primary shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium">Manually Details Bharo</div>
+                    <div className="text-[11px] text-muted-foreground">Phone par mile rates ya simple quote khud type karo</div>
+                  </div>
+                </button>
+              </PopoverClose>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 
