@@ -500,7 +500,11 @@ export function LegacyQuoteUploadModal({
           legacy_file_url: uploadedFileUrl,
           raw_file_path: uploadedFilePath,
           raw_file_type: uploadFile?.type ?? null,
-          parse_status: "needs_review",
+          // Legacy upload IS the review step — procurement uploads + edits + confirms in one go.
+          // Mark as approved + compliant so the quote feeds straight into comparison without a
+          // redundant second pass on the Quotes page.
+          parse_status: "approved",
+          compliance_status: "compliant",
           submitted_by_human: true,
           payment_terms: editedExtracted.payment_terms || null,
           delivery_terms: editedExtracted.delivery_days

@@ -583,8 +583,9 @@ export default function Quotes() {
     const liRows = (items ?? []) as QuoteLineItem[];
     setReviewItems(liRows);
 
-    // Pre-fill edited items from existing data (parsed, reviewed, approved)
-    if ((qRow.parse_status === "approved" || qRow.parse_status === "parsed" || qRow.parse_status === "reviewed") && liRows.length > 0) {
+    // Pre-fill edited items from existing data — covers parsed, reviewed, approved
+    // and needs_review (legacy uploads land here when data was already saved at upload).
+    if ((qRow.parse_status === "approved" || qRow.parse_status === "parsed" || qRow.parse_status === "reviewed" || qRow.parse_status === "needs_review") && liRows.length > 0) {
       setEditedItems(liRows.map(li => ({
         description: li.original_description ?? "",
         brand: li.brand ?? "",
