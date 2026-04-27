@@ -2559,29 +2559,38 @@ Rules:
           </CardHeader>
           <CardContent className="p-0 overflow-x-auto">
             {(() => {
-              // Compute per-supplier totals including extra charges
+              // Compute per-supplier totals. Prefer the saved quote header
+              // (total_quoted_value / total_landed_value) when present, since those
+              // were captured from the actual PDF at upload time. Line-item sums
+              // can drift if AI mis-extracts rates (e.g. a row with rate=0 in
+              // QT-2026-0093 dropped the total from ₹66k to ₹59k). Lines are
+              // still computed for visibility but the landed/subtotal cells use
+              // header values when available.
               const totals = suppliers.map((sup) => {
                 const lines = allQuoteLinesBySupplierId[sup.id] ?? [];
                 const charges = extraChargesBySupplierId[sup.id] ?? [];
-                const subtotal = lines.reduce((s, li) => {
-                  const r = Number(li.rate ?? 0);
-                  const q = Number(li.quantity ?? 0);
-                  return s + q * r;
-                }, 0);
-                const gst = lines.reduce((s, li) => {
-                  const r = Number(li.rate ?? 0);
-                  const q = Number(li.quantity ?? 0);
-                  const g = Number(li.gst_percent ?? 0);
-                  return s + q * r * g / 100;
-                }, 0);
-                const freight = lines.reduce((s, li) => {
-                  const f = Number(li.freight ?? 0);
-                  const q = Number(li.quantity ?? 0);
-                  return s + q * f;
-                }, 0);
+                const lineSubtotal = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
+                const lineGst = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
+                const freight = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
                 const extraSum = charges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
-                const landedTotal = subtotal + gst + freight + extraSum;
+
                 const quote = quoteBySupplierId[sup.id];
+                const headerSubtotal = Number(quote?.total_quoted_value ?? 0);
+                const headerLanded = Number(quote?.total_landed_value ?? 0);
+
+                const subtotal = headerSubtotal > 0 ? headerSubtotal : lineSubtotal;
+                // If the quote has a header landed value, trust it as the source
+                // of truth and back-derive GST so the rows still add up to it.
+                let landedTotal: number;
+                let gst: number;
+                if (headerLanded > 0) {
+                  landedTotal = headerLanded;
+                  gst = Math.max(0, landedTotal - subtotal - freight - extraSum);
+                } else {
+                  gst = lineGst;
+                  landedTotal = subtotal + gst + freight + extraSum;
+                }
+
                 return {
                   sup,
                   itemCount: lines.length,
