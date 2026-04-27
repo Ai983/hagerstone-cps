@@ -154,7 +154,7 @@ export default function SupplierMaster() {
 
       const { data, error } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-7",
           max_tokens: 1000,
           messages: [{
             role: "user",

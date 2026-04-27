@@ -1632,7 +1632,7 @@ Rules:
 
       const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-7",
           max_tokens: 4096,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],

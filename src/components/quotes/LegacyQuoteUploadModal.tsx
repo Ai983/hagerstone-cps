@@ -124,8 +124,8 @@ const extractQuoteDetails = async (
 
   const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
     body: {
-      model: "claude-opus-4-5",
-      max_tokens: 2000,
+      model: "claude-opus-4-7",
+      max_tokens: 4000,
       messages: [
         {
           role: "user",
@@ -192,7 +192,16 @@ Rules:
   });
 
   if (fnError) throw new Error("Claude proxy error: " + fnError.message);
-  const raw = data?.content?.[0]?.text || "{}";
+  // The proxy is a thin pass-through. When Anthropic rejects the request (bad
+  // model id, content too large, etc) the response has an `error` field instead
+  // of `content`. Surface it instead of silently treating it as empty JSON.
+  if ((data as any)?.error) {
+    const err = (data as any).error;
+    const msg = typeof err === "string" ? err : err?.message ?? JSON.stringify(err);
+    throw new Error("Anthropic API: " + msg);
+  }
+  const raw = data?.content?.[0]?.text;
+  if (!raw) throw new Error("Empty response from Claude — try again or fill manually");
   return JSON.parse(raw.replace(/```json|```/g, "").trim()) as ExtractedData;
 };
 
@@ -511,7 +520,8 @@ export function LegacyQuoteUploadModal({
       setExtracted(normalised);
       setEditedExtracted(JSON.parse(JSON.stringify(normalised)));
     } catch (e: any) {
-      toast.error("AI extraction failed — you can still fill details manually");
+      const detail = e?.message ? ` (${e.message})` : "";
+      toast.error(`AI extraction failed${detail} — you can still fill details manually`);
       const blank: ExtractedData = {
         vendor_name: selectedSupplier.name,
         vendor_phone: "",
