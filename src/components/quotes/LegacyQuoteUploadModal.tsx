@@ -53,10 +53,14 @@ type ExtractedLineItem = {
   description: string;
   quantity: number;
   unit: string;
-  rate: number;
+  list_rate: number;            // printed list / MRP price per unit
+  discount_pct: number;          // regular trade discount %
+  special_discount_pct: number;  // special / scheme discount %
+  rate: number;                  // NET per-unit rate after both discounts (auto-computed)
   gst_percent: number | null;
-  total: number;
+  total: number;                 // line total incl. GST (auto-computed)
   brand: string;
+  hsn_code: string;
   notes: string;
 };
 
@@ -151,10 +155,14 @@ Return ONLY a valid JSON object (no markdown):
       "description": "item description as written in quote",
       "quantity": number,
       "unit": "string",
+      "list_rate": number,
+      "discount_pct": number,
+      "special_discount_pct": number,
       "rate": number,
       "gst_percent": number or null,
       "total": number,
       "brand": "string or empty",
+      "hsn_code": "string or empty",
       "notes": "string or empty"
     }
   ],
@@ -165,8 +173,17 @@ Return ONLY a valid JSON object (no markdown):
 
 Rules:
 - All amounts must be plain numbers without currency symbols or commas
-- If a field is not found, use empty string or null
-- line_items must be an array even if only one item`,
+- If a field is not found, use 0 for numbers (NOT null) and empty string for strings
+- line_items must be an array even if only one item
+- list_rate is the printed/MRP per-unit price BEFORE any discount. discount_pct and
+  special_discount_pct are the two discount columns commonly labelled "Dis.%" and
+  "Sp.Dis%" in Indian vendor quotes (use 0 if a column is absent).
+- rate is the NET per-unit price after applying BOTH discounts to list_rate
+  (i.e. rate = list_rate × (1 - discount_pct/100) × (1 - special_discount_pct/100)).
+  If the quote already shows only the net amount, derive rate from
+  amount / quantity and put list_rate = rate, discount_pct = 0, special_discount_pct = 0.
+- total is line amount including GST (rate × quantity × (1 + gst_percent/100)).
+- hsn_code is the HSN/SAC code printed against the item (8-digit string or empty).`,
             },
           ],
         },
@@ -457,8 +474,42 @@ export function LegacyQuoteUploadModal({
     setAiParsing(true);
     try {
       const result = await extractQuoteDetails(uploadFile, itemDescriptions);
-      setExtracted(result);
-      setEditedExtracted(JSON.parse(JSON.stringify(result)));
+      // Older Claude responses (and very simple quotes) may skip the new discount /
+      // hsn fields entirely. Normalize each line item so the form always has every
+      // field, then re-derive net rate + total off the discount fields when list_rate
+      // is present.
+      const normaliseItem = (li: any): ExtractedLineItem => {
+        const list = Number(li.list_rate ?? 0);
+        const dis = Number(li.discount_pct ?? 0);
+        const spDis = Number(li.special_discount_pct ?? 0);
+        const qty = Number(li.quantity ?? 0);
+        const gst = li.gst_percent != null ? Number(li.gst_percent) : null;
+        let netRate = Number(li.rate ?? 0);
+        if (list > 0 && (dis > 0 || spDis > 0)) {
+          netRate = list * (1 - dis / 100) * (1 - spDis / 100);
+        }
+        const total = qty * netRate * (1 + (gst ?? 0) / 100);
+        return {
+          description: String(li.description ?? ""),
+          quantity: qty,
+          unit: String(li.unit ?? ""),
+          list_rate: list,
+          discount_pct: dis,
+          special_discount_pct: spDis,
+          rate: Number(netRate.toFixed(2)),
+          gst_percent: gst,
+          total: Number(total.toFixed(2)),
+          brand: String(li.brand ?? ""),
+          hsn_code: String(li.hsn_code ?? ""),
+          notes: String(li.notes ?? ""),
+        };
+      };
+      const normalised: ExtractedData = {
+        ...result,
+        line_items: (result.line_items ?? []).map(normaliseItem),
+      };
+      setExtracted(normalised);
+      setEditedExtracted(JSON.parse(JSON.stringify(normalised)));
     } catch (e: any) {
       toast.error("AI extraction failed — you can still fill details manually");
       const blank: ExtractedData = {
@@ -529,10 +580,13 @@ export function LegacyQuoteUploadModal({
           original_description: item.description,
           quantity: item.quantity,
           unit: item.unit,
+          list_rate: Number(item.list_rate ?? 0) || null,
+          discount_pct: Number(item.discount_pct ?? 0) || null,
+          special_discount_pct: Number(item.special_discount_pct ?? 0) || null,
           rate: item.rate,
           gst_percent: item.gst_percent,
-          total_landed_rate:
-            item.rate * (1 + (item.gst_percent ?? 0) / 100),
+          hsn_code: item.hsn_code?.trim() || null,
+          total_landed_rate: item.rate * (1 + (item.gst_percent ?? 0) / 100),
           brand: item.brand || null,
           ai_suggested: true,
           confidence_score: 85,
@@ -591,6 +645,21 @@ export function LegacyQuoteUploadModal({
   };
 
   // ── Line item helpers ───────────────────────────────────────────────────────
+  // Net rate = list × (1 - dis%) × (1 - spDis%). If list is 0, fall back to whatever
+  // rate the user already has (handles legacy entries that only know net).
+  const recomputeRate = (li: ExtractedLineItem): ExtractedLineItem => {
+    const list = Number(li.list_rate ?? 0);
+    const dis = Number(li.discount_pct ?? 0);
+    const spDis = Number(li.special_discount_pct ?? 0);
+    const qty = Number(li.quantity ?? 0);
+    const gst = Number(li.gst_percent ?? 0);
+    const netRate = list > 0
+      ? list * (1 - dis / 100) * (1 - spDis / 100)
+      : Number(li.rate ?? 0);
+    const total = qty * netRate * (1 + gst / 100);
+    return { ...li, rate: Number(netRate.toFixed(2)), total: Number(total.toFixed(2)) };
+  };
+
   const updateLineItem = (
     idx: number,
     field: keyof ExtractedLineItem,
@@ -599,19 +668,20 @@ export function LegacyQuoteUploadModal({
     setEditedExtracted((prev) => {
       if (!prev) return prev;
       const items = [...prev.line_items];
-      items[idx] = { ...items[idx], [field]: value };
-      // Recalc total for this item
-      const rate = field === "rate" ? Number(value) : items[idx].rate;
-      const qty = field === "quantity" ? Number(value) : items[idx].quantity;
-      const gst =
-        field === "gst_percent" ? Number(value) : items[idx].gst_percent ?? 0;
-      items[idx].total = qty * rate * (1 + gst / 100);
-      // Recalc grand totals
-      const totalValue = items.reduce(
-        (a, i) => a + i.quantity * i.rate,
-        0
-      );
-      const totalWithGst = items.reduce((a, i) => a + i.total, 0);
+      items[idx] = { ...items[idx], [field]: value } as ExtractedLineItem;
+      // Always recompute net rate + total off the discount fields.
+      // Exception: if the user is typing directly into the net Rate field, respect it
+      // and leave list_rate/discount_pct alone so we don't fight the typing.
+      if (field === "rate") {
+        const r = Number(value);
+        const qty = Number(items[idx].quantity ?? 0);
+        const gst = Number(items[idx].gst_percent ?? 0);
+        items[idx].total = Number((qty * r * (1 + gst / 100)).toFixed(2));
+      } else {
+        items[idx] = recomputeRate(items[idx]);
+      }
+      const totalValue = items.reduce((a, i) => a + Number(i.quantity ?? 0) * Number(i.rate ?? 0), 0);
+      const totalWithGst = items.reduce((a, i) => a + Number(i.total ?? 0), 0);
       return { ...prev, line_items: items, total_value: totalValue, total_with_gst: totalWithGst };
     });
   };
@@ -627,10 +697,14 @@ export function LegacyQuoteUploadModal({
             description: "",
             quantity: 1,
             unit: "nos",
+            list_rate: 0,
+            discount_pct: 0,
+            special_discount_pct: 0,
             rate: 0,
             gst_percent: 18,
             total: 0,
             brand: "",
+            hsn_code: "",
             notes: "",
           },
         ],
@@ -1152,50 +1226,21 @@ export function LegacyQuoteUploadModal({
                             <Label className="text-xs">Description</Label>
                             <Input
                               value={item.description}
-                              onChange={(e) =>
-                                updateLineItem(
-                                  idx,
-                                  "description",
-                                  e.target.value
-                                )
-                              }
+                              onChange={(e) => updateLineItem(idx, "description", e.target.value)}
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">Qty</Label>
+                            <Label className="text-xs">Brand</Label>
                             <Input
-                              type="number"
-                              value={item.quantity}
-                              onChange={(e) =>
-                                updateLineItem(
-                                  idx,
-                                  "quantity",
-                                  Number(e.target.value)
-                                )
-                              }
+                              value={item.brand}
+                              onChange={(e) => updateLineItem(idx, "brand", e.target.value)}
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">Unit</Label>
+                            <Label className="text-xs">HSN Code</Label>
                             <Input
-                              value={item.unit}
-                              onChange={(e) =>
-                                updateLineItem(idx, "unit", e.target.value)
-                              }
-                            />
-                          </div>
-                          <div className="space-y-1">
-                            <Label className="text-xs">Rate (₹)</Label>
-                            <Input
-                              type="number"
-                              value={item.rate}
-                              onChange={(e) =>
-                                updateLineItem(
-                                  idx,
-                                  "rate",
-                                  Number(e.target.value)
-                                )
-                              }
+                              value={item.hsn_code ?? ""}
+                              onChange={(e) => updateLineItem(idx, "hsn_code", e.target.value)}
                             />
                           </div>
                           <div className="space-y-1">
@@ -1203,31 +1248,62 @@ export function LegacyQuoteUploadModal({
                             <Input
                               type="number"
                               value={item.gst_percent ?? ""}
-                              onChange={(e) =>
-                                updateLineItem(
-                                  idx,
-                                  "gst_percent",
-                                  Number(e.target.value)
-                                )
-                              }
+                              onChange={(e) => updateLineItem(idx, "gst_percent", Number(e.target.value))}
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">Brand</Label>
+                            <Label className="text-xs">Qty</Label>
                             <Input
-                              value={item.brand}
-                              onChange={(e) =>
-                                updateLineItem(idx, "brand", e.target.value)
-                              }
+                              type="number"
+                              value={item.quantity}
+                              onChange={(e) => updateLineItem(idx, "quantity", Number(e.target.value))}
                             />
                           </div>
                           <div className="space-y-1">
-                            <Label className="text-xs">Total (₹)</Label>
+                            <Label className="text-xs">Unit</Label>
                             <Input
-                              readOnly
-                              value={item.total?.toFixed(2) ?? ""}
-                              className="bg-muted"
+                              value={item.unit}
+                              onChange={(e) => updateLineItem(idx, "unit", e.target.value)}
                             />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">List Rate (₹)</Label>
+                            <Input
+                              type="number"
+                              value={item.list_rate ?? 0}
+                              onChange={(e) => updateLineItem(idx, "list_rate", Number(e.target.value))}
+                              placeholder="MRP / printed"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Discount %</Label>
+                            <Input
+                              type="number"
+                              value={item.discount_pct ?? 0}
+                              onChange={(e) => updateLineItem(idx, "discount_pct", Number(e.target.value))}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Sp. Discount %</Label>
+                            <Input
+                              type="number"
+                              value={item.special_discount_pct ?? 0}
+                              onChange={(e) => updateLineItem(idx, "special_discount_pct", Number(e.target.value))}
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Net Rate (₹)</Label>
+                            <Input
+                              type="number"
+                              value={item.rate}
+                              onChange={(e) => updateLineItem(idx, "rate", Number(e.target.value))}
+                              className={Number(item.list_rate ?? 0) > 0 ? "bg-muted/50" : ""}
+                              title={Number(item.list_rate ?? 0) > 0 ? "Auto-computed from list × discounts. Override if needed." : "Enter the per-unit rate"}
+                            />
+                          </div>
+                          <div className="space-y-1 sm:col-span-2">
+                            <Label className="text-xs">Total incl. GST (₹)</Label>
+                            <Input readOnly value={item.total?.toFixed(2) ?? ""} className="bg-muted" />
                           </div>
                         </div>
                       </div>
