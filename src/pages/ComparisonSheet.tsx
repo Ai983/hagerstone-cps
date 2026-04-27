@@ -1633,17 +1633,34 @@ Rules:
       const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
           model: "claude-opus-4-7",
-          max_tokens: 4096,
+          max_tokens: 8192,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],
         },
       });
       if (fnError) throw new Error("Claude proxy error: " + fnError.message);
 
+      // Pass-through proxy hands back the Anthropic error object verbatim when
+      // the request fails (bad model, content too large, etc). Surface it.
+      if ((result as any)?.error) {
+        const err = (result as any).error;
+        const msg = typeof err === "string" ? err : err?.message ?? JSON.stringify(err);
+        throw new Error("Anthropic API: " + msg);
+      }
+
       const content = result?.content?.[0]?.text ?? "";
+      const stopReason = (result as any)?.stop_reason;
+      if (stopReason === "max_tokens") {
+        throw new Error("Response cut off before JSON completed — too many quotes / line items. Try splitting the comparison or shrinking the data.");
+      }
       const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("Could not parse AI response");
-      const parsed = JSON.parse(jsonMatch[0]);
+      if (!jsonMatch) throw new Error("Could not find JSON object in AI response");
+      let parsed: any;
+      try {
+        parsed = JSON.parse(jsonMatch[0]);
+      } catch (parseErr: any) {
+        throw new Error("AI returned malformed JSON — " + (parseErr?.message ?? "parse failed") + ". Hit Regenerate again or simplify the input.");
+      }
       setAiRecommendation(parsed);
 
       // Persist so subsequent loads show the same analysis without re-billing Claude
@@ -1658,6 +1675,22 @@ Rules:
     } finally {
       setAiLoading(false);
     }
+  };
+
+  // Full regenerate: refetch suppliers + quotes + line items from DB first, then
+  // re-run AI. Use this when the comparison shows stale data after a quote was
+  // deleted, re-uploaded, or edited outside this page.
+  const regenerateAll = async () => {
+    setAiLoading(true);
+    try {
+      await fetchAll();
+      // fetchAll triggers re-renders; wait a tick so suppliers/quoteBySupplierId
+      // reflect the new state before AI uses them.
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      setAiLoading(false);
+    }
+    await getAIRecommendation();
   };
 
   const createPO = async () => {
@@ -2180,10 +2213,16 @@ Rules:
                 )}
               </div>
               {aiRecommendation && canCreateRFQ && (
-                <Button size="sm" variant="outline" onClick={getAIRecommendation} disabled={aiLoading} className="shrink-0">
-                  <Sparkles className="h-3.5 w-3.5 mr-1" />
-                  Regenerate
-                </Button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button size="sm" variant="outline" onClick={getAIRecommendation} disabled={aiLoading} title="Re-run AI on the data already loaded in the page">
+                    <Sparkles className="h-3.5 w-3.5 mr-1" />
+                    Regenerate AI
+                  </Button>
+                  <Button size="sm" onClick={regenerateAll} disabled={aiLoading} title="Refetch all quotes / suppliers from DB AND re-run AI — use this if a quote was edited or replaced">
+                    <Sparkles className="h-3.5 w-3.5 mr-1" />
+                    Regenerate Sheet
+                  </Button>
+                </div>
               )}
             </div>
           </CardHeader>
