@@ -312,10 +312,8 @@ export default function PurchaseOrders() {
   const [viewPoLineItems, setViewPoLineItems] = useState<PoLineItemRow[]>([]);
   const [viewPoTokens, setViewPoTokens] = useState<Array<{ id: string; founder_name: string; response: string | null; reason: string | null; used_at: string | null }>>([]);
 
-  const [approvalNotes, setApprovalNotes] = useState<string>("");
   const [rejectReason, setRejectReason] = useState<string>("");
   const [standardTnCs, setStandardTnCs] = useState<Record<string, string>>({});
-  const [approveSending, setApproveSending] = useState(false);
   const [resending, setResending] = useState(false);
   const [legacyModalOpen, setLegacyModalOpen] = useState(false);
   const [paymentTermsModal, setPaymentTermsModal] = useState<{
@@ -497,7 +495,6 @@ export default function PurchaseOrders() {
     setCreateBankAccountNumber("");
     setLineItems([]);
     setRejectReason("");
-    setApprovalNotes("");
     setIsSingleVendor(false);
     setSingleVendorReason("");
   }, [createOpen]);
@@ -1020,7 +1017,6 @@ export default function PurchaseOrders() {
     setRevisedByPo(null);
     setViewPoLineItems([]);
     setViewPoTokens([]);
-    setApprovalNotes("");
     setRejectReason("");
     try {
       const { data: poRow, error: poErr } = await supabase
@@ -1100,41 +1096,6 @@ export default function PurchaseOrders() {
       setStandardTnCs(tncs);
     } catch (e: any) {
       toast.error(e?.message || "Failed to load PO details");
-    } finally {
-      setViewLoading(false);
-    }
-  };
-
-  const commitApprove = async () => {
-    if (!user || !viewPo) return;
-    if (viewPo.status !== "pending_approval") {
-      toast.error("PO is not pending approval");
-      return;
-    }
-    // Anti-corruption rule: no PO can be approved without founder approval first
-    if (viewPo.founder_approval_status !== "approved") {
-      toast.error("Cannot approve — founder approval is required first. Wait for founder response on WhatsApp.");
-      return;
-    }
-    const creatorId = viewPo.created_by ?? null;
-    if (creatorId && creatorId === user.id) {
-      toast.error("You cannot approve a PO you created");
-      return;
-    }
-    setViewLoading(true);
-    try {
-      const now = new Date().toISOString();
-      const { error } = await supabase
-        .from("cps_purchase_orders")
-        .update({ status: "approved", approved_by: user.id, approved_at: now, approval_notes: approvalNotes.trim() || null })
-        .eq("id", viewPo.id);
-      if (error) throw error;
-
-      toast.success("PO approved");
-      await fetchPoRows();
-      await openView(viewPo.id);
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to approve PO");
     } finally {
       setViewLoading(false);
     }
@@ -1331,68 +1292,6 @@ export default function PurchaseOrders() {
       toast.error(e?.message || "Failed to update payment");
     } finally {
       setMarkPaidSaving(false);
-    }
-  };
-
-  const approveSendPo = async () => {
-    if (!user || !viewPo) return;
-    setApproveSending(true);
-    try {
-      const now = new Date().toISOString();
-      const { error } = await supabase.from("cps_purchase_orders").update({
-        founder_approval_status: "approved",
-        approved_by: user.id,
-        approved_at: now,
-      }).eq("id", viewPo.id);
-      if (error) throw error;
-
-      await supabase.from("cps_audit_log").insert([{
-        action_type: "PO_APPROVED",
-        entity_type: "cps_purchase_orders",
-        entity_id: viewPo.id,
-        user_id: user.id,
-        user_name: user.name ?? user.email ?? "",
-        description: `PO ${viewPo.po_number} approved and sent by ${user.name ?? user.email ?? ""}`,
-        logged_at: now,
-      }]);
-
-      // Fire-and-forget webhook
-      const po = viewPo;
-      Promise.all([
-        supabase.from("cps_suppliers").select("name, whatsapp, email, gstin, phone").eq("id", po.supplier_id).single(),
-        supabase.from("cps_config").select("value").eq("key", "webhook_po_dispatch").single(),
-      ]).then(([{ data: supplier }, { data: config }]) => {
-        if (config?.value) {
-          fetch(String(config.value), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              event: "po_created",
-              po_id: po.id,
-              po_number: po.po_number,
-              supplier_id: po.supplier_id,
-              supplier_name: supplier?.name || "",
-              supplier_whatsapp: supplier?.whatsapp || supplier?.phone || "",
-              supplier_email: supplier?.email || "",
-              po_pdf_url: po.po_pdf_url || "",
-              project_code: po.project_code || "",
-              delivery_date: po.delivery_date || "",
-              grand_total: po.grand_total || 0,
-              payment_terms: po.payment_terms || "",
-              delivery_terms: po.delivery_terms || "",
-              ship_to_address: po.ship_to_address || "",
-            }),
-          }).catch(() => toast.warning("PO approved but dispatch webhook may have failed"));
-        }
-      });
-
-      toast.success("PO approved and sent");
-      await fetchPoRows();
-      await openView(viewPo.id);
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to approve and send PO");
-    } finally {
-      setApproveSending(false);
     }
   };
 
@@ -3534,7 +3433,6 @@ function PoTableRows({
         const pr = r.pr_id ? prById[String(r.pr_id)] : undefined;
         const createdBy = r.created_by ? usersById[String(r.created_by)] : undefined;
         const canApproveThis = r.status === "pending_approval" && canApprove;
-        const canApproveByAntiCorruption = !(r.created_by && userId && r.created_by === userId);
 
         return (
           <React.Fragment key={r.id}>
@@ -3616,33 +3514,15 @@ function PoTableRows({
                     Set Payment Terms
                   </Button>
                 )}
-                {canApproveThis ? (
-                  canApproveByAntiCorruption ? (
-                    <Button
-                      size="sm"
-                      className="bg-green-600 hover:bg-green-700"
-                      onClick={() => onView(r.id)}
-                      disabled
-                      title="Approve in details dialog"
-                    >
-                      Approve
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      disabled
-                      title="You cannot approve a PO you created"
-                      variant="secondary"
-                    >
-                      Approve
-                    </Button>
-                  )
-                ) : null}
-                {canApproveThis ? (
-                  <Button size="sm" variant="destructive" onClick={() => onView(r.id)} disabled={false}>
+                {/* In-app PO approval has been removed — all approvals must come via the
+                    founder approval link (cps_po_approval_tokens). Only the Reject action
+                    is available here for procurement so they can stop a PO before the
+                    founder responds. */}
+                {canApproveThis && (
+                  <Button size="sm" variant="destructive" onClick={() => onView(r.id)}>
                     Reject
                   </Button>
-                ) : null}
+                )}
               </div>
             </TableCell>
           </TableRow>
