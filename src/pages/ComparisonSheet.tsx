@@ -1489,15 +1489,24 @@ export default function ComparisonSheetPage() {
           const extraTotal = extras.reduce((acc, c) => acc + c.amount * (c.taxable ? 1.18 : 1), 0);
           const landedFromLines = subtotalFromLines + gstFromLines + freightFromLines + extraTotal;
 
-          // Fallback to quote-header stored totals when line items are missing/empty
+          // Quote-header values were captured directly from the supplier's PDF at
+          // upload time, so they are authoritative for landed/subtotal. Line-item
+          // sums can drift if AI mis-extracts a single rate (rate=0 etc.). Prefer
+          // the header whenever it is set, even when line items also exist.
           const headerLanded = Number(quote?.total_landed_value ?? 0);
           const headerQuoted = Number(quote?.total_quoted_value ?? 0);
-          const useHeaderFallback = allLines.length === 0 && (headerLanded > 0 || headerQuoted > 0);
 
-          const subtotal = useHeaderFallback ? headerQuoted : subtotalFromLines;
-          const gst = useHeaderFallback ? Math.max(0, headerLanded - headerQuoted) : gstFromLines;
-          const freight = useHeaderFallback ? 0 : freightFromLines;
-          const landed = useHeaderFallback ? (headerLanded || headerQuoted) : landedFromLines;
+          const subtotal = headerQuoted > 0 ? headerQuoted : subtotalFromLines;
+          const freight = freightFromLines;
+          let landed: number;
+          let gst: number;
+          if (headerLanded > 0) {
+            landed = headerLanded;
+            gst = Math.max(0, landed - subtotal - freight - extraTotal);
+          } else {
+            gst = gstFromLines;
+            landed = subtotal + gst + freight + extraTotal;
+          }
 
           return {
             name: s.name,
@@ -1512,7 +1521,7 @@ export default function ComparisonSheetPage() {
               lead_time_days: li.lead_time_days,
             })),
             extra_charges: extras.map((c) => ({ name: c.name, amount: c.amount, taxable: c.taxable })),
-            data_source: useHeaderFallback ? "header_totals_only" : "line_items",
+            data_source: allLines.length === 0 ? "header_totals_only" : (headerLanded > 0 ? "header_total_with_lines" : "line_items"),
             items_count: allLines.length,
             commercial: {
               subtotal_excl_gst: Number(subtotal.toFixed(2)),
