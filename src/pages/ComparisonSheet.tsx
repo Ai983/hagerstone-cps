@@ -740,8 +740,15 @@ export default function ComparisonSheetPage() {
         return;
       }
 
+      // Throttle so we don't blow through Anthropic's per-minute token budget.
+      // The $5 secondary account is capped at 10K input tokens/minute and each
+      // search burns ~2K input tokens after web_search results are included.
+      // Process 2 at a time with a small gap between batches → effective rate
+      // stays under ~6K TPM and concurrent searches still finish in parallel.
+      const CONCURRENCY = 2;
+      const BATCH_DELAY_MS = 1500;
       let done = 0;
-      const results = await Promise.all(lines.map(async (pli) => {
+      const runOne = async (pli: PrLineItem) => {
         try {
           const itemQuery = `${pli.description}${pli.unit ? ` ${pli.unit}` : ""}`.trim();
           const { data, error } = await supabase.functions.invoke("market-rate-search", {
@@ -787,7 +794,19 @@ export default function ComparisonSheetPage() {
             city_used: "",
           };
         }
-      }));
+      };
+
+      const results: Awaited<ReturnType<typeof runOne>>[] = [];
+      for (let i = 0; i < lines.length; i += CONCURRENCY) {
+        const batch = lines.slice(i, i + CONCURRENCY);
+        const batchResults = await Promise.all(batch.map(runOne));
+        results.push(...batchResults);
+        // Small gap before the next batch so the per-minute budget doesn't
+        // see all calls land in the same second.
+        if (i + CONCURRENCY < lines.length) {
+          await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
+        }
+      }
 
       // Persist + update local state
       const upserts = results.map((r) => ({
