@@ -59,6 +59,32 @@ type ComparisonSheetRow = {
 
 type RfqRow = { id: string; rfq_number: string; title: string | null; pr_id: string };
 type PrLineItem = { id: string; pr_id: string; description: string; quantity: number; unit: string | null };
+
+// Market-rate benchmark — one per PR line item, populated by the
+// market-rate-search edge function and persisted to cps_market_benchmarks.
+type MarketSupplier = {
+  name: string;
+  brands?: string[];
+  product?: string;
+  rate?: string;
+  rate_numeric?: number;
+  unit?: string;
+  phone?: string;
+  location?: string;
+  gmapsUrl?: string;
+  source?: string;
+  url?: string;
+};
+type MarketBenchmark = {
+  pr_line_item_id: string;
+  market_lowest_rate: number;
+  market_lowest_unit: string;
+  market_verdict: string;
+  market_suppliers: MarketSupplier[];
+  source: "cache" | "fresh" | "no_data" | "error";
+  searched_at: string;
+  city_used: string;
+};
 type SupplierRow = { id: string; name: string };
 
 type QuoteRow = {
@@ -209,6 +235,10 @@ export default function ComparisonSheetPage() {
   const [rfq, setRfq] = useState<RfqRow | null>(null);
   const [existingPo, setExistingPo] = useState<{ id: string; po_number: string } | null>(null);
   const [prLineItems, setPrLineItems] = useState<PrLineItem[]>([]);
+  const [projectSite, setProjectSite] = useState<string | null>(null);
+  const [marketBenchmarks, setMarketBenchmarks] = useState<Record<string, MarketBenchmark>>({});
+  const [marketLoading, setMarketLoading] = useState(false);
+  const [marketProgress, setMarketProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
   const [suppliers, setSuppliers] = useState<SupplierRow[]>([]);
 
   const [quoteBySupplierId, setQuoteBySupplierId] = useState<Record<string, QuoteRow>>({});
@@ -317,6 +347,16 @@ export default function ComparisonSheetPage() {
       const localPrLineItems = (prRows ?? []) as PrLineItem[];
       setPrLineItems(localPrLineItems);
 
+      // Pull project_site so the market-rate search can geo-target nearby suppliers
+      if (prId) {
+        const { data: prRow } = await supabase
+          .from("cps_purchase_requisitions")
+          .select("project_site")
+          .eq("id", prId)
+          .maybeSingle();
+        setProjectSite((prRow as any)?.project_site ?? null);
+      }
+
       // Use order+limit instead of maybeSingle() so legacy duplicates (if any) don't error
       const { data: sheetRows, error: sheetErr } = await supabase
         .from("cps_comparison_sheets")
@@ -360,6 +400,27 @@ export default function ComparisonSheetPage() {
         .order("created_at", { ascending: false })
         .limit(1);
       setExistingPo(((existingPoRows ?? [])[0] as any) ?? null);
+
+      // Load any previously-saved market-rate benchmarks for this RFQ.
+      // Buttons gate on these — empty map = market check pending = blocked.
+      const { data: benchRows } = await supabase
+        .from("cps_market_benchmarks")
+        .select("pr_line_item_id, market_lowest_rate, market_lowest_unit, market_verdict, market_suppliers, source, searched_at, city_used")
+        .eq("rfq_id", rfqId);
+      const benchMap: Record<string, MarketBenchmark> = {};
+      (benchRows ?? []).forEach((b: any) => {
+        benchMap[b.pr_line_item_id] = {
+          pr_line_item_id: b.pr_line_item_id,
+          market_lowest_rate: Number(b.market_lowest_rate ?? 0),
+          market_lowest_unit: b.market_lowest_unit ?? "",
+          market_verdict: b.market_verdict ?? "",
+          market_suppliers: Array.isArray(b.market_suppliers) ? b.market_suppliers : [],
+          source: b.source ?? "cache",
+          searched_at: b.searched_at,
+          city_used: b.city_used ?? "",
+        };
+      });
+      setMarketBenchmarks(benchMap);
 
       // Load quotes + suppliers.
       const { data: quotesRows, error: quotesErr } = await supabase
@@ -648,12 +709,149 @@ export default function ComparisonSheetPage() {
 
       toast.success("Comparison Sheet generated");
       await fetchAll();
+      // Kick off the market-rate fan-out so the gate is ready by the time
+      // procurement reviews the sheet. Doesn't block the toast.
+      runMarketRateSearch().catch((e) => console.error("market rate fetch", e));
     } catch (e: any) {
       toast.error(e?.message || "Failed to generate comparison sheet");
     } finally {
       setGenerating(false);
     }
   };
+
+  // Fan out market-rate searches for every PR line item that doesn't already
+  // have a fresh benchmark, then persist the results to cps_market_benchmarks.
+  // Hits Claude with web_search through the market-rate-search edge function.
+  const runMarketRateSearch = async (force = false) => {
+    if (!rfqId || prLineItems.length === 0) return;
+    setMarketLoading(true);
+    setMarketProgress({ done: 0, total: prLineItems.length });
+    try {
+      const TTL_MS = 7 * 24 * 60 * 60 * 1000;
+      const lines = prLineItems.filter((pli) => {
+        if (force) return true;
+        const existing = marketBenchmarks[pli.id];
+        if (!existing) return true;
+        const age = Date.now() - new Date(existing.searched_at).getTime();
+        return age > TTL_MS;
+      });
+      if (lines.length === 0) {
+        setMarketLoading(false);
+        return;
+      }
+
+      let done = 0;
+      const results = await Promise.all(lines.map(async (pli) => {
+        try {
+          const itemQuery = `${pli.description}${pli.unit ? ` ${pli.unit}` : ""}`.trim();
+          const { data, error } = await supabase.functions.invoke("market-rate-search", {
+            body: { item: itemQuery, address: projectSite ?? "", force_refresh: force },
+          });
+          done += 1;
+          setMarketProgress({ done, total: lines.length });
+          if (error) {
+            return {
+              pr_line_item_id: pli.id,
+              market_lowest_rate: 0,
+              market_lowest_unit: "",
+              market_verdict: `Search failed: ${error.message ?? "unknown error"}`,
+              market_suppliers: [],
+              source: "error" as const,
+              searched_at: new Date().toISOString(),
+              city_used: "",
+            };
+          }
+          const result = data as any;
+          const noData = !result?.suppliers || result.suppliers.length === 0 || !result.lowest_rate;
+          return {
+            pr_line_item_id: pli.id,
+            market_lowest_rate: Number(result?.lowest_rate ?? 0),
+            market_lowest_unit: String(result?.lowest_rate_unit ?? ""),
+            market_verdict: String(result?.verdict ?? ""),
+            market_suppliers: Array.isArray(result?.suppliers) ? result.suppliers : [],
+            source: noData ? ("no_data" as const) : ((result?.source as "cache" | "fresh") ?? "fresh"),
+            searched_at: new Date().toISOString(),
+            city_used: String(result?.city ?? ""),
+          };
+        } catch (e: any) {
+          done += 1;
+          setMarketProgress({ done, total: lines.length });
+          return {
+            pr_line_item_id: pli.id,
+            market_lowest_rate: 0,
+            market_lowest_unit: "",
+            market_verdict: `Search failed: ${e?.message ?? "unknown error"}`,
+            market_suppliers: [],
+            source: "error" as const,
+            searched_at: new Date().toISOString(),
+            city_used: "",
+          };
+        }
+      }));
+
+      // Persist + update local state
+      const upserts = results.map((r) => ({
+        rfq_id: rfqId,
+        pr_line_item_id: r.pr_line_item_id,
+        market_lowest_rate: r.market_lowest_rate,
+        market_lowest_unit: r.market_lowest_unit,
+        market_verdict: r.market_verdict,
+        market_suppliers: r.market_suppliers,
+        source: r.source,
+        city_used: r.city_used,
+        searched_at: r.searched_at,
+      }));
+      await supabase.from("cps_market_benchmarks").upsert(upserts as any, {
+        onConflict: "rfq_id,pr_line_item_id",
+      });
+
+      const next: Record<string, MarketBenchmark> = { ...marketBenchmarks };
+      results.forEach((r) => { next[r.pr_line_item_id] = r; });
+      setMarketBenchmarks(next);
+      toast.success(`Market rates fetched for ${results.length} item${results.length === 1 ? "" : "s"}`);
+    } catch (e: any) {
+      toast.error("Market rate search failed: " + (e?.message ?? "unknown"));
+    } finally {
+      setMarketLoading(false);
+    }
+  };
+
+  // Compute the gate. Iterate every quote × every PR line; if any quote's per-line
+  // rate is ABOVE the market lowest, fail the check and list the offending items.
+  type MarketCheckFail = { pr_line_id: string; pr_description: string; supplier_name: string; vendor_rate: number; market_rate: number; unit: string };
+  const marketCheck = useMemo(() => {
+    const fails: MarketCheckFail[] = [];
+    let coveredItems = 0;
+    let pendingItems = 0;
+    let noDataItems = 0;
+    prLineItems.forEach((pli) => {
+      const bench = marketBenchmarks[pli.id];
+      if (!bench) { pendingItems += 1; return; }
+      if (bench.source === "no_data" || bench.source === "error" || !bench.market_lowest_rate) { noDataItems += 1; return; }
+      coveredItems += 1;
+      const market = Number(bench.market_lowest_rate);
+      // Find all matched supplier line cells for this PR line and compare rates
+      const cells = cellsByPrLineIdAndSupplierId[pli.id] ?? {};
+      Object.entries(cells).forEach(([supplierId, cell]: [string, any]) => {
+        const cellRate = Number(cell?.rate ?? 0);
+        if (!cellRate) return;
+        if (cellRate > market) {
+          const supplier = suppliers.find((s) => s.id === supplierId);
+          fails.push({
+            pr_line_id: pli.id,
+            pr_description: pli.description,
+            supplier_name: supplier?.name ?? "Unknown supplier",
+            vendor_rate: cellRate,
+            market_rate: market,
+            unit: bench.market_lowest_unit,
+          });
+        }
+      });
+    });
+    const passes = fails.length === 0 && pendingItems === 0;
+    const isPending = pendingItems > 0 && fails.length === 0;
+    return { passes, isPending, fails, coveredItems, pendingItems, noDataItems };
+  }, [prLineItems, marketBenchmarks, cellsByPrLineIdAndSupplierId, suppliers]);
 
   const perSupplierTotals = useMemo(() => {
     // Use stored quote totals (not recalculated) for accuracy
@@ -2559,6 +2757,132 @@ Rules:
         </Card>
       )}
 
+      {/* Market Rate Check — gates approval and PO creation */}
+      {canSeeMatrix && suppliers.length > 0 && (
+        <Card className={
+          marketCheck.passes ? "border-emerald-300 bg-emerald-50/40" :
+          "border-amber-300 bg-amber-50/40"
+        }>
+          <CardHeader className="pb-3">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  🌐 Market Rate Check
+                  {marketLoading && (
+                    <span className="text-xs text-muted-foreground font-normal">
+                      Searching… {marketProgress.done}/{marketProgress.total}
+                    </span>
+                  )}
+                </CardTitle>
+                <CardDescription className="mt-1 text-xs">
+                  Web-search every PR item near the project site and flag any vendor lines quoting above market lowest. Advisory only — PO/approval is not blocked, use this to spot cheaper market options before awarding.
+                  {projectSite && <span className="ml-1">City: <span className="font-medium">{projectSite}</span></span>}
+                </CardDescription>
+              </div>
+              {canCreateRFQ && (
+                <Button size="sm" variant="outline" onClick={() => runMarketRateSearch(true)} disabled={marketLoading || prLineItems.length === 0}>
+                  {marketLoading ? "Searching…" : (Object.keys(marketBenchmarks).length === 0 ? "Run Market Search" : "Refresh Rates")}
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {/* Top-line verdict */}
+            {marketCheck.isPending ? (
+              <div className="rounded-md bg-amber-100/80 border border-amber-300 px-3 py-2 text-sm text-amber-900">
+                ⏳ Market check pending — click <span className="font-semibold">Run Market Search</span> to fetch live rates for {marketCheck.pendingItems} item{marketCheck.pendingItems === 1 ? "" : "s"}.
+              </div>
+            ) : marketCheck.passes ? (
+              <div className="rounded-md bg-emerald-100/80 border border-emerald-300 px-3 py-2 text-sm text-emerald-900">
+                ✓ All vendor quotes are at or below market lowest for {marketCheck.coveredItems} item{marketCheck.coveredItems === 1 ? "" : "s"}{marketCheck.noDataItems > 0 && <span className="text-emerald-800/80"> · {marketCheck.noDataItems} item{marketCheck.noDataItems === 1 ? "" : "s"} had no live market data</span>}.
+              </div>
+            ) : (
+              <div className="rounded-md bg-amber-100/80 border border-amber-300 px-3 py-2 text-sm text-amber-900 space-y-1.5">
+                <div className="font-semibold">⚠ {marketCheck.fails.length} vendor line{marketCheck.fails.length === 1 ? "" : "s"} above market rate — review below. Advisory: you can still proceed, but consider negotiating these items.</div>
+              </div>
+            )}
+
+            {/* Failing rows table */}
+            {marketCheck.fails.length > 0 && (
+              <div className="rounded-md border bg-background overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>PR Item</TableHead>
+                      <TableHead>Vendor</TableHead>
+                      <TableHead className="text-right">Vendor Rate</TableHead>
+                      <TableHead className="text-right">Market Lowest</TableHead>
+                      <TableHead className="text-right">Δ Above</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {marketCheck.fails.map((f, i) => {
+                      const delta = f.vendor_rate - f.market_rate;
+                      const pct = f.market_rate > 0 ? (delta / f.market_rate) * 100 : 0;
+                      return (
+                        <TableRow key={`${f.pr_line_id}::${f.supplier_name}::${i}`} className="bg-red-50/30">
+                          <TableCell className="text-xs font-medium">{f.pr_description}</TableCell>
+                          <TableCell className="text-xs">{f.supplier_name}</TableCell>
+                          <TableCell className="text-right text-xs font-mono text-red-700 font-semibold">₹{f.vendor_rate.toLocaleString("en-IN")}{f.unit ? `/${f.unit}` : ""}</TableCell>
+                          <TableCell className="text-right text-xs font-mono">₹{f.market_rate.toLocaleString("en-IN")}{f.unit ? `/${f.unit}` : ""}</TableCell>
+                          <TableCell className="text-right text-xs font-mono text-red-700">+₹{delta.toLocaleString("en-IN")} ({pct.toFixed(0)}%)</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            {/* Per-PR-line market rate roll-up */}
+            {Object.keys(marketBenchmarks).length > 0 && (
+              <details className="text-xs text-muted-foreground">
+                <summary className="cursor-pointer hover:text-foreground select-none">View market rate per item ({Object.keys(marketBenchmarks).length})</summary>
+                <div className="mt-2 rounded-md border bg-background overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>PR Item</TableHead>
+                        <TableHead className="text-right">Market Lowest</TableHead>
+                        <TableHead>Verdict</TableHead>
+                        <TableHead>Source</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {prLineItems.map((pli) => {
+                        const b = marketBenchmarks[pli.id];
+                        if (!b) return (
+                          <TableRow key={pli.id}>
+                            <TableCell className="text-xs">{pli.description}</TableCell>
+                            <TableCell className="text-right text-xs italic text-muted-foreground">pending</TableCell>
+                            <TableCell colSpan={2} className="text-xs italic text-muted-foreground">Click "Run Market Search" to fetch</TableCell>
+                          </TableRow>
+                        );
+                        return (
+                          <TableRow key={pli.id}>
+                            <TableCell className="text-xs">{pli.description}</TableCell>
+                            <TableCell className="text-right text-xs font-mono">
+                              {b.market_lowest_rate ? `₹${b.market_lowest_rate.toLocaleString("en-IN")}${b.market_lowest_unit ? `/${b.market_lowest_unit}` : ""}` : "—"}
+                            </TableCell>
+                            <TableCell className="text-xs max-w-md">{b.market_verdict || "—"}</TableCell>
+                            <TableCell className="text-xs">
+                              {b.source === "fresh" && <Badge variant="outline" className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300">live</Badge>}
+                              {b.source === "cache" && <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-800 border-blue-300">cached</Badge>}
+                              {b.source === "no_data" && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">no data</Badge>}
+                              {b.source === "error" && <Badge variant="outline" className="text-[10px] bg-red-100 text-red-800 border-red-300">error</Badge>}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </details>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Bid Totals Comparison — primary summary per supplier */}
       {canSeeMatrix && suppliers.length > 0 && (
         <Card>
@@ -3275,7 +3599,8 @@ Rules:
                 <p className="text-xs text-amber-700 mt-0.5">Only 1 quote was received for this RFQ. You can bypass the standard comparison and proceed directly to PO creation.</p>
               </div>
               <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
-                onClick={openBankDialogForCreate} disabled={creatingPO}>
+                onClick={openBankDialogForCreate}
+                disabled={creatingPO}>
                 {creatingPO ? "Creating PO..." : "Proceed Directly to PO →"}
               </Button>
             </div>
