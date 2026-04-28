@@ -156,8 +156,16 @@ serve(async (req) => {
     const claudeData = await claudeRes.json();
     if (!claudeRes.ok || claudeData?.error) {
       const msg = claudeData?.error?.message ?? `Claude HTTP ${claudeRes.status}`;
-      return new Response(JSON.stringify({ error: "Anthropic API: " + msg }), {
-        status: 502, headers: { ...CORS, "Content-Type": "application/json" },
+      // Soft-fail: Anthropic errors (rate limits, web_search transient failures,
+      // guardrails) should not paint the comparison sheet red. Return 200 with
+      // a no_data payload so the UI flags it as "no live market data" instead.
+      console.error("market-rate-search anthropic error:", msg);
+      return new Response(JSON.stringify({
+        item, city, lowest_rate: 0, lowest_rate_unit: "",
+        verdict: `Live market lookup unavailable (${msg.slice(0, 120)})`,
+        suppliers: [], source: "no_data",
+      }), {
+        status: 200, headers: { ...CORS, "Content-Type": "application/json" },
       });
     }
 
@@ -215,9 +223,15 @@ serve(async (req) => {
       status: 200, headers: { ...CORS, "Content-Type": "application/json" },
     });
   } catch (err: any) {
+    // Same soft-fail policy: never crash the comparison sheet on a single
+    // failed search. Log the cause, return 200 + no_data.
     console.error("market-rate-search error:", err);
-    return new Response(JSON.stringify({ error: String(err?.message ?? err) }), {
-      status: 500, headers: { ...CORS, "Content-Type": "application/json" },
+    return new Response(JSON.stringify({
+      item: "", city: "", lowest_rate: 0, lowest_rate_unit: "",
+      verdict: `Search failed (${String(err?.message ?? err).slice(0, 120)})`,
+      suppliers: [], source: "no_data",
+    }), {
+      status: 200, headers: { ...CORS, "Content-Type": "application/json" },
     });
   }
 });
