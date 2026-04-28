@@ -2854,46 +2854,123 @@ Rules:
 
             {/* Per-PR-line market rate roll-up */}
             {Object.keys(marketBenchmarks).length > 0 && (
-              <details className="text-xs text-muted-foreground">
+              <details className="text-xs text-muted-foreground" open>
                 <summary className="cursor-pointer hover:text-foreground select-none">View market rate per item ({Object.keys(marketBenchmarks).length})</summary>
-                <div className="mt-2 rounded-md border bg-background overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>PR Item</TableHead>
-                        <TableHead className="text-right">Market Lowest</TableHead>
-                        <TableHead>Verdict</TableHead>
-                        <TableHead>Source</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {prLineItems.map((pli) => {
-                        const b = marketBenchmarks[pli.id];
-                        if (!b) return (
-                          <TableRow key={pli.id}>
-                            <TableCell className="text-xs">{pli.description}</TableCell>
-                            <TableCell className="text-right text-xs italic text-muted-foreground">pending</TableCell>
-                            <TableCell colSpan={2} className="text-xs italic text-muted-foreground">Click "Run Market Search" to fetch</TableCell>
-                          </TableRow>
-                        );
-                        return (
-                          <TableRow key={pli.id}>
-                            <TableCell className="text-xs">{pli.description}</TableCell>
-                            <TableCell className="text-right text-xs font-mono">
-                              {b.market_lowest_rate ? `₹${b.market_lowest_rate.toLocaleString("en-IN")}${b.market_lowest_unit ? `/${b.market_lowest_unit}` : ""}` : "—"}
-                            </TableCell>
-                            <TableCell className="text-xs max-w-md">{b.market_verdict || "—"}</TableCell>
-                            <TableCell className="text-xs">
-                              {b.source === "fresh" && <Badge variant="outline" className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300">live</Badge>}
-                              {b.source === "cache" && <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-800 border-blue-300">cached</Badge>}
-                              {b.source === "no_data" && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">no data</Badge>}
-                              {b.source === "error" && <Badge variant="outline" className="text-[10px] bg-red-100 text-red-800 border-red-300">error</Badge>}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+                <div className="mt-3 space-y-4">
+                  {prLineItems.map((pli) => {
+                    const b = marketBenchmarks[pli.id];
+                    if (!b) {
+                      return (
+                        <div key={pli.id} className="rounded-md border bg-background px-3 py-2 text-xs">
+                          <div className="font-medium text-foreground">{pli.description}</div>
+                          <div className="italic text-muted-foreground">Pending — click "Run Market Search" to fetch.</div>
+                        </div>
+                      );
+                    }
+                    const sortedSuppliers = [...b.market_suppliers].sort((a, s) => {
+                      const ra = typeof a.rate_numeric === "number" ? a.rate_numeric : Number.POSITIVE_INFINITY;
+                      const rb = typeof s.rate_numeric === "number" ? s.rate_numeric : Number.POSITIVE_INFINITY;
+                      return ra - rb;
+                    });
+                    return (
+                      <div key={pli.id} className="rounded-md border bg-background p-3 space-y-3">
+                        <div className="flex items-start justify-between gap-3 flex-wrap">
+                          <div className="space-y-1">
+                            <div className="text-sm font-semibold text-foreground">{pli.description}</div>
+                            <div className="text-xs text-muted-foreground max-w-2xl">{b.market_verdict || "—"}</div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {b.source === "fresh" && <Badge variant="outline" className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300">live</Badge>}
+                            {b.source === "cache" && <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-800 border-blue-300">cached</Badge>}
+                            {b.source === "no_data" && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">no data</Badge>}
+                            {b.source === "error" && <Badge variant="outline" className="text-[10px] bg-red-100 text-red-800 border-red-300">error</Badge>}
+                            {b.market_lowest_rate > 0 && (
+                              <span className="text-sm font-mono font-semibold text-emerald-700">
+                                ₹{b.market_lowest_rate.toLocaleString("en-IN")}{b.market_lowest_unit ? `/${b.market_lowest_unit}` : ""}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {sortedSuppliers.length === 0 ? (
+                          <div className="text-xs italic text-muted-foreground">No suppliers found.</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {sortedSuppliers.map((s, i) => {
+                              const rank = i + 1;
+                              const isCheapest = i === 0 && typeof s.rate_numeric === "number";
+                              const rateLabel = s.rate || (typeof s.rate_numeric === "number" ? `₹${s.rate_numeric.toLocaleString("en-IN")}${s.unit ? `/${s.unit}` : ""}` : "");
+                              const NameTag = s.url ? "a" : "span";
+                              const nameProps: any = s.url
+                                ? { href: s.url, target: "_blank", rel: "noopener noreferrer", className: "text-base font-semibold text-blue-700 hover:text-blue-900 hover:underline" }
+                                : { className: "text-base font-semibold text-foreground" };
+                              return (
+                                <div
+                                  key={`${pli.id}::${s.name}::${i}`}
+                                  className={`relative rounded-lg border-2 px-4 py-3 ${
+                                    isCheapest ? "border-emerald-400 bg-emerald-50/40" : "border-muted bg-background"
+                                  }`}
+                                >
+                                  {isCheapest && (
+                                    <div className="absolute -top-2 left-3 inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm">
+                                      🏆 Cheapest
+                                    </div>
+                                  )}
+                                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                                    <div className="flex items-start gap-2 min-w-0">
+                                      <span className={`inline-flex items-center justify-center h-6 min-w-[1.75rem] rounded-full px-2 text-[11px] font-bold ${
+                                        isCheapest ? "bg-emerald-600 text-white" : "bg-muted text-foreground"
+                                      }`}>
+                                        #{rank}
+                                      </span>
+                                      <div className="space-y-1 min-w-0">
+                                        <div className="leading-tight">
+                                          <NameTag {...nameProps}>{s.name || "Unnamed supplier"}</NameTag>
+                                        </div>
+                                        {Array.isArray(s.brands) && s.brands.length > 0 && (
+                                          <div className="flex flex-wrap gap-1">
+                                            {s.brands.map((br, bi) => (
+                                              <span key={bi} className="text-[11px] text-blue-700 font-medium">{br}{bi < s.brands!.length - 1 ? "," : ""}</span>
+                                            ))}
+                                          </div>
+                                        )}
+                                        {s.product && (
+                                          <div className="text-xs text-muted-foreground">{s.product}</div>
+                                        )}
+                                        {(s.location || s.source) && (
+                                          <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
+                                            {s.location && <span>📍 {s.location}</span>}
+                                            {s.location && s.source && <span>·</span>}
+                                            {s.source && (
+                                              s.url ? (
+                                                <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:underline">{s.source}</a>
+                                              ) : (
+                                                <span>{s.source}</span>
+                                              )
+                                            )}
+                                          </div>
+                                        )}
+                                        {s.phone && s.phone !== "N/A" && (
+                                          <div className="text-xs text-muted-foreground">📞 {s.phone}</div>
+                                        )}
+                                      </div>
+                                    </div>
+                                    {rateLabel && (
+                                      <div className={`text-base font-bold font-mono whitespace-nowrap ${
+                                        isCheapest ? "text-emerald-700" : "text-foreground"
+                                      }`}>
+                                        {rateLabel}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </details>
             )}
