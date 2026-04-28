@@ -950,7 +950,7 @@ export default function PurchaseRequisitions() {
     const list = prList.filter((p) => {
       const matchesStatus =
         statusFilter === "all" ? true :
-        statusFilter === "review" ? (p.status === "pending" || p.status === "pending_design") :
+        statusFilter === "review" ? (p.status === "pending" || p.status === "pending_design" || p.status === "duplicate_flagged") :
         p.status === statusFilter;
       const matchesPriority = priorityFilter === "all" ? true : (p.priority ?? "normal") === priorityFilter;
       const matchesQ =
@@ -1570,7 +1570,7 @@ export default function PurchaseRequisitions() {
       rfq_created: 0, po_issued: 0, delivered: 0, cancelled: 0,
     };
     prList.forEach((p) => {
-      if (p.status === "pending" || p.status === "pending_design") c.review += 1;
+      if (p.status === "pending" || p.status === "pending_design" || p.status === "duplicate_flagged") c.review += 1;
       if (c[p.status] !== undefined) c[p.status] += 1;
     });
     return c;
