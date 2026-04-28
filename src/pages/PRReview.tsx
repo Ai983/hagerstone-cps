@@ -825,7 +825,7 @@ export default function PRReview() {
                   </p>
 
                   {/* ── Create RFQ panel ── */}
-                  {(editPr?.status === "pending" || editPr?.status === "validated") && (
+                  {(editPr?.status === "pending" || editPr?.status === "validated" || editPr?.status === "duplicate_flagged") && (
                     <div className="mt-5 rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
                       <div className="text-sm font-semibold text-primary">Create RFQ from this PR</div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

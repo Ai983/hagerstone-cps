@@ -1884,12 +1884,12 @@ export default function PurchaseRequisitions() {
                       <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{formatIndianDateTime(pr.created_at)}</TableCell>
                       <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
-                          {isProcurementUser && (pr.status === "pending" || pr.status === "pending_design") && (
+                          {isProcurementUser && (pr.status === "pending" || pr.status === "pending_design" || pr.status === "duplicate_flagged") && (
                             <Button
                               variant="default"
                               size="sm"
                               onClick={() => navigate(`/pr-review?pr=${pr.id}`)}
-                              title="Review PR (edit items, approve, or create RFQ)"
+                              title={pr.status === "duplicate_flagged" ? "Duplicate flagged — review and decide whether to push to RFQ or cancel" : "Review PR (edit items, approve, or create RFQ)"}
                               className="bg-amber-600 hover:bg-amber-700 text-white"
                             >
                               <ClipboardCheck className="h-3.5 w-3.5 mr-1" /> Review
