@@ -18,42 +18,26 @@ const CORS = {
 
 const CACHE_TTL_DAYS = 7;
 
-const SYSTEM_PROMPT = `You output ONLY this JSON object — no prose, no markdown:
+// Lean prompt to keep input tokens low — Haiku 4.5 only needs the JSON shape
+// and a couple of rules. Web search results add ~3-5K input tokens per call,
+// so the prompt itself must stay tight to fit inside a 10K TPM budget.
+const SYSTEM_PROMPT = `Return ONLY this JSON, no prose:
 {
   "item": "",
   "city": "",
   "lowest_rate": 0,
   "lowest_rate_unit": "",
   "verdict": "",
-  "suppliers": [{"name":"","brands":[],"product":"","rate":"","rate_numeric":0,"unit":"","phone":"","location":"","gmapsUrl":"","source":"","url":""}]
+  "suppliers": [{"name":"","product":"","rate":"","rate_numeric":0,"unit":"","phone":"","location":"","source":"","url":""}]
 }
 
-You are a market-rate aggregator for Indian construction / interior / MEP / signage materials. Return up to 8 live suppliers within ~50 km of the queried location.
+You aggregate live market rates for Indian construction / interior / MEP materials. Return up to 5 suppliers within ~50 km of the queried city. Default city: Noida.
 
-GEO FILTER (strict):
-- Parse city / locality from the query.
-- Suppliers must be within ~50 km of that location. Reject results from far cities.
-- Default to "Noida" if city is missing.
+Per supplier — name, product (brand + spec), rate (e.g. "Rs. 45/sqft"), rate_numeric (number only, same unit for all rows), unit, phone (real digits or "N/A"), location, source platform, url.
 
-PHONES: real digits only — never "98XXXXXXXX" placeholders. Use "N/A" if unknown.
+Top-level — lowest_rate is the smallest rate_numeric (0 if none); lowest_rate_unit matches the chosen unit; verdict is one line on the price band.
 
-For each supplier:
-- name: firm
-- brands: array of 1-3 real brand names
-- product: brand + spec
-- rate: human-readable like "Rs. 45/sqft" or "Rs. 350/bag"
-- rate_numeric: just the number, e.g. 45 or 350 (use the same unit across all suppliers for one query)
-- unit: "sqft", "bag", "kg", "piece", "nos", "metre", "litre", etc.
-- phone, location, gmapsUrl, source, url as in standard format
-
-Top-level fields:
-- lowest_rate: numeric — the cheapest rate_numeric across the suppliers (in the chosen unit). 0 if no suppliers found.
-- lowest_rate_unit: matches the unit field used above. "" if no data.
-- verdict: 1 line summary of the market band. e.g. "Plywood 18mm BWP retail band Rs. 65-95/sqft in Bangalore."
-
-If no real suppliers are found for the item in that location: return suppliers: [], lowest_rate: 0, verdict: "No market suppliers found for this item / city — verify item name and re-search.".
-
-Data sources: IndiaMART, JustDial, TradeIndia, Moglix, Google Maps, manufacturer dealer locators. JSON only. Never invent data.`;
+If no real suppliers found, return suppliers: [], lowest_rate: 0, verdict: "No market data". Sources: IndiaMART, JustDial, TradeIndia, Moglix, Google Maps. Never invent data.`;
 
 // Strip the outer JSON object cleanly even if the model wrapped it in ```json fences
 function extractJson(text: string): any {
@@ -145,10 +129,13 @@ serve(async (req) => {
         "anthropic-beta": "web-search-2025-03-05",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5",
-        max_tokens: 3000,
+        // Haiku 4.5 — same model the Maal Khojo demo runs on. ~3-4× lower
+        // input token usage than Sonnet on web-search results, fits inside
+        // the 10K TPM cap on the secondary $5 account.
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 2000,
         system: SYSTEM_PROMPT,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
         messages: [{ role: "user", content: userPrompt }],
       }),
     });

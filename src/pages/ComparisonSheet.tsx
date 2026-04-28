@@ -740,13 +740,12 @@ export default function ComparisonSheetPage() {
         return;
       }
 
-      // Throttle so we don't blow through Anthropic's per-minute token budget.
-      // The $5 secondary account is capped at 10K input tokens/minute and each
-      // search burns ~2K input tokens after web_search results are included.
-      // Process 2 at a time with a small gap between batches → effective rate
-      // stays under ~6K TPM and concurrent searches still finish in parallel.
-      const CONCURRENCY = 2;
-      const BATCH_DELAY_MS = 1500;
+      // Throttle to fit Anthropic's 10K input-tokens-per-minute cap on the
+      // secondary $5 account. Edge function is now on Haiku 4.5 with a
+      // trimmed prompt — each call is ~1-1.5K input tokens after web_search
+      // results, so 3 concurrent + 1s gap keeps us under 6K TPM with room.
+      const CONCURRENCY = 3;
+      const BATCH_DELAY_MS = 1000;
       let done = 0;
       const runOne = async (pli: PrLineItem) => {
         try {
