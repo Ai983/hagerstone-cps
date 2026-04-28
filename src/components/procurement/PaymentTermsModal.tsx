@@ -155,7 +155,7 @@ Extract the payment terms and respond ONLY with a valid JSON object — no markd
 If you cannot find any payment terms, set confidence to 0 and leave payment_terms_type as empty string.`;
 
       const response = await callClaude({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-4-5',
         max_tokens: 800,
         messages: [{ role: 'user', content: prompt }]
       });

@@ -124,7 +124,7 @@ const extractQuoteDetails = async (
 
   const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
     body: {
-      model: "claude-opus-4-7",
+      model: "claude-sonnet-4-5",
       max_tokens: 4000,
       messages: [
         {

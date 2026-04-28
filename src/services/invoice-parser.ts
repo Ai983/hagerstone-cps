@@ -128,7 +128,7 @@ export async function parseInvoiceWithClaude(
   const { supabase } = await import("@/integrations/supabase/client");
   const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
     body: {
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-5",
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content }],
