@@ -55,6 +55,9 @@ type ComparisonSheetRow = {
   approved_by: string | null;
   approved_at: string | null;
   ai_recommendation: any | null;
+  above_market_justification: string | null;
+  above_market_justified_by: string | null;
+  above_market_justified_at: string | null;
 };
 
 type RfqRow = { id: string; rfq_number: string; title: string | null; pr_id: string };
@@ -254,6 +257,7 @@ export default function ComparisonSheetPage() {
   const [recommendedSupplierId, setRecommendedSupplierId] = useState<string>("");
   const [recommendReason, setRecommendReason] = useState("");
   const [overrideNotesByPrLineId, setOverrideNotesByPrLineId] = useState<Record<string, string>>({});
+  const [aboveMarketJustification, setAboveMarketJustification] = useState("");
 
   const [generating, setGenerating] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
@@ -598,6 +602,7 @@ export default function ComparisonSheetPage() {
       setReviewNotes((sRow.manual_notes ?? "") as string);
       setRecommendedSupplierId((sRow.reviewer_recommendation ?? sRow.recommended_supplier_id ?? "") as string);
       setRecommendReason((sRow.reviewer_recommendation_reason ?? "") as string);
+      setAboveMarketJustification((sRow.above_market_justification ?? "") as string);
 
       const overrides: Record<string, string> = {};
       const rawOverrides = (sRow.line_item_overrides ?? []) as any[];
@@ -639,15 +644,15 @@ export default function ComparisonSheetPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rfqId]);
 
-  // Auto-generate AI analysis when sheet loads and none exists yet
-  // (also re-generate when old schema is detected — missing comparison_approach)
+  // Auto-generate AI verdict the first time a sheet loads with no recommendation yet
+  // — old sheets keep whatever shape they had, user can click Re-run to upgrade
   const [autoAITried, setAutoAITried] = useState(false);
   useEffect(() => {
     if (autoAITried || aiLoading || loading) return;
     if (!sheet || suppliers.length === 0) return;
+    if (aiRecommendation) return;
 
     // Skip auto-AI if ALL suppliers have no usable data (0 items AND 0 header totals)
-    // This prevents wasting Claude API calls on empty data and misleading "zero line items" output
     const hasAnyUsableData = suppliers.some((s) => {
       const lines = allQuoteLinesBySupplierId[s.id] ?? [];
       const q = quoteBySupplierId[s.id];
@@ -657,12 +662,8 @@ export default function ComparisonSheetPage() {
     });
     if (!hasAnyUsableData) return;
 
-    const existing = aiRecommendation as any;
-    const isOldSchema = existing && !existing.comparison_approach;
-    if (!existing || isOldSchema) {
-      setAutoAITried(true);
-      getAIRecommendation();
-    }
+    setAutoAITried(true);
+    getAIRecommendation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheet, suppliers, aiRecommendation, loading, allQuoteLinesBySupplierId, quoteBySupplierId]);
 
@@ -749,7 +750,10 @@ export default function ComparisonSheetPage() {
       let done = 0;
       const runOne = async (pli: PrLineItem) => {
         try {
-          const itemQuery = `${pli.description}${pli.unit ? ` ${pli.unit}` : ""}`.trim();
+          // Send only the description — adding the unit (e.g. "SQF" for paint)
+          // poisons the web_search since most platforms don't price that way.
+          // The edge function's system prompt lets Claude pick the right unit.
+          const itemQuery = pli.description.trim();
           const { data, error } = await supabase.functions.invoke("market-rate-search", {
             body: { item: itemQuery, address: projectSite ?? "", force_refresh: force },
           });
@@ -768,7 +772,11 @@ export default function ComparisonSheetPage() {
             };
           }
           const result = data as any;
-          const noData = !result?.suppliers || result.suppliers.length === 0 || !result.lowest_rate;
+          // Trust the lowest_rate field — Claude often finds a market price band
+          // (e.g. "Rs 140-280/Liter") and reports it via lowest_rate + verdict
+          // even when it can't surface specific suppliers with URLs. The supplier
+          // list is a bonus, not a precondition for showing the rate.
+          const noData = !result?.lowest_rate || Number(result.lowest_rate) <= 0;
           return {
             pr_line_item_id: pli.id,
             market_lowest_rate: Number(result?.lowest_rate ?? 0),
@@ -871,6 +879,114 @@ export default function ComparisonSheetPage() {
     return { passes, isPending, fails, coveredItems, pendingItems, noDataItems };
   }, [prLineItems, marketBenchmarks, cellsByPrLineIdAndSupplierId, suppliers]);
 
+  // Per-row decision summary: for each PR line item, pick the cheapest vendor
+  // (by landed rate when available, else raw rate) and compare to the live
+  // market lowest. Drives the simplified "Decision Summary" card.
+  type DecisionRow = {
+    pr_line_id: string;
+    description: string;
+    quantity: number;
+    unit: string | null;
+    cheapest_supplier_id: string | null;
+    cheapest_supplier_name: string | null;
+    cheapest_rate: number | null;          // best rate found among matched cells
+    cheapest_line_total: number | null;    // best landed rate × qty (fallback rate × qty)
+    market_rate: number | null;
+    market_unit: string | null;
+    market_status: "above" | "at_or_below" | "no_data" | "pending";
+    delta: number | null;                  // cheapest_rate - market_rate
+    delta_pct: number | null;
+  };
+  const decisionSummary = useMemo(() => {
+    const rows: DecisionRow[] = prLineItems.map((pli) => {
+      const cells = cellsByPrLineIdAndSupplierId[pli.id] ?? {};
+      let cheapestSupplierId: string | null = null;
+      let cheapestRate: number | null = null;
+      let cheapestLineTotal: number | null = null;
+      Object.entries(cells).forEach(([supplierId, cell]: [string, any]) => {
+        const r = Number(cell?.rate ?? 0);
+        const lr = Number(cell?.total_landed_rate ?? 0);
+        const ranking = lr > 0 ? lr : r;
+        if (ranking <= 0) return;
+        if (cheapestRate === null || ranking < (cheapestLineTotal !== null ? cheapestLineTotal : cheapestRate)) {
+          cheapestSupplierId = supplierId;
+          cheapestRate = r > 0 ? r : ranking;
+          cheapestLineTotal = lr > 0 ? lr : null;
+        }
+      });
+      const cheapestSupplierName = cheapestSupplierId
+        ? (suppliers.find((s) => s.id === cheapestSupplierId)?.name ?? null)
+        : null;
+
+      const bench = marketBenchmarks[pli.id];
+      let marketStatus: DecisionRow["market_status"] = "pending";
+      let marketRate: number | null = null;
+      let marketUnit: string | null = null;
+      if (bench) {
+        if (bench.source === "no_data" || bench.source === "error" || !bench.market_lowest_rate) {
+          marketStatus = "no_data";
+        } else {
+          marketRate = Number(bench.market_lowest_rate);
+          marketUnit = bench.market_lowest_unit || null;
+          if (cheapestRate !== null && cheapestRate > marketRate) marketStatus = "above";
+          else if (cheapestRate !== null) marketStatus = "at_or_below";
+          else marketStatus = "no_data";
+        }
+      }
+
+      const delta = cheapestRate !== null && marketRate !== null ? cheapestRate - marketRate : null;
+      const deltaPct = delta !== null && marketRate ? (delta / marketRate) * 100 : null;
+
+      const qty = Number(pli.quantity ?? 0);
+      const lineRate = cheapestLineTotal !== null ? cheapestLineTotal : cheapestRate;
+      const lineTotal = lineRate !== null && qty > 0 ? lineRate * qty : null;
+
+      return {
+        pr_line_id: pli.id,
+        description: pli.description,
+        quantity: qty,
+        unit: pli.unit,
+        cheapest_supplier_id: cheapestSupplierId,
+        cheapest_supplier_name: cheapestSupplierName,
+        cheapest_rate: cheapestRate,
+        cheapest_line_total: lineTotal,
+        market_rate: marketRate,
+        market_unit: marketUnit,
+        market_status: marketStatus,
+        delta,
+        delta_pct: deltaPct,
+      };
+    });
+
+    const aboveMarketCount = rows.filter((r) => r.market_status === "above").length;
+    const totalCheapestSpend = rows.reduce((sum, r) => sum + (r.cheapest_line_total ?? 0), 0);
+    const justified = aboveMarketJustification.trim().length > 0;
+    return { rows, aboveMarketCount, totalCheapestSpend, justified };
+  }, [prLineItems, cellsByPrLineIdAndSupplierId, suppliers, marketBenchmarks, aboveMarketJustification]);
+
+  // Comparison-sheet readiness: AI verdict + market-search must both have run.
+  // The user is blocked from "Save Draft" / "Mark as Reviewed" / "Proceed to PO"
+  // until both finish (success or partial failure). Market may legitimately fail
+  // for some items (no_data / error sources) — that still counts as "attempted".
+  const comparisonReadiness = useMemo(() => {
+    const aiBusy = aiLoading;
+    const marketBusy = marketLoading;
+    const aiDone = !aiBusy && aiRecommendation != null;
+    const marketDone = !marketBusy && Object.keys(marketBenchmarks).length > 0;
+    const isGenerating = aiBusy || marketBusy;
+    const isReady = aiDone && marketDone;
+    const failedItems = prLineItems.filter((pli) => {
+      const b = marketBenchmarks[pli.id];
+      return b && (b.source === "error" || b.source === "no_data");
+    }).length;
+    const hasMarketFailures = marketDone && failedItems > 0;
+    return {
+      aiBusy, marketBusy, aiDone, marketDone,
+      isGenerating, isReady,
+      failedItems, hasMarketFailures,
+    };
+  }, [aiLoading, marketLoading, aiRecommendation, marketBenchmarks, prLineItems]);
+
   const perSupplierTotals = useMemo(() => {
     // Use stored quote totals (not recalculated) for accuracy
     const totals: Record<string, {
@@ -944,6 +1060,17 @@ export default function ComparisonSheetPage() {
           toast.error("Recommendation Reason is required");
           return;
         }
+        if (decisionSummary.aboveMarketCount > 0 && !aboveMarketJustification.trim()) {
+          toast.error(`Reason for choosing above-market rates is required (${decisionSummary.aboveMarketCount} item${decisionSummary.aboveMarketCount === 1 ? "" : "s"} flagged)`);
+          return;
+        }
+        const justificationPayload = decisionSummary.aboveMarketCount > 0
+          ? {
+              above_market_justification: aboveMarketJustification.trim(),
+              above_market_justified_by: user.id,
+              above_market_justified_at: now,
+            }
+          : { above_market_justification: null, above_market_justified_by: null, above_market_justified_at: null };
         const { error } = await supabase.from("cps_comparison_sheets").update({
           manual_notes: reviewNotes.trim() || null,
           line_item_overrides: overrides,
@@ -952,6 +1079,7 @@ export default function ComparisonSheetPage() {
           manual_review_status: "reviewed",
           manual_review_by: user.id,
           manual_review_at: now,
+          ...justificationPayload,
           ...(aiRecommendation ? { ai_recommendation: aiRecommendation } : {}),
         }).eq("id", sheet.id);
         if (error) throw error;
@@ -1757,108 +1885,78 @@ export default function ComparisonSheetPage() {
         }),
       };
 
-      const systemPrompt = `You are the head procurement advisor for Hagerstone International Pvt Ltd, a construction / interiors / MEP / EPC company operating across India. Your job is to produce a concise, decision-grade comparison analysis of supplier quotes.
+      // Inject pr_line_item_id and supplier_id so the AI can return a per-item
+      // matrix keyed exactly by those IDs (the unified comparison table reads it
+      // back via aiRecommendation.per_item_matrix[pr_line_id][supplier_id]).
+      const compactInput = {
+        rfq: comparisonData.rfq,
+        pr_line_items: prLineItems.map((pli) => ({
+          id: pli.id,
+          description: pli.description,
+          quantity: pli.quantity,
+          unit: pli.unit,
+        })),
+        suppliers: suppliers.map((s) => {
+          const enriched = comparisonData.suppliers.find((x: any) => x.name === s.name);
+          return {
+            id: s.id,
+            name: s.name,
+            data_source: enriched?.data_source ?? "header_totals_only",
+            items_count: enriched?.items_count ?? 0,
+            commercial: enriched?.commercial ?? null,
+            terms: enriched?.terms ?? null,
+            // Only ship the line items if there are some — keeps prompt lean
+            items: (enriched?.items ?? []).map((it: any) => ({
+              description: it.description, brand: it.brand,
+              quantity: it.quantity, unit: it.unit, rate: it.rate,
+              gst_percent: it.gst_percent, freight_per_unit: it.freight_per_unit,
+            })),
+          };
+        }),
+      };
 
-Context you must bring to every analysis:
-- Hagerstone's 5 non-negotiables: zero corruption, best market rates, fair supplier treatment, best credit/payment terms, full auditability.
-- Indian procurement realities: GST is 18% on most material/services; freight and installation charges often quoted separately; advance payment norms are 25-50%; 100% advance is a red flag to scrutinise.
-- Site engineers often raise vague PRs (e.g., "Signage, 1 sqft") and vendors itemise them into specific products. Your job is to intelligently ALIGN similar items across vendors when possible, or CLEARLY STATE that vendors quoted different scopes of work.
-- Spot anomalies: quotes >5% above benchmark, identical rates across vendors (collusion), unusually short validity, missing warranty, etc.
-- Be honest. If the PR is too vague to compare fairly, say so. If vendors quoted different products, say so.
-- Writing style: direct, factual, in Indian Rupees (₹). No filler.
+      const systemPrompt = `You are a procurement analyst for Hagerstone (Indian construction/interiors). Output ONLY valid JSON, no prose, no markdown fences.
 
-Output ONLY valid JSON. No markdown fences. No prose outside JSON.`;
+Context: GST 18% standard, 100% advance is a red flag, vendors sometimes only send a header total (no per-item breakdown).
 
-      const userPrompt = `Analyse this RFQ comparison and return a JSON object matching the schema below.
+You have TWO jobs:
+1. PER-ITEM MATRIX: For every PR line × supplier pair, return the per-unit rate. Use the supplier's quoted line item if available. If the supplier only sent a header total (data_source = "header_totals_only"), INFER per-unit rates by splitting the subtotal proportionally to peer vendors' rates for the same items, using PR quantities. Mark inferred cells with source: "inferred". Only return source: "unavailable" if there is truly no signal.
+2. SHORT VERDICT: Recommend ONE supplier (must match an input supplier name exactly), one-sentence headline (the WHY), and 1-3 concrete watch-outs (max 3, terse, actionable).
 
-INPUT DATA:
-${JSON.stringify(comparisonData, null, 2)}
+Be honest. If you inferred rates, add a watch-out telling reviewers which suppliers' cells are inferred.`;
 
-OUTPUT JSON SCHEMA (fill every field, use null only where truly unknown):
+      const userPrompt = `Analyse this RFQ comparison and return JSON only.
+
+INPUT:
+${JSON.stringify(compactInput, null, 2)}
+
+OUTPUT JSON SCHEMA:
 {
-  "comparison_approach": "pr-driven" | "items-aligned" | "bid-totals-only",
-  "approach_reason": "Why this approach is right for this data — 1-2 sentences. E.g., 'PR has 1 vague item while vendors quoted 10+ detailed items, so direct per-line comparison is misleading. Using items-aligned grouping and bid-totals comparison instead.'",
-
-  "executive_summary": "2-3 sentence plain-English summary for a procurement head: who is cheaper, by how much, and whether the quotes are actually comparable.",
-
-  "supplier_profiles": [
-    {
-      "name": "Supplier name",
-      "items_quoted": number,
-      "landed_total": number,
-      "strengths": ["2-4 specific strengths, e.g. 'Lowest landed cost', 'SS material (premium)'"],
-      "weaknesses": ["2-4 specific weaknesses, e.g. '75% advance demand is high', 'No warranty specified'"],
-      "risk_flags": ["Critical issues only — leave empty [] if none"]
+  "per_item_matrix": {
+    "<pr_line_item_id>": {
+      "<supplier_id>": {
+        "rate": <number — per-unit rate in Rs>,
+        "source": "quoted" | "inferred" | "unavailable",
+        "note": "<short reason if inferred, omit if quoted>"
+      }
     }
-  ],
-
-  "item_comparison": [
-    {
-      "category": "Short label like 'Board Room Signage' or 'Letter Depth Raising - Reception'",
-      "description": "What this group of items is, 1 line",
-      "vendor_items": [
-        {
-          "supplier": "Supplier name",
-          "item_description": "Exact item as quoted",
-          "quantity": number,
-          "unit": "string",
-          "rate_per_unit": number,
-          "landed_per_unit": number
-        }
-      ],
-      "alignment_note": "Are these the same product? If not, why are rates different? E.g. 'Stainless steel vs painted letters — SS is 20-50x costlier but more durable.'"
-    }
-  ],
-
-  "unmatched_items": [
-    {
-      "supplier": "Supplier name",
-      "item_description": "Item description",
-      "note": "Why it's unmatched — other vendor didn't quote equivalent"
-    }
-  ],
-
-  "commercial_analysis": {
-    "lowest_landed": { "supplier": "name", "amount": number },
-    "highest_landed": { "supplier": "name", "amount": number },
-    "price_spread_pct": number,
-    "spread_interpretation": "Why the spread exists — same scope different rates (bid war) OR different scope (not comparable) OR mix."
   },
-
-  "recommended_supplier": "Supplier name (ONE — must match a supplier in the input)",
-  "reason": "Concise 2-3 sentence recommendation. Say the WHY — not just 'lowest price'. Include tradeoffs.",
-  "ranking": [
-    { "rank": 1, "supplier": "name", "rationale": "1 line" }
-  ],
-  "potential_savings": number_or_null,
-
-  "warnings": [
-    "Each warning is 1 concrete line. E.g., 'No warranty specified for either vendor — ask for OEM warranty before PO.'"
-  ],
-
-  "data_quality_issues": [
-    "E.g., 'PR description too vague — engineer should specify material (painted/SS), size, and quantity per location.'"
-  ],
-
-  "next_steps_for_procurement": [
-    "2-4 concrete actions. E.g., 'Clarify scope with requestor before PO issue.', 'Negotiate payment terms with kaiser vitals down to 50% advance.'"
-  ],
-
-  "disclaimer": "AI-generated analysis for reference only. Human review and approval required."
+  "recommended_supplier": "<exact name from input>",
+  "headline": "<one sentence, the WHY — e.g. 'Lowest landed cost (Rs 1,72,588) — 4% cheaper than next bidder.'>",
+  "watch_outs": ["1-3 short concrete cautions"]
 }
 
 Rules:
-1. "recommended_supplier" MUST be one of the exact supplier names in the input.
-2. "item_comparison" should INTELLIGENTLY GROUP similar items. E.g., "Board Room Signage" category contains both vendors' versions of the same purpose. If vendor A quotes "Board Room SS Signage" and vendor B quotes "Board Room Painted Signage", group them in one category and flag the alignment_note.
-3. If the PR is specific (multiple specific items) use "pr-driven" approach — match each PR item to vendor items 1:1.
-4. If the PR is vague (1 item, vendors itemised into many) use "items-aligned" or "bid-totals-only" and explain why in "approach_reason".
-5. All monetary amounts in Indian Rupees (numeric, no symbol).
-6. Return valid JSON only. No markdown.`;
+- Use supplier IDs and PR line item IDs from input EXACTLY as keys.
+- "rate" is a number (no Rs symbol, no commas).
+- For source="inferred", explain in 8 words or less in note (e.g., "split from header total proportional to peers").
+- "recommended_supplier" must match an input supplier name verbatim.
+- Return JSON only. No markdown.`;
 
       const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-sonnet-4-5",
-          max_tokens: 8192,
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 3000,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],
         },
@@ -1894,7 +1992,7 @@ Rules:
           .update({ ai_recommendation: parsed })
           .eq("id", sheet.id);
       }
-      toast.success("AI comparison analysis generated");
+      toast.success("AI recommendation generated");
     } catch (e: any) {
       toast.error(e?.message || "Failed to generate AI analysis");
     } finally {
@@ -2419,1141 +2517,457 @@ Rules:
         );
       })()}
 
-      {/* AI Comparison Analysis — comprehensive, dynamically structured by Claude */}
-      {canSeeMatrix && (aiRecommendation || aiLoading) && (
-        <Card className="border-primary/30 bg-primary/5">
-          <CardHeader className="pb-3">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  AI Comparison Analysis
-                  {aiLoading && <span className="text-xs text-muted-foreground font-normal ml-1">Analyzing...</span>}
-                </CardTitle>
-                {aiRecommendation?.approach_reason && (
-                  <CardDescription className="mt-1 text-xs">
-                    <span className="font-medium text-foreground">Approach: </span>
-                    {aiRecommendation.comparison_approach ?? "—"} — {aiRecommendation.approach_reason}
-                  </CardDescription>
-                )}
-              </div>
-              {aiRecommendation && canCreateRFQ && (
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Button size="sm" variant="outline" onClick={getAIRecommendation} disabled={aiLoading} title="Re-run AI on the data already loaded in the page">
-                    <Sparkles className="h-3.5 w-3.5 mr-1" />
-                    Regenerate AI
-                  </Button>
-                  <Button size="sm" onClick={regenerateAll} disabled={aiLoading} title="Refetch all quotes / suppliers from DB AND re-run AI — use this if a quote was edited or replaced">
-                    <Sparkles className="h-3.5 w-3.5 mr-1" />
-                    Regenerate Sheet
-                  </Button>
-                </div>
-              )}
-            </div>
-          </CardHeader>
-          {aiRecommendation && (
-            <CardContent className="space-y-4">
-              {/* Executive Summary */}
-              {aiRecommendation.executive_summary && (
-                <div className="bg-background/60 rounded-md p-3 border border-border/60">
-                  <div className="text-xs font-semibold uppercase text-muted-foreground mb-1">Executive Summary</div>
-                  <p className="text-sm text-foreground">{aiRecommendation.executive_summary}</p>
-                </div>
-              )}
+      {/* ─── UNIFIED COMPARISON SHEET — single table, everything in one view ───
+           Rows: PR line items (per-vendor rates) → Subtotal / GST / Freight / Extras / Landed Total → Commercial terms.
+           Columns: Each vendor + Market column.
+           Plus: short AI verdict + combined above-market justification at bottom.
+      */}
+      {canSeeMatrix && suppliers.length > 0 && (() => {
+        // Per-supplier totals — same logic the old Bid Totals card used (header values trumped line sums)
+        const supplierTotals = suppliers.map((sup) => {
+          const lines = allQuoteLinesBySupplierId[sup.id] ?? [];
+          const charges = extraChargesBySupplierId[sup.id] ?? [];
+          const lineSubtotal = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
+          const lineGst = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
+          const freight = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
+          const extraSum = charges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
+          const quote = quoteBySupplierId[sup.id];
+          const headerSubtotal = Number(quote?.total_quoted_value ?? 0);
+          const headerLanded = Number(quote?.total_landed_value ?? 0);
+          const subtotal = headerSubtotal > 0 ? headerSubtotal : lineSubtotal;
+          let landedTotal: number;
+          let gst: number;
+          if (headerLanded > 0) {
+            landedTotal = headerLanded;
+            gst = Math.max(0, landedTotal - subtotal - freight - extraSum);
+          } else {
+            gst = lineGst;
+            landedTotal = subtotal + gst + freight + extraSum;
+          }
+          return {
+            sup,
+            subtotal, gst, freight, extraSum, landedTotal,
+            paymentTerms: quote?.payment_terms ?? null,
+            deliveryTerms: quote?.delivery_terms ?? null,
+            warrantyMonths: quote?.warranty_months ?? null,
+            validityDays: quote?.validity_days ?? null,
+            compliance: quote?.compliance_status ?? null,
+            quoteFileUrl: quote?.legacy_file_url ?? null,
+            quoteFilePath: quote?.raw_file_path ?? null,
+          };
+        });
 
-              {/* Recommendation banner */}
-              <div className="bg-green-50 border border-green-200 rounded-md p-3">
-                <div className="flex items-start gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-green-700 mt-0.5 shrink-0" />
-                  <div className="flex-1">
-                    <div className="text-sm">
-                      <span className="font-semibold text-green-900">Recommended: </span>
-                      <span className="font-bold text-green-900">{aiRecommendation.recommended_supplier}</span>
-                    </div>
-                    <p className="text-sm text-green-800 mt-1">{aiRecommendation.reason}</p>
-                    {aiRecommendation.potential_savings != null && Number(aiRecommendation.potential_savings) > 0 && (
-                      <div className="text-xs text-green-700 mt-2">
-                        Potential savings vs next option: <span className="font-semibold">₹{Number(aiRecommendation.potential_savings).toLocaleString("en-IN")}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
+        const validLanded = supplierTotals.map((t) => t.landedTotal).filter((v) => v > 0);
+        const lowestLanded = validLanded.length ? Math.min(...validLanded) : 0;
+        const winnerSupplierId = supplierTotals.find((t) => t.landedTotal === lowestLanded && lowestLanded > 0)?.sup.id ?? null;
 
-              {/* Commercial analysis */}
-              {aiRecommendation.commercial_analysis && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  {aiRecommendation.commercial_analysis.lowest_landed && (
-                    <div className="rounded-md border border-emerald-200 bg-emerald-50 p-2">
-                      <div className="text-[10px] uppercase text-emerald-700 font-semibold">Lowest Landed</div>
-                      <div className="text-sm font-bold text-emerald-900">{aiRecommendation.commercial_analysis.lowest_landed.supplier}</div>
-                      <div className="text-xs text-emerald-700">{formatCurrency(Number(aiRecommendation.commercial_analysis.lowest_landed.amount), canViewPrices)}</div>
-                    </div>
-                  )}
-                  {aiRecommendation.commercial_analysis.highest_landed && (
-                    <div className="rounded-md border border-rose-200 bg-rose-50 p-2">
-                      <div className="text-[10px] uppercase text-rose-700 font-semibold">Highest Landed</div>
-                      <div className="text-sm font-bold text-rose-900">{aiRecommendation.commercial_analysis.highest_landed.supplier}</div>
-                      <div className="text-xs text-rose-700">{formatCurrency(Number(aiRecommendation.commercial_analysis.highest_landed.amount), canViewPrices)}</div>
-                    </div>
-                  )}
-                  {aiRecommendation.commercial_analysis.price_spread_pct != null && (
-                    <div className="rounded-md border border-border bg-muted/30 p-2">
-                      <div className="text-[10px] uppercase text-muted-foreground font-semibold">Price Spread</div>
-                      <div className="text-sm font-bold text-foreground">{Number(aiRecommendation.commercial_analysis.price_spread_pct).toFixed(1)}%</div>
-                      <div className="text-[11px] text-muted-foreground">{aiRecommendation.commercial_analysis.spread_interpretation}</div>
-                    </div>
-                  )}
-                </div>
-              )}
+        // Rate resolver — quoted first, AI inferred second, else "—"
+        const aiMatrix = (aiRecommendation?.per_item_matrix ?? {}) as Record<string, Record<string, { rate?: number; source?: string; note?: string }>>;
+        const resolveRate = (prLineId: string, supplierId: string): { rate: number | null; source: "quoted" | "inferred" | "unavailable"; note: string | null } => {
+          const cell = cellsByPrLineIdAndSupplierId[prLineId]?.[supplierId];
+          const cellRate = Number(cell?.rate ?? 0);
+          if (cellRate > 0) return { rate: cellRate, source: "quoted", note: null };
+          const ai = aiMatrix[prLineId]?.[supplierId];
+          const aiRate = Number(ai?.rate ?? 0);
+          if (aiRate > 0) return { rate: aiRate, source: "inferred", note: ai?.note ?? null };
+          return { rate: null, source: "unavailable", note: null };
+        };
 
-              {/* Supplier profiles */}
-              {Array.isArray(aiRecommendation.supplier_profiles) && aiRecommendation.supplier_profiles.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold uppercase text-muted-foreground">Supplier Profiles</div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {aiRecommendation.supplier_profiles.map((sp: any, i: number) => (
-                      <div key={i} className="rounded-md border border-border bg-background/60 p-3">
-                        <div className="flex items-center justify-between mb-1.5">
-                          <div className="text-sm font-bold text-foreground">{sp.name}</div>
-                          {sp.landed_total != null && (
-                            <div className="text-xs font-semibold text-primary">{formatCurrency(Number(sp.landed_total), canViewPrices)}</div>
-                          )}
-                        </div>
-                        {sp.items_quoted != null && (
-                          <div className="text-[11px] text-muted-foreground mb-1.5">{sp.items_quoted} items quoted</div>
-                        )}
-                        {Array.isArray(sp.strengths) && sp.strengths.length > 0 && (
-                          <div className="mb-1.5">
-                            <div className="text-[10px] uppercase text-emerald-700 font-semibold">Strengths</div>
-                            <ul className="text-xs text-foreground list-disc list-inside space-y-0.5">
-                              {sp.strengths.map((s: string, j: number) => <li key={j}>{s}</li>)}
-                            </ul>
-                          </div>
-                        )}
-                        {Array.isArray(sp.weaknesses) && sp.weaknesses.length > 0 && (
-                          <div className="mb-1.5">
-                            <div className="text-[10px] uppercase text-amber-700 font-semibold">Weaknesses</div>
-                            <ul className="text-xs text-foreground list-disc list-inside space-y-0.5">
-                              {sp.weaknesses.map((w: string, j: number) => <li key={j}>{w}</li>)}
-                            </ul>
-                          </div>
-                        )}
-                        {Array.isArray(sp.risk_flags) && sp.risk_flags.length > 0 && (
-                          <div>
-                            <div className="text-[10px] uppercase text-rose-700 font-semibold">Risk Flags</div>
-                            <ul className="text-xs text-rose-800 list-disc list-inside space-y-0.5">
-                              {sp.risk_flags.map((r: string, j: number) => <li key={j}>{r}</li>)}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+        // Cheapest supplier per row — for the green ✓ highlight
+        const cheapestSupplierByRow: Record<string, string | null> = {};
+        prLineItems.forEach((pli) => {
+          let bestSup: string | null = null;
+          let bestRate = Number.POSITIVE_INFINITY;
+          suppliers.forEach((s) => {
+            const r = resolveRate(pli.id, s.id);
+            if (r.rate !== null && r.rate < bestRate) {
+              bestRate = r.rate;
+              bestSup = s.id;
+            }
+          });
+          cheapestSupplierByRow[pli.id] = bestSup;
+        });
 
-              {/* Item comparison groups */}
-              {Array.isArray(aiRecommendation.item_comparison) && aiRecommendation.item_comparison.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold uppercase text-muted-foreground">Item-by-Item Comparison</div>
-                  <div className="space-y-2">
-                    {aiRecommendation.item_comparison.map((grp: any, i: number) => (
-                      <div key={i} className="rounded-md border border-border bg-background/60 p-3">
-                        <div className="flex items-baseline justify-between gap-2 mb-1">
-                          <div className="text-sm font-semibold text-foreground">{grp.category}</div>
-                        </div>
-                        {grp.description && <div className="text-xs text-muted-foreground mb-2">{grp.description}</div>}
-                        {Array.isArray(grp.vendor_items) && grp.vendor_items.length > 0 && (
-                          <div className="space-y-1.5">
-                            {grp.vendor_items.map((vi: any, j: number) => (
-                              <div key={j} className="flex items-start gap-2 text-xs border-l-2 border-primary/30 pl-2">
-                                <div className="flex-1">
-                                  <div className="font-medium text-foreground">{vi.supplier}</div>
-                                  <div className="text-muted-foreground">{vi.item_description}</div>
-                                  <div className="text-[11px] text-muted-foreground mt-0.5">
-                                    {vi.quantity != null && <>Qty: {vi.quantity} {vi.unit ?? ""} · </>}
-                                    {vi.rate_per_unit != null && <>Rate: {formatCurrency(Number(vi.rate_per_unit), canViewPrices)}</>}
-                                    {vi.landed_per_unit != null && <> · Landed/unit: {formatCurrency(Number(vi.landed_per_unit), canViewPrices)}</>}
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {grp.alignment_note && (
-                          <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2 italic">
-                            Note: {grp.alignment_note}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+        // AI verdict — supports new lean shape and legacy shape
+        let aiVerdict: { supplier: string | null; headline: string; watchOuts: string[] } | null = null;
+        if (aiRecommendation) {
+          const r: any = aiRecommendation;
+          if (typeof r.headline === "string") {
+            aiVerdict = {
+              supplier: r.recommended_supplier ?? null,
+              headline: r.headline,
+              watchOuts: Array.isArray(r.watch_outs) ? r.watch_outs.slice(0, 3) : [],
+            };
+          } else if (typeof r.executive_summary === "string" || typeof r.recommended_supplier === "string") {
+            const exec = String(r.executive_summary ?? r.reason ?? "");
+            const firstSentence = exec.split(/(?<=[.!?])\s+/)[0] || exec;
+            aiVerdict = {
+              supplier: r.recommended_supplier ?? null,
+              headline: firstSentence,
+              watchOuts: (Array.isArray(r.warnings) ? r.warnings : []).slice(0, 3),
+            };
+          }
+        }
 
-              {/* Unmatched items */}
-              {Array.isArray(aiRecommendation.unmatched_items) && aiRecommendation.unmatched_items.length > 0 && (
-                <div className="rounded-md bg-amber-50/50 border border-amber-200 p-3">
-                  <div className="text-xs font-semibold uppercase text-amber-700 mb-1.5">Unmatched Items</div>
-                  <ul className="space-y-1">
-                    {aiRecommendation.unmatched_items.map((um: any, i: number) => (
-                      <li key={i} className="text-xs text-amber-900">
-                        <span className="font-semibold">{um.supplier}:</span> {um.item_description}
-                        {um.note && <span className="text-amber-700 italic ml-1">— {um.note}</span>}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+        const headPickId = sheet?.reviewer_recommendation ?? sheet?.recommended_supplier_id ?? null;
+        const headPickName = headPickId ? suppliers.find((s) => s.id === headPickId)?.name ?? null : null;
 
-              {/* Ranking */}
-              {Array.isArray(aiRecommendation.ranking) && aiRecommendation.ranking.length > 0 && (
+        return (
+          <Card className={
+            decisionSummary.aboveMarketCount > 0
+              ? "border-amber-300 bg-amber-50/30"
+              : "border-emerald-300 bg-emerald-50/30"
+          }>
+            <CardHeader className="pb-3">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
-                  <div className="text-xs font-semibold uppercase text-muted-foreground mb-1">Ranking</div>
-                  <div className="space-y-1">
-                    {aiRecommendation.ranking.map((item: any, idx: number) => (
-                      <div key={idx} className="flex items-center gap-2 text-sm">
-                        <span className="font-mono text-xs w-5 text-center text-muted-foreground">{item.rank}.</span>
-                        <span className="font-medium">{item.supplier}</span>
-                        {item.rationale && <span className="text-muted-foreground">— {item.rationale}</span>}
-                      </div>
-                    ))}
-                  </div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    📊 Comparison Sheet
+                  </CardTitle>
+                  <CardDescription className="mt-1 text-sm">
+                    Each item compared across all vendors and live market rate. {projectSite && <>Site: <span className="font-medium">{projectSite}</span>.</>}
+                  </CardDescription>
                 </div>
-              )}
-
-              {/* Warnings */}
-              {Array.isArray(aiRecommendation.warnings) && aiRecommendation.warnings.length > 0 && (
-                <div className="rounded-md bg-amber-50 border border-amber-200 p-3 space-y-1">
-                  <div className="text-xs font-semibold uppercase text-amber-700 mb-1">Warnings</div>
-                  {aiRecommendation.warnings.map((w: string, i: number) => (
-                    <div key={i} className="flex items-start gap-2 text-sm text-amber-800">
-                      <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
-                      <span>{w}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Data quality issues */}
-              {Array.isArray(aiRecommendation.data_quality_issues) && aiRecommendation.data_quality_issues.length > 0 && (
-                <div className="rounded-md bg-muted/40 border border-border p-3 space-y-1">
-                  <div className="text-xs font-semibold uppercase text-muted-foreground mb-1">Data Quality Issues</div>
-                  <ul className="list-disc list-inside space-y-0.5">
-                    {aiRecommendation.data_quality_issues.map((d: string, i: number) => (
-                      <li key={i} className="text-xs text-foreground">{d}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Next steps */}
-              {Array.isArray(aiRecommendation.next_steps_for_procurement) && aiRecommendation.next_steps_for_procurement.length > 0 && (
-                <div className="rounded-md bg-blue-50 border border-blue-200 p-3 space-y-1">
-                  <div className="text-xs font-semibold uppercase text-blue-700 mb-1">Next Steps for Procurement</div>
-                  <ul className="list-disc list-inside space-y-0.5">
-                    {aiRecommendation.next_steps_for_procurement.map((n: string, i: number) => (
-                      <li key={i} className="text-xs text-blue-900">{n}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              <div className="text-xs text-muted-foreground border-t border-border/40 pt-2 italic">
-                {aiRecommendation.disclaimer ?? "AI-generated analysis for reference only. Human review and approval required."}
-              </div>
-            </CardContent>
-          )}
-        </Card>
-      )}
-
-      {canSeeMatrix && !aiRecommendation && !aiLoading && canCreateRFQ && (
-        <div className="flex justify-end">
-          <Button size="sm" onClick={getAIRecommendation} className="bg-primary">
-            <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-            Generate AI Analysis
-          </Button>
-        </div>
-      )}
-
-      {/* Upgrade banner — old-format AI analysis exists; prompt to regenerate with new rich schema */}
-      {canSeeMatrix && aiRecommendation && !aiRecommendation.comparison_approach && !aiLoading && canCreateRFQ && (
-        <Card className="border-primary/40 bg-primary/5">
-          <CardContent className="py-4 flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-start gap-2">
-              <Sparkles className="h-5 w-5 text-primary shrink-0 mt-0.5" />
-              <div>
-                <div className="text-sm font-semibold text-foreground">New AI analysis available</div>
-                <div className="text-xs text-muted-foreground">
-                  This sheet has an older AI recommendation. Regenerate to get the new detailed analysis (supplier profiles,
-                  item-by-item alignment, commercial breakdown, warnings, next steps).
-                </div>
-              </div>
-            </div>
-            <Button size="sm" onClick={getAIRecommendation} className="bg-primary shrink-0">
-              <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-              Generate Detailed AI Analysis
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Head's Decision Card — shows procurement head's pick alongside AI's recommendation */}
-      {canSeeMatrix && sheet && suppliers.length > 0 && (
-        <Card className="border-primary/40">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-primary" />
-              Procurement Head's Decision
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {(() => {
-              const headPickId = sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? null;
-              const headPickName = headPickId ? (suppliers.find(s => s.id === headPickId)?.name ?? "—") : null;
-              const aiPickName = aiRecommendation?.recommended_supplier ?? null;
-              const matchesAI = aiPickName && headPickName && aiPickName === headPickName;
-              const mStatus = String(sheet.manual_review_status ?? "pending");
-
-              if (!headPickId) {
-                return (
-                  <div className="bg-amber-50 border border-amber-200 rounded-md p-3">
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 text-amber-700 mt-0.5 shrink-0" />
-                      <div className="flex-1">
-                        <div className="text-sm font-semibold text-amber-900">Awaiting Procurement Head's Review</div>
-                        <p className="text-xs text-amber-800 mt-1">
-                          The procurement head has not yet selected a supplier. Review the AI analysis above and the bid comparisons below,
-                          then record the decision in the "Procurement Executive Review" section at the bottom of this page.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              }
-
-              return (
-                <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
-                  <div className="flex items-start gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-blue-700 mt-0.5 shrink-0" />
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-semibold text-blue-900">Head Selected:</span>
-                        <span className="text-sm font-bold text-blue-900">{headPickName}</span>
-                        {matchesAI ? (
-                          <Badge className="text-[10px] bg-green-100 text-green-800 border-green-200 border">✓ Matches AI</Badge>
-                        ) : aiPickName ? (
-                          <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border">⚠ Override AI (AI recommended: {aiPickName})</Badge>
-                        ) : null}
-                        <Badge className={`text-[10px] border ${manualStatusBadge(mStatus)}`}>{mStatus.replace(/_/g, " ")}</Badge>
-                      </div>
-                      {sheet.reviewer_recommendation_reason && (
-                        <div className="mt-2">
-                          <div className="text-[10px] uppercase text-blue-700 font-semibold">Reason Given</div>
-                          <p className="text-sm text-blue-900 whitespace-pre-wrap">{sheet.reviewer_recommendation_reason}</p>
-                        </div>
-                      )}
-                      {sheet.manual_review_by && (
-                        <div className="text-xs text-blue-700 mt-2">
-                          Reviewed by <strong>{usersById[sheet.manual_review_by]?.name ?? "—"}</strong>
-                          {sheet.manual_review_at && <> on {formatDateTime(sheet.manual_review_at)}</>}
-                        </div>
-                      )}
-                      {sheet.approved_by && (
-                        <div className="text-xs text-green-700 mt-1 font-medium">
-                          ✓ Approved by {usersById[sheet.approved_by]?.name ?? "—"}
-                          {sheet.approved_at && <> on {formatDateTime(sheet.approved_at)}</>}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Market Rate Check — gates approval and PO creation */}
-      {canSeeMatrix && suppliers.length > 0 && (
-        <Card className={
-          marketCheck.passes ? "border-emerald-300 bg-emerald-50/40" :
-          "border-amber-300 bg-amber-50/40"
-        }>
-          <CardHeader className="pb-3">
-            <div className="flex items-start justify-between gap-3 flex-wrap">
-              <div>
-                <CardTitle className="text-base flex items-center gap-2">
-                  🌐 Market Rate Check
-                  {marketLoading && (
-                    <span className="text-xs text-muted-foreground font-normal">
-                      Searching… {marketProgress.done}/{marketProgress.total}
-                    </span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {decisionSummary.aboveMarketCount === 0 ? (
+                    <Badge className="text-xs bg-emerald-100 text-emerald-800 border-emerald-300 border">✓ All within market</Badge>
+                  ) : (
+                    <Badge className="text-xs bg-amber-100 text-amber-900 border-amber-300 border">⚠ {decisionSummary.aboveMarketCount} item{decisionSummary.aboveMarketCount === 1 ? "" : "s"} above market</Badge>
                   )}
-                </CardTitle>
-                <CardDescription className="mt-1 text-xs">
-                  Web-search every PR item near the project site and flag any vendor lines quoting above market lowest. Advisory only — PO/approval is not blocked, use this to spot cheaper market options before awarding.
-                  {projectSite && <span className="ml-1">City: <span className="font-medium">{projectSite}</span></span>}
-                </CardDescription>
-              </div>
-              {canCreateRFQ && (
-                <Button size="sm" variant="outline" onClick={() => runMarketRateSearch(true)} disabled={marketLoading || prLineItems.length === 0}>
-                  {marketLoading ? "Searching…" : (Object.keys(marketBenchmarks).length === 0 ? "Run Market Search" : "Refresh Rates")}
-                </Button>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {/* Top-line verdict */}
-            {marketCheck.isPending ? (
-              <div className="rounded-md bg-amber-100/80 border border-amber-300 px-3 py-2 text-sm text-amber-900">
-                ⏳ Market check pending — click <span className="font-semibold">Run Market Search</span> to fetch live rates for {marketCheck.pendingItems} item{marketCheck.pendingItems === 1 ? "" : "s"}.
-              </div>
-            ) : marketCheck.passes ? (
-              <div className="rounded-md bg-emerald-100/80 border border-emerald-300 px-3 py-2 text-sm text-emerald-900">
-                ✓ All vendor quotes are at or below market lowest for {marketCheck.coveredItems} item{marketCheck.coveredItems === 1 ? "" : "s"}{marketCheck.noDataItems > 0 && <span className="text-emerald-800/80"> · {marketCheck.noDataItems} item{marketCheck.noDataItems === 1 ? "" : "s"} had no live market data</span>}.
-              </div>
-            ) : (
-              <div className="rounded-md bg-amber-100/80 border border-amber-300 px-3 py-2 text-sm text-amber-900 space-y-1.5">
-                <div className="font-semibold">⚠ {marketCheck.fails.length} vendor line{marketCheck.fails.length === 1 ? "" : "s"} above market rate — review below. Advisory: you can still proceed, but consider negotiating these items.</div>
-              </div>
-            )}
-
-            {/* Failing rows table */}
-            {marketCheck.fails.length > 0 && (
-              <div className="rounded-md border bg-background overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>PR Item</TableHead>
-                      <TableHead>Vendor</TableHead>
-                      <TableHead className="text-right">Vendor Rate</TableHead>
-                      <TableHead className="text-right">Market Lowest</TableHead>
-                      <TableHead className="text-right">Δ Above</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {marketCheck.fails.map((f, i) => {
-                      const delta = f.vendor_rate - f.market_rate;
-                      const pct = f.market_rate > 0 ? (delta / f.market_rate) * 100 : 0;
-                      return (
-                        <TableRow key={`${f.pr_line_id}::${f.supplier_name}::${i}`} className="bg-red-50/30">
-                          <TableCell className="text-xs font-medium">{f.pr_description}</TableCell>
-                          <TableCell className="text-xs">{f.supplier_name}</TableCell>
-                          <TableCell className="text-right text-xs font-mono text-red-700 font-semibold">₹{f.vendor_rate.toLocaleString("en-IN")}{f.unit ? `/${f.unit}` : ""}</TableCell>
-                          <TableCell className="text-right text-xs font-mono">₹{f.market_rate.toLocaleString("en-IN")}{f.unit ? `/${f.unit}` : ""}</TableCell>
-                          <TableCell className="text-right text-xs font-mono text-red-700">+₹{delta.toLocaleString("en-IN")} ({pct.toFixed(0)}%)</TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-
-            {/* Per-PR-line market rate roll-up */}
-            {Object.keys(marketBenchmarks).length > 0 && (
-              <details className="text-xs text-muted-foreground" open>
-                <summary className="cursor-pointer hover:text-foreground select-none">View market rate per item ({Object.keys(marketBenchmarks).length})</summary>
-                <div className="mt-3 space-y-4">
-                  {prLineItems.map((pli) => {
-                    const b = marketBenchmarks[pli.id];
-                    if (!b) {
-                      return (
-                        <div key={pli.id} className="rounded-md border bg-background px-3 py-2 text-xs">
-                          <div className="font-medium text-foreground">{pli.description}</div>
-                          <div className="italic text-muted-foreground">Pending — click "Run Market Search" to fetch.</div>
-                        </div>
-                      );
-                    }
-                    const sortedSuppliers = [...b.market_suppliers].sort((a, s) => {
-                      const ra = typeof a.rate_numeric === "number" ? a.rate_numeric : Number.POSITIVE_INFINITY;
-                      const rb = typeof s.rate_numeric === "number" ? s.rate_numeric : Number.POSITIVE_INFINITY;
-                      return ra - rb;
-                    });
-                    return (
-                      <div key={pli.id} className="rounded-md border bg-background p-3 space-y-3">
-                        <div className="flex items-start justify-between gap-3 flex-wrap">
-                          <div className="space-y-1">
-                            <div className="text-sm font-semibold text-foreground">{pli.description}</div>
-                            <div className="text-xs text-muted-foreground max-w-2xl">{b.market_verdict || "—"}</div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {b.source === "fresh" && <Badge variant="outline" className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300">live</Badge>}
-                            {b.source === "cache" && <Badge variant="outline" className="text-[10px] bg-blue-100 text-blue-800 border-blue-300">cached</Badge>}
-                            {b.source === "no_data" && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">no data</Badge>}
-                            {b.source === "error" && <Badge variant="outline" className="text-[10px] bg-red-100 text-red-800 border-red-300">error</Badge>}
-                            {b.market_lowest_rate > 0 && (
-                              <span className="text-sm font-mono font-semibold text-emerald-700">
-                                ₹{b.market_lowest_rate.toLocaleString("en-IN")}{b.market_lowest_unit ? `/${b.market_lowest_unit}` : ""}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-
-                        {sortedSuppliers.length === 0 ? (
-                          <div className="text-xs italic text-muted-foreground">No suppliers found.</div>
-                        ) : (
-                          <div className="space-y-2">
-                            {sortedSuppliers.map((s, i) => {
-                              const rank = i + 1;
-                              const isCheapest = i === 0 && typeof s.rate_numeric === "number";
-                              const rateLabel = s.rate || (typeof s.rate_numeric === "number" ? `₹${s.rate_numeric.toLocaleString("en-IN")}${s.unit ? `/${s.unit}` : ""}` : "");
-                              const NameTag = s.url ? "a" : "span";
-                              const nameProps: any = s.url
-                                ? { href: s.url, target: "_blank", rel: "noopener noreferrer", className: "text-base font-semibold text-blue-700 hover:text-blue-900 hover:underline" }
-                                : { className: "text-base font-semibold text-foreground" };
-                              return (
-                                <div
-                                  key={`${pli.id}::${s.name}::${i}`}
-                                  className={`relative rounded-lg border-2 px-4 py-3 ${
-                                    isCheapest ? "border-emerald-400 bg-emerald-50/40" : "border-muted bg-background"
-                                  }`}
-                                >
-                                  {isCheapest && (
-                                    <div className="absolute -top-2 left-3 inline-flex items-center gap-1 rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm">
-                                      🏆 Cheapest
-                                    </div>
-                                  )}
-                                  <div className="flex items-start justify-between gap-3 flex-wrap">
-                                    <div className="flex items-start gap-2 min-w-0">
-                                      <span className={`inline-flex items-center justify-center h-6 min-w-[1.75rem] rounded-full px-2 text-[11px] font-bold ${
-                                        isCheapest ? "bg-emerald-600 text-white" : "bg-muted text-foreground"
-                                      }`}>
-                                        #{rank}
-                                      </span>
-                                      <div className="space-y-1 min-w-0">
-                                        <div className="leading-tight">
-                                          <NameTag {...nameProps}>{s.name || "Unnamed supplier"}</NameTag>
-                                        </div>
-                                        {Array.isArray(s.brands) && s.brands.length > 0 && (
-                                          <div className="flex flex-wrap gap-1">
-                                            {s.brands.map((br, bi) => (
-                                              <span key={bi} className="text-[11px] text-blue-700 font-medium">{br}{bi < s.brands!.length - 1 ? "," : ""}</span>
-                                            ))}
-                                          </div>
-                                        )}
-                                        {s.product && (
-                                          <div className="text-xs text-muted-foreground">{s.product}</div>
-                                        )}
-                                        {(s.location || s.source) && (
-                                          <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
-                                            {s.location && <span>📍 {s.location}</span>}
-                                            {s.location && s.source && <span>·</span>}
-                                            {s.source && (
-                                              s.url ? (
-                                                <a href={s.url} target="_blank" rel="noopener noreferrer" className="text-blue-700 hover:underline">{s.source}</a>
-                                              ) : (
-                                                <span>{s.source}</span>
-                                              )
-                                            )}
-                                          </div>
-                                        )}
-                                        {s.phone && s.phone !== "N/A" && (
-                                          <div className="text-xs text-muted-foreground">📞 {s.phone}</div>
-                                        )}
-                                      </div>
-                                    </div>
-                                    {rateLabel && (
-                                      <div className={`text-base font-bold font-mono whitespace-nowrap ${
-                                        isCheapest ? "text-emerald-700" : "text-foreground"
-                                      }`}>
-                                        {rateLabel}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {marketLoading && (
+                    <span className="text-xs text-muted-foreground">Searching {marketProgress.done}/{marketProgress.total}…</span>
+                  )}
+                  {canCreateRFQ && (
+                    <Button size="sm" variant="outline" onClick={() => runMarketRateSearch(true)} disabled={marketLoading || prLineItems.length === 0}>
+                      {marketLoading ? "Searching…" : (Object.keys(marketBenchmarks).length === 0 ? "Run Market Search" : "Refresh Market")}
+                    </Button>
+                  )}
+                  {canCreateRFQ && (
+                    <Button size="sm" variant="outline" onClick={getAIRecommendation} disabled={aiLoading}>
+                      <Sparkles className="h-3.5 w-3.5 mr-1" />
+                      {aiLoading ? "Analyzing…" : (aiRecommendation ? "Re-run AI" : "Run AI")}
+                    </Button>
+                  )}
                 </div>
-              </details>
-            )}
-          </CardContent>
-        </Card>
-      )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Generation status banner — shown until both AI + market search complete */}
+              {comparisonReadiness.isGenerating ? (
+                <div className="rounded-lg border-2 border-blue-300 bg-blue-50 p-4 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-blue-700 animate-pulse" />
+                    <span className="text-sm font-semibold text-blue-900">Preparing comparison sheet — please wait…</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium text-blue-900">AI verdict:</span>
+                      {comparisonReadiness.aiBusy
+                        ? <span className="text-blue-700">⏳ Analyzing…</span>
+                        : comparisonReadiness.aiDone
+                        ? <span className="text-emerald-700">✓ Done</span>
+                        : <span className="text-muted-foreground">queued</span>}
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium text-blue-900">Market search:</span>
+                      {comparisonReadiness.marketBusy
+                        ? <span className="text-blue-700">⏳ Searching {marketProgress.done}/{marketProgress.total}…</span>
+                        : comparisonReadiness.marketDone
+                        ? <span className="text-emerald-700">✓ Done</span>
+                        : <span className="text-muted-foreground">queued</span>}
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-blue-800">Approve and review actions are disabled until both finish. AI typically takes 5–15s, market search scales with item count.</p>
+                </div>
+              ) : !comparisonReadiness.isReady ? (
+                <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-4 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-amber-700" />
+                    <span className="text-sm font-semibold text-amber-900">Comparison sheet not yet complete</span>
+                  </div>
+                  <ul className="text-xs text-amber-900 space-y-0.5 list-disc list-inside">
+                    {!comparisonReadiness.aiDone && <li>AI recommendation not generated — click <span className="font-medium">Run AI</span> above.</li>}
+                    {!comparisonReadiness.marketDone && <li>Market search has not been run — click <span className="font-medium">Run Market Search</span> above.</li>}
+                  </ul>
+                  <p className="text-[11px] text-amber-800">You cannot proceed to "Mark as Reviewed" until both have run.</p>
+                </div>
+              ) : comparisonReadiness.hasMarketFailures ? (
+                <div className="rounded-lg border-2 border-amber-300 bg-amber-50/70 p-3 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 text-amber-700" />
+                    <span className="text-sm font-semibold text-amber-900">Market data unavailable for {comparisonReadiness.failedItems} item{comparisonReadiness.failedItems === 1 ? "" : "s"}</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800">Live market lookup failed or returned no data for some items (see "Market" column in the table). You can still proceed; the sheet is ready for review.</p>
+                </div>
+              ) : null}
 
-      {/* Bid Totals Comparison — primary summary per supplier */}
-      {canSeeMatrix && suppliers.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Bid Totals Comparison</CardTitle>
-            <CardDescription>Side-by-side totals per supplier — the primary view for commercial comparison</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0 overflow-x-auto">
-            {(() => {
-              // Compute per-supplier totals. Prefer the saved quote header
-              // (total_quoted_value / total_landed_value) when present, since those
-              // were captured from the actual PDF at upload time. Line-item sums
-              // can drift if AI mis-extracts rates (e.g. a row with rate=0 in
-              // QT-2026-0093 dropped the total from ₹66k to ₹59k). Lines are
-              // still computed for visibility but the landed/subtotal cells use
-              // header values when available.
-              const totals = suppliers.map((sup) => {
-                const lines = allQuoteLinesBySupplierId[sup.id] ?? [];
-                const charges = extraChargesBySupplierId[sup.id] ?? [];
-                const lineSubtotal = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
-                const lineGst = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
-                const freight = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
-                const extraSum = charges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
-
-                const quote = quoteBySupplierId[sup.id];
-                const headerSubtotal = Number(quote?.total_quoted_value ?? 0);
-                const headerLanded = Number(quote?.total_landed_value ?? 0);
-
-                const subtotal = headerSubtotal > 0 ? headerSubtotal : lineSubtotal;
-                // If the quote has a header landed value, trust it as the source
-                // of truth and back-derive GST so the rows still add up to it.
-                let landedTotal: number;
-                let gst: number;
-                if (headerLanded > 0) {
-                  landedTotal = headerLanded;
-                  gst = Math.max(0, landedTotal - subtotal - freight - extraSum);
-                } else {
-                  gst = lineGst;
-                  landedTotal = subtotal + gst + freight + extraSum;
-                }
-
-                return {
-                  sup,
-                  itemCount: lines.length,
-                  extraCount: charges.length,
-                  subtotal,
-                  gst,
-                  freight,
-                  extraSum,
-                  landedTotal,
-                  paymentTerms: quote?.payment_terms ?? null,
-                  deliveryTerms: quote?.delivery_terms ?? null,
-                  warrantyMonths: quote?.warranty_months ?? null,
-                  validityDays: quote?.validity_days ?? null,
-                  compliance: quote?.compliance_status ?? null,
-                };
-              });
-              const lowestLanded = Math.min(...totals.map((t) => t.landedTotal).filter((v) => v > 0));
-
-              const row = (label: string, value: (t: typeof totals[0]) => React.ReactNode, emphasize = false) => (
-                <TableRow className={emphasize ? "bg-primary/5 font-semibold" : ""}>
-                  <TableCell className={`${emphasize ? "text-foreground" : "text-muted-foreground"} font-medium whitespace-nowrap`}>{label}</TableCell>
-                  {totals.map((t) => (
-                    <TableCell key={t.sup.id} className={emphasize ? "text-primary font-bold" : ""}>
-                      {value(t)}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              );
-
-              return (
+              {/* The unified table */}
+              <div className="rounded-lg border bg-background overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="min-w-[180px]">Metric</TableHead>
-                      {totals.map((t, idx) => (
-                        <TableHead key={t.sup.id} className="min-w-[200px]">
-                          <div className="flex items-center gap-2">
-                            <span>{t.sup.name}</span>
-                            {t.landedTotal > 0 && t.landedTotal === lowestLanded && (
-                              <Badge className="text-[10px] bg-green-100 text-green-800 border-0">lowest</Badge>
-                            )}
-                            <Badge variant="outline" className="text-[10px]">{["1st","2nd","3rd","4th","5th"][idx] ?? `${idx+1}th`}</Badge>
+                      <TableHead className="min-w-[260px] sticky left-0 bg-background z-10">Item</TableHead>
+                      <TableHead className="text-center w-[60px]">Qty</TableHead>
+                      {supplierTotals.map((t, idx) => (
+                        <TableHead key={t.sup.id} className="min-w-[160px]">
+                          <div className="space-y-0.5">
+                            <div className="font-semibold text-foreground flex items-center gap-1.5 flex-wrap">
+                              <span>{t.sup.name}</span>
+                              {t.sup.id === winnerSupplierId && (
+                                <span className="text-xs">🏆</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <Badge variant="outline" className="text-[10px]">{["1st","2nd","3rd","4th","5th"][idx] ?? `${idx+1}th`}</Badge>
+                              {(t.quoteFileUrl || t.quoteFilePath) && (
+                                <a
+                                  href={t.quoteFileUrl ?? `https://orhbzvoqtingmqjbjzqw.supabase.co/storage/v1/object/public/cps-quotes/${t.quoteFilePath}`}
+                                  target="_blank" rel="noopener noreferrer"
+                                  className="text-[10px] text-blue-700 hover:underline"
+                                >View quote</a>
+                              )}
+                            </div>
                           </div>
                         </TableHead>
                       ))}
+                      <TableHead className="min-w-[120px] bg-blue-50/50">Market</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {row("Items Quoted", (t) => t.itemCount + (t.extraCount > 0 ? ` (+${t.extraCount} extra)` : ""))}
-                    {row("Subtotal (excl GST & freight)", (t) => formatCurrency(t.subtotal, canViewPrices))}
-                    {row("GST Amount", (t) => formatCurrency(t.gst, canViewPrices))}
-                    {row("Freight", (t) => t.freight > 0 ? formatCurrency(t.freight, canViewPrices) : "—")}
-                    {row("Extra Charges", (t) => t.extraSum > 0 ? formatCurrency(t.extraSum, canViewPrices) : "—")}
-                    {row("LANDED TOTAL", (t) => formatCurrency(t.landedTotal, canViewPrices), true)}
-                    {row("Payment Terms", (t) => (
-                      <span className="text-xs whitespace-pre-wrap break-words">{t.paymentTerms ?? "—"}</span>
-                    ))}
-                    {row("Delivery Terms", (t) => (
-                      <span className="text-xs whitespace-pre-wrap break-words">{t.deliveryTerms ?? "—"}</span>
-                    ))}
-                    {row("Warranty", (t) => t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—")}
-                    {row("Validity", (t) => t.validityDays != null ? `${t.validityDays} days` : "—")}
-                    {row("Compliance", (t) => (
-                      <Badge className={`text-xs border ${complianceBadgeCls(t.compliance)}`}>{t.compliance ?? "—"}</Badge>
-                    ))}
-                  </TableBody>
-                </Table>
-              );
-            })()}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Comparison Matrix — HIDDEN: the old per-PR-line matrix was confusing when vendors
-          itemise a vague PR into many items. The AI Analysis card + Bid Totals Comparison +
-          Detailed Quote Breakdown below give the complete clear picture. */}
-      {false && canSeeMatrix ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Per-Item Comparison Matrix</CardTitle>
-            <CardDescription>
-              Each PR line item matched against the best-fitting quote item per supplier. Note: rates are per-unit, not full bid totals —
-              see Bid Totals Comparison above for commercial summary.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            {/* Desktop table */}
-            <div className="hidden lg:block overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="min-w-[320px]">PR Line Item</TableHead>
-                    {suppliers.map((s) => (
-                      <TableHead key={s.id}>{s.name}</TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {prLineItems.map((pli) => {
-                    const { lowest, rankBySupplierId } = lowestAndRankFor(pli.id);
-                    const benchmarkRate = benchmarkByPrLineId[pli.id] ?? null;
-
-                    const renderCellValue = (supId: string) => {
-                      return cellsByPrLineIdAndSupplierId[pli.id]?.[supId];
-                    };
-
-                    const highlightCell = (v: number | null) => {
-                      if (!canViewPrices) return "";
-                      if (v === null || v === undefined || lowest === null) return "";
-                      if (v === lowest) return "bg-green-50 text-green-800";
-                      if (benchmarkRate !== null && benchmarkRate > 0) {
-                        const benchDiff = ((Number(v) - Number(benchmarkRate)) / Number(benchmarkRate)) * 100;
-                        if (benchDiff > 10) return "bg-red-50 text-red-800";
-                        if (benchDiff > 5) return "bg-amber-50 text-amber-800";
-                      }
-                      return "";
-                    };
-
-                    return (
-                      <React.Fragment key={pli.id}>
-                        <TableRow className="hover:bg-muted/30">
-                          <TableCell className="align-top">
-                            <div className="text-xs text-muted-foreground font-medium">Brand/Make</div>
-                            <div className="font-medium mt-1">{pli.description}</div>
-                            <div className="text-xs text-muted-foreground mt-1">
-                              Qty: {pli.quantity} {pli.unit ?? ""}
-                            </div>
+                    {/* PR line items — per-vendor rates */}
+                    {prLineItems.map((pli) => {
+                      const cheapest = cheapestSupplierByRow[pli.id];
+                      const bench = marketBenchmarks[pli.id];
+                      const marketRate = bench && bench.market_lowest_rate ? Number(bench.market_lowest_rate) : null;
+                      const cheapestRateInfo = cheapest ? resolveRate(pli.id, cheapest) : null;
+                      const isAbove = cheapestRateInfo?.rate !== null && cheapestRateInfo !== null && marketRate !== null && cheapestRateInfo.rate! > marketRate;
+                      return (
+                        <TableRow key={pli.id} className={isAbove ? "bg-amber-50/60" : ""}>
+                          <TableCell className="text-sm font-medium align-top sticky left-0 bg-background z-10">
+                            <div>{pli.description}</div>
+                            {pli.unit && <div className="text-[11px] text-muted-foreground">unit: {pli.unit}</div>}
                           </TableCell>
-                          {suppliers.map((sup) => {
-                            const cell = renderCellValue(sup.id);
+                          <TableCell className="text-center text-xs align-top">{pli.quantity}</TableCell>
+                          {supplierTotals.map((t) => {
+                            const info = resolveRate(pli.id, t.sup.id);
+                            const isCheapest = t.sup.id === cheapest && info.rate !== null;
                             return (
-                              <TableCell key={sup.id}>
-                                <div className="text-muted-foreground">{cell?.brand ?? "—"}</div>
-                              </TableCell>
-                            );
-                          })}
-                        </TableRow>
-
-                        {/* Unit Rate */}
-                        <TableRow>
-                          <TableCell className="text-xs text-muted-foreground font-medium">
-                            Unit Rate {canViewPrices ? "(₹)" : ""}
-                          </TableCell>
-                          {suppliers.map((sup) => {
-                            const cell = renderCellValue(sup.id);
-                            const val = cell?.rate ?? null;
-                            return (
-                              <TableCell key={sup.id}>
-                                <div className={canViewPrices ? "font-mono" : ""}>
-                                  {val === null ? "—" : formatCurrency(val, canViewPrices)}
-                                </div>
-                              </TableCell>
-                            );
-                          })}
-                        </TableRow>
-
-                        {/* GST % */}
-                        <TableRow>
-                          <TableCell className="text-xs text-muted-foreground font-medium">GST %</TableCell>
-                          {suppliers.map((sup) => {
-                            const cell = renderCellValue(sup.id);
-                            const val = cell?.gst_percent ?? null;
-                            return <TableCell key={sup.id}>{val === null ? "—" : `${val}%`}</TableCell>;
-                          })}
-                        </TableRow>
-
-                        {/* Freight */}
-                        <TableRow>
-                          <TableCell className="text-xs text-muted-foreground font-medium">
-                            Freight {canViewPrices ? "(₹)" : ""}
-                          </TableCell>
-                          {suppliers.map((sup) => {
-                            const cell = renderCellValue(sup.id);
-                            const val = cell?.freight ?? null;
-                            return (
-                              <TableCell key={sup.id}>
-                                <div className="text-muted-foreground">
-                                  {val === null ? "—" : formatCurrency(val, canViewPrices)}
-                                </div>
-                              </TableCell>
-                            );
-                          })}
-                        </TableRow>
-
-                        {/* Total Landed Rate (highlighting) */}
-                        <TableRow>
-                          <TableCell className="text-xs text-muted-foreground font-medium">
-                            Total Landed Rate {canViewPrices ? "(₹)" : ""}
-                          </TableCell>
-                          {suppliers.map((sup) => {
-                            const cell = renderCellValue(sup.id);
-                            const val = cell?.total_landed_rate ?? null;
-                            const cls = highlightCell(val);
-                            return (
-                              <TableCell key={sup.id} className={cls}>
-                                <div className="font-mono font-semibold">
-                                  {val === null ? "—" : formatCurrency(val, canViewPrices)}
-                                </div>
-                              </TableCell>
-                            );
-                          })}
-                        </TableRow>
-
-                        {/* Lead Days */}
-                        <TableRow>
-                          <TableCell className="text-xs text-muted-foreground font-medium">Lead Days</TableCell>
-                          {suppliers.map((sup) => {
-                            const cell = renderCellValue(sup.id);
-                            const val = cell?.lead_time_days ?? null;
-                            return <TableCell key={sup.id}>{val === null ? "—" : `${val}`}</TableCell>;
-                          })}
-                        </TableRow>
-
-                        {/* Rank */}
-                        <TableRow>
-                          <TableCell className="text-xs text-muted-foreground font-medium">Rank</TableCell>
-                          {suppliers.map((sup) => {
-                            const rank = rankBySupplierId[sup.id] ?? null;
-                            return (
-                              <TableCell key={sup.id}>
-                                {rank ? (
-                                  <span className="font-medium">{ordinal(rank)}</span>
+                              <TableCell
+                                key={t.sup.id}
+                                className={`text-right text-sm font-mono align-top ${isCheapest ? "bg-emerald-50" : ""}`}
+                              >
+                                {info.rate !== null ? (
+                                  <div className="flex items-center justify-end gap-1">
+                                    {isCheapest && <span className="text-emerald-700 text-xs">✓</span>}
+                                    {info.source === "inferred" && (
+                                      <span title={info.note ?? "AI-inferred from header total"} className="text-[10px] text-amber-700 font-bold cursor-help">≈</span>
+                                    )}
+                                    <span className={isCheapest ? "text-emerald-700 font-semibold" : ""}>
+                                      ₹{info.rate.toLocaleString("en-IN")}
+                                    </span>
+                                  </div>
                                 ) : (
                                   <span className="text-muted-foreground">—</span>
                                 )}
                               </TableCell>
                             );
                           })}
-                        </TableRow>
-
-                        {/* Benchmark */}
-                        <TableRow className="bg-muted/20">
-                          <TableCell className="text-xs text-muted-foreground font-medium italic">Benchmark</TableCell>
-                          {suppliers.map((sup) => {
-                            const val = benchmarkRate ?? null;
-                            return (
-                              <TableCell key={sup.id} className="italic text-muted-foreground">
-                                {val === null ? "—" : formatCurrency(val, canViewPrices)}
-                              </TableCell>
-                            );
-                          })}
-                        </TableRow>
-                      </React.Fragment>
-                    );
-                  })}
-
-                  {/* Summary row */}
-                  <TableRow className="bg-muted/30">
-                    <TableCell className="font-medium">Summary</TableCell>
-                    {suppliers.map((sup) => {
-                      const totals = perSupplierTotals.totals[sup.id];
-                      const overallRank = perSupplierTotals.rankBySupplierId[sup.id] ?? null;
-                      return (
-                        <TableCell key={sup.id}>
-                          <div className="space-y-1.5">
-                            <div className="font-semibold text-sm">{sup.name}</div>
-                            {canViewPrices && (
-                              <>
-                                <div className="text-muted-foreground text-xs">
-                                  Quoted:{" "}
-                                  <span className="font-mono font-medium">₹{(totals?.totalQuoted ?? 0).toLocaleString("en-IN")}</span>
+                          <TableCell className="text-right text-sm font-mono align-top bg-blue-50/30">
+                            {marketRate !== null ? (() => {
+                              // Find the supplier whose rate matches the lowest — that's the source we link to.
+                              const sources = bench?.market_suppliers ?? [];
+                              const matchedSrc = sources.find((s) => Number(s.rate_numeric ?? 0) === marketRate)
+                                ?? sources.slice().sort((a, b) => Number(a.rate_numeric ?? Infinity) - Number(b.rate_numeric ?? Infinity))[0];
+                              const tooltip = matchedSrc
+                                ? `${matchedSrc.name ?? "Source"}${matchedSrc.source ? ` · ${matchedSrc.source}` : ""}${matchedSrc.location ? ` · ${matchedSrc.location}` : ""}`
+                                : "Market source";
+                              const inner = (
+                                <span className={matchedSrc?.url ? "text-blue-700 hover:text-blue-900 hover:underline cursor-pointer" : ""}>
+                                  ₹{marketRate.toLocaleString("en-IN")}
+                                </span>
+                              );
+                              return (
+                                <div className="flex items-center justify-end gap-1" title={tooltip}>
+                                  {matchedSrc?.url ? (
+                                    <a href={matchedSrc.url} target="_blank" rel="noopener noreferrer">{inner}</a>
+                                  ) : inner}
+                                  {isAbove ? (
+                                    <Badge className="text-[10px] bg-amber-100 text-amber-900 border-amber-300 border">⚠</Badge>
+                                  ) : (
+                                    <Badge className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300 border">✓</Badge>
+                                  )}
                                 </div>
-                                <div className="text-xs">
-                                  <span className="text-muted-foreground">Landed: </span>
-                                  <span className="font-mono font-bold text-foreground text-sm">₹{(totals?.totalLanded ?? 0).toLocaleString("en-IN")}</span>
-                                </div>
-                              </>
-                            )}
-                            <div className="text-muted-foreground text-xs">
-                              Payment: <span className="font-medium">{formatCompactTerms(totals?.paymentTerms)}</span>
-                            </div>
-                            <div className="text-muted-foreground text-xs">
-                              Delivery: <span className="font-medium">{formatCompactTerms(totals?.deliveryTerms)}</span>
-                            </div>
-                            <div className="text-muted-foreground text-xs">
-                              Warranty: <span className="font-medium">{totals?.warrantyMonths ? `${totals.warrantyMonths} months` : "Not specified"}</span>
-                            </div>
-                            <div className="mt-1">
-                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${overallRank === 1 ? "bg-green-100 text-green-800" : overallRank === 2 ? "bg-amber-100 text-amber-800" : "bg-muted text-muted-foreground"}`}>
-                                {overallRank ? `#${overallRank} Overall` : "—"}
+                              );
+                            })() : (
+                              <span className="text-xs italic text-muted-foreground">
+                                {bench?.source === "no_data" || bench?.source === "error" ? "no data" : "pending"}
                               </span>
-                            </div>
-                          </div>
-                        </TableCell>
+                            )}
+                          </TableCell>
+                        </TableRow>
                       );
                     })}
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </div>
 
-            {/* Mobile card-per-item view */}
-            <div className="lg:hidden divide-y divide-border/60">
-              {prLineItems.map((pli) => {
-                const { lowest, rankBySupplierId: rankMap } = lowestAndRankFor(pli.id);
-                const benchmarkRate = benchmarkByPrLineId[pli.id] ?? null;
-                return (
-                  <div key={pli.id} className="p-4 space-y-3">
-                    <div className="font-medium text-sm">{pli.description}</div>
-                    <div className="text-xs text-muted-foreground">Qty: {pli.quantity} {pli.unit ?? ""} {benchmarkRate != null ? `| Benchmark: ₹${benchmarkRate.toLocaleString("en-IN")}` : ""}</div>
-                    <div className="space-y-2">
-                      {suppliers.map((sup) => {
-                        const cell = cellsByPrLineIdAndSupplierId[pli.id]?.[sup.id];
-                        const val = cell?.total_landed_rate ?? null;
-                        const rank = rankMap[sup.id] ?? null;
-                        const isLowest = val !== null && val === lowest;
-                        const benchDiff = val != null && benchmarkRate != null && benchmarkRate > 0
-                          ? ((Number(val) - Number(benchmarkRate)) / Number(benchmarkRate)) * 100
-                          : null;
-                        const cellCls = isLowest ? "bg-green-50 border-green-200" : benchDiff != null && benchDiff > 10 ? "bg-red-50 border-red-200" : benchDiff != null && benchDiff > 5 ? "bg-amber-50 border-amber-200" : "bg-muted/30 border-border/60";
-                        return (
-                          <div key={sup.id} className={`rounded-md border p-2 ${cellCls}`}>
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm font-medium">{sup.name}</span>
-                              {rank && <span className="text-xs text-muted-foreground">{ordinal(rank)}</span>}
-                            </div>
-                            {cell ? (
-                              <div className="text-xs text-muted-foreground mt-0.5">
-                                {canViewPrices && val != null ? `₹${Number(val).toLocaleString("en-IN")} landed` : val != null ? "Rate available" : "—"}
-                                {cell.brand ? ` · ${cell.brand}` : ""}
-                                {cell.lead_time_days != null ? ` · ${cell.lead_time_days}d lead` : ""}
-                              </div>
-                            ) : (
-                              <div className="text-xs text-muted-foreground mt-0.5">Not quoted</div>
-                            )}
-                          </div>
-                        );
+                    {/* Totals block */}
+                    <TableRow className="border-t-2">
+                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Subtotal (excl GST)</TableCell>
+                      {supplierTotals.map((t) => (
+                        <TableCell key={t.sup.id} className="text-right text-sm font-mono">{t.subtotal > 0 ? `₹${t.subtotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>
+                      ))}
+                      <TableCell />
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">GST</TableCell>
+                      {supplierTotals.map((t) => (
+                        <TableCell key={t.sup.id} className="text-right text-sm font-mono">{t.gst > 0 ? `₹${t.gst.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>
+                      ))}
+                      <TableCell />
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Freight / Extras</TableCell>
+                      {supplierTotals.map((t) => {
+                        const v = t.freight + t.extraSum;
+                        return <TableCell key={t.sup.id} className="text-right text-sm font-mono">{v > 0 ? `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>;
                       })}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      ) : (
-        <Card>
-          <CardContent className="py-12 text-center text-muted-foreground">
-            Awaiting Manual Review — please check back after the sheet is marked as reviewed.
-          </CardContent>
-        </Card>
-      )}
+                      <TableCell />
+                    </TableRow>
+                    <TableRow className="bg-primary/5">
+                      <TableCell colSpan={2} className="text-sm font-bold text-foreground sticky left-0 bg-primary/5 z-10">LANDED TOTAL</TableCell>
+                      {supplierTotals.map((t) => (
+                        <TableCell key={t.sup.id} className={`text-right text-base font-mono font-bold ${t.sup.id === winnerSupplierId ? "text-emerald-700" : "text-foreground"}`}>
+                          {t.landedTotal > 0 ? (
+                            <div className="flex items-center justify-end gap-1.5">
+                              {t.sup.id === winnerSupplierId && <span>🏆</span>}
+                              ₹{t.landedTotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                            </div>
+                          ) : "—"}
+                        </TableCell>
+                      ))}
+                      <TableCell />
+                    </TableRow>
 
-      {/* Detailed Quote Breakdown — shows full quote items per supplier (more than the PR may have) */}
-      {canSeeMatrix && suppliers.length > 0 && Object.values(allQuoteLinesBySupplierId).some((arr) => arr.length > 0) && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Detailed Quote Breakdown</CardTitle>
-            <CardDescription className="mt-1">
-              Full line-item view of each supplier's quote — useful when vendors break down a single PR item into multiple quote items
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {suppliers.map((sup) => {
-              const lines = allQuoteLinesBySupplierId[sup.id] ?? [];
-              const charges = extraChargesBySupplierId[sup.id] ?? [];
-              if (lines.length === 0 && charges.length === 0) return null;
-              const linesSubtotal = lines.reduce((s, li) => {
-                const r = Number(li.rate ?? 0);
-                const q = Number(li.quantity ?? 0);
-                const g = Number(li.gst_percent ?? 18);
-                const f = Number(li.freight ?? 0);
-                const p = Number(li.packing ?? 0);
-                return s + q * (r * (1 + g / 100) + f + p);
-              }, 0);
-              const chargesSubtotal = charges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
-              const grand = linesSubtotal + chargesSubtotal;
-              return (
-                <div key={sup.id} className="border border-border rounded-lg overflow-hidden">
-                  <div className="px-4 py-2.5 bg-muted/30 border-b border-border flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-sm">{sup.name}</span>
-                      <Badge variant="outline" className="text-xs">{lines.length} item{lines.length !== 1 ? "s" : ""}</Badge>
-                      {charges.length > 0 && <Badge variant="outline" className="text-xs">+{charges.length} extra charge{charges.length !== 1 ? "s" : ""}</Badge>}
+                    {/* Commercial terms */}
+                    <TableRow className="border-t-2">
+                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Payment Terms</TableCell>
+                      {supplierTotals.map((t) => (
+                        <TableCell key={t.sup.id} className="text-xs whitespace-pre-wrap break-words">{t.paymentTerms ?? "—"}</TableCell>
+                      ))}
+                      <TableCell />
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Delivery</TableCell>
+                      {supplierTotals.map((t) => (
+                        <TableCell key={t.sup.id} className="text-xs">{t.deliveryTerms ?? "—"}</TableCell>
+                      ))}
+                      <TableCell />
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Warranty</TableCell>
+                      {supplierTotals.map((t) => (
+                        <TableCell key={t.sup.id} className="text-xs">{t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—"}</TableCell>
+                      ))}
+                      <TableCell />
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Validity</TableCell>
+                      {supplierTotals.map((t) => (
+                        <TableCell key={t.sup.id} className="text-xs">{t.validityDays != null ? `${t.validityDays} days` : "—"}</TableCell>
+                      ))}
+                      <TableCell />
+                    </TableRow>
+                    <TableRow>
+                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Compliance</TableCell>
+                      {supplierTotals.map((t) => (
+                        <TableCell key={t.sup.id} className="text-xs">
+                          <Badge className={`text-[10px] border ${complianceBadgeCls(t.compliance)}`}>{t.compliance ?? "—"}</Badge>
+                        </TableCell>
+                      ))}
+                      <TableCell />
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* AI verdict — short and to the point */}
+              {aiVerdict ? (
+                <div className="rounded-lg border-2 border-primary/30 bg-primary/5 p-4 space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Sparkles className="h-5 w-5 text-primary shrink-0" />
+                    <span className="text-sm font-semibold text-primary">AI Recommendation:</span>
+                    {aiVerdict.supplier && <span className="text-base font-bold text-foreground">{aiVerdict.supplier}</span>}
+                  </div>
+                  <p className="text-sm text-foreground">{aiVerdict.headline}</p>
+                  {aiVerdict.watchOuts.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Watch out</div>
+                      <ul className="space-y-0.5">
+                        {aiVerdict.watchOuts.map((w, i) => (
+                          <li key={i} className="text-xs text-foreground flex items-start gap-1.5">
+                            <span className="text-amber-700 shrink-0">⚠</span>
+                            <span>{w}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
-                    {canViewPrices && (
-                      <span className="text-sm font-bold text-primary">{formatCurrency(grand, canViewPrices)}</span>
-                    )}
-                  </div>
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-12">#</TableHead>
-                          <TableHead>Description</TableHead>
-                          <TableHead className="text-right w-20">Qty</TableHead>
-                          <TableHead className="w-16">Unit</TableHead>
-                          <TableHead className="text-right w-24">Rate</TableHead>
-                          <TableHead className="text-right w-16">GST%</TableHead>
-                          <TableHead className="text-right w-28">Landed Total</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {lines.map((li, idx) => {
-                          const r = Number(li.rate ?? 0);
-                          const q = Number(li.quantity ?? 0);
-                          const g = Number(li.gst_percent ?? 18);
-                          const f = Number(li.freight ?? 0);
-                          const p = Number(li.packing ?? 0);
-                          const lineTotal = q * (r * (1 + g / 100) + f + p);
-                          return (
-                            <TableRow key={li.id}>
-                              <TableCell className="text-muted-foreground text-xs">{idx + 1}</TableCell>
-                              <TableCell className="text-sm">{li.original_description ?? "—"}</TableCell>
-                              <TableCell className="text-right">{q}</TableCell>
-                              <TableCell className="text-xs text-muted-foreground">{li.unit ?? "—"}</TableCell>
-                              <TableCell className="text-right">{formatCurrency(r, canViewPrices)}</TableCell>
-                              <TableCell className="text-right text-xs">{g}%</TableCell>
-                              <TableCell className="text-right font-medium">{formatCurrency(lineTotal, canViewPrices)}</TableCell>
-                            </TableRow>
-                          );
-                        })}
-                        {charges.map((c, idx) => {
-                          const total = c.amount * (c.taxable ? 1.18 : 1);
-                          return (
-                            <TableRow key={`charge-${idx}`} className="bg-amber-50/40">
-                              <TableCell className="text-muted-foreground text-xs">+</TableCell>
-                              <TableCell className="text-sm font-medium text-amber-800">
-                                {c.name}
-                                <span className="text-xs text-amber-600 ml-1">(extra charge)</span>
-                              </TableCell>
-                              <TableCell className="text-right">1</TableCell>
-                              <TableCell className="text-xs text-muted-foreground">lot</TableCell>
-                              <TableCell className="text-right">{formatCurrency(c.amount, canViewPrices)}</TableCell>
-                              <TableCell className="text-right text-xs">{c.taxable ? "18%" : "—"}</TableCell>
-                              <TableCell className="text-right font-medium">{formatCurrency(total, canViewPrices)}</TableCell>
-                            </TableRow>
-                          );
-                        })}
-                        <TableRow className="bg-muted/30 font-semibold">
-                          <TableCell colSpan={6} className="text-right">Grand Total</TableCell>
-                          <TableCell className="text-right text-primary">{formatCurrency(grand, canViewPrices)}</TableCell>
-                        </TableRow>
-                      </TableBody>
-                    </Table>
-                  </div>
+                  )}
                 </div>
-              );
-            })}
-          </CardContent>
-        </Card>
-      )}
+              ) : aiLoading ? (
+                <div className="rounded-lg border bg-background p-3 text-sm text-muted-foreground italic">Analyzing quotes…</div>
+              ) : (
+                canCreateRFQ && (
+                  <div className="rounded-lg border bg-background p-3 text-sm text-muted-foreground">
+                    No AI recommendation yet — click <span className="font-medium">Run AI</span> above to generate a short recommendation.
+                  </div>
+                )
+              )}
 
-      {/* Vendor Quote Files — lets procurement head verify AI-parsed data against the original quote documents */}
-      {canSeeMatrix && suppliers.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Vendor Quote Files</CardTitle>
-            <CardDescription>
-              Original quote documents as received — verify AI-parsed values against what the vendor actually sent
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {suppliers.map((sup) => {
-              const quote = quoteBySupplierId[sup.id];
-              if (!quote) return null;
-              // Resolve a viewable URL. Legacy uploads have legacy_file_url (already signed/public).
-              // Otherwise raw_file_path is in cps-quotes bucket.
-              let fileUrl: string | null = null;
-              let displayPath: string | null = quote.raw_file_path ?? null;
-              if (quote.legacy_file_url) {
-                fileUrl = quote.legacy_file_url;
-              } else if (quote.raw_file_path) {
-                const { data: urlData } = supabase.storage.from("cps-quotes").getPublicUrl(quote.raw_file_path);
-                fileUrl = urlData?.publicUrl ?? null;
-              }
-              const lowerPath = (fileUrl ?? displayPath ?? "").toLowerCase();
-              const isImage = /\.(jpg|jpeg|png|webp|gif)(\?|$)/.test(lowerPath);
-              const isPdf = /\.pdf(\?|$)/.test(lowerPath);
-
-              return (
-                <div key={sup.id} className="border border-border rounded-lg overflow-hidden">
-                  <div className="px-4 py-2.5 bg-muted/30 border-b border-border flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-sm">{sup.name}</span>
-                      {quote.channel && (
-                        <Badge variant="outline" className="text-[10px] uppercase">{quote.channel}</Badge>
-                      )}
-                      {quote.is_legacy && (
-                        <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border">Legacy</Badge>
-                      )}
-                    </div>
-                    {fileUrl && (
-                      <a
-                        href={fileUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs text-primary hover:underline font-medium"
-                      >
-                        Open in new tab ↗
-                      </a>
+              {/* Procurement Head's pick — small banner */}
+              {headPickName && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm flex items-start gap-2 flex-wrap">
+                  <CheckCircle2 className="h-4 w-4 text-blue-700 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <span className="font-medium text-blue-900">Head selected: {headPickName}</span>
+                    {sheet?.reviewer_recommendation_reason && (
+                      <span className="text-blue-800"> — {sheet.reviewer_recommendation_reason}</span>
                     )}
                   </div>
-
-                  <div className="p-3">
-                    {!fileUrl ? (
-                      <div className="text-sm text-muted-foreground italic py-4 text-center">
-                        No file uploaded — this quote was entered manually via the portal or logged by a procurement executive.
-                        Verify details via the Detailed Quote Breakdown above.
-                      </div>
-                    ) : isImage ? (
-                      <div className="flex justify-center">
-                        <img
-                          src={fileUrl}
-                          alt={`${sup.name} quote`}
-                          className="max-w-full max-h-[600px] rounded border border-border"
-                          loading="lazy"
-                        />
-                      </div>
-                    ) : isPdf ? (
-                      <div className="space-y-2">
-                        <object data={fileUrl} type="application/pdf" width="100%" height="600px" className="rounded border border-border">
-                          <div className="text-sm text-muted-foreground py-4 text-center">
-                            PDF preview unavailable in this browser.{" "}
-                            <a href={fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-medium">
-                              Click here to download / view the PDF ↗
-                            </a>
-                          </div>
-                        </object>
-                      </div>
-                    ) : (
-                      <div className="text-sm text-muted-foreground py-4 text-center">
-                        File uploaded but preview not supported.{" "}
-                        <a href={fileUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline font-medium">
-                          Download / view ↗
-                        </a>
-                      </div>
-                    )}
-                  </div>
+                  <Badge className={`text-[10px] border ${manualStatusBadge(sheet?.manual_review_status)}`}>{String(sheet?.manual_review_status ?? "pending").replace(/_/g, " ")}</Badge>
                 </div>
-              );
-            })}
-          </CardContent>
-        </Card>
-      )}
+              )}
+
+              {/* Combined justification — only if any cheapest pick is above market */}
+              {decisionSummary.aboveMarketCount > 0 && (
+                <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-4 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-5 w-5 text-amber-700 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold text-amber-900">
+                        Why are you proceeding with vendor rates above market?
+                      </div>
+                      <p className="text-xs text-amber-800 mt-0.5">
+                        {decisionSummary.aboveMarketCount} item{decisionSummary.aboveMarketCount === 1 ? "" : "s"} flagged. One reason for the whole sheet — required before this sheet can be marked Reviewed.
+                      </p>
+                    </div>
+                  </div>
+                  <Textarea
+                    rows={3}
+                    value={aboveMarketJustification}
+                    onChange={(e) => setAboveMarketJustification(e.target.value)}
+                    placeholder="e.g. Local availability, urgent timeline, supplier-bundled freight, brand-specific requirement, …"
+                    disabled={!canSubmitManual}
+                    className="bg-background"
+                  />
+                  {sheet?.above_market_justified_at && sheet?.above_market_justified_by && (
+                    <p className="text-[11px] text-amber-700">
+                      Last saved by <strong>{usersById[sheet.above_market_justified_by]?.name ?? "—"}</strong> on {formatDateTime(sheet.above_market_justified_at)}
+                    </p>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Manual Review Panel */}
       <Card>
@@ -3619,13 +3033,35 @@ Rules:
                 </Accordion>
               </div>
 
+              {decisionSummary.aboveMarketCount > 0 && !aboveMarketJustification.trim() && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  ⚠ Fill the "Why are you proceeding with vendor rates above market?" reason in the Decision Summary above to enable Mark as Reviewed.
+                </div>
+              )}
+              {!comparisonReadiness.isReady && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                  ⏳ Wait until both AI verdict and market search finish — then "Save Draft" / "Mark as Reviewed" will enable.
+                </div>
+              )}
               <div className="flex items-center gap-3 flex-wrap">
                 {manualStatus === "pending" || manualStatus === "in_review" ? (
                   <>
-                    <Button variant="outline" onClick={() => requestConfirmation("draft")} disabled={!canSubmitManual}>
+                    <Button
+                      variant="outline"
+                      onClick={() => requestConfirmation("draft")}
+                      disabled={!canSubmitManual || !comparisonReadiness.isReady || comparisonReadiness.isGenerating}
+                    >
                       Save Draft
                     </Button>
-                    <Button onClick={() => requestConfirmation("reviewed")} disabled={!canSubmitManual}>
+                    <Button
+                      onClick={() => requestConfirmation("reviewed")}
+                      disabled={
+                        !canSubmitManual
+                        || !comparisonReadiness.isReady
+                        || comparisonReadiness.isGenerating
+                        || (decisionSummary.aboveMarketCount > 0 && !aboveMarketJustification.trim())
+                      }
+                    >
                       Mark as Reviewed
                     </Button>
                   </>
@@ -3695,7 +3131,12 @@ Rules:
               </div>
               <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
                 onClick={openBankDialogForCreate}
-                disabled={creatingPO}>
+                disabled={
+                  creatingPO
+                  || !comparisonReadiness.isReady
+                  || comparisonReadiness.isGenerating
+                  || (decisionSummary.aboveMarketCount > 0 && !aboveMarketJustification.trim())
+                }>
                 {creatingPO ? "Creating PO..." : "Proceed Directly to PO →"}
               </Button>
             </div>
@@ -3716,6 +3157,12 @@ Rules:
               <div><span className="text-muted-foreground">Reason:</span> {sheet.reviewer_recommendation_reason ?? "—"}</div>
               <div><span className="text-muted-foreground">Reviewer Notes:</span> {sheet.manual_notes ?? "—"}</div>
             </div>
+            {sheet.above_market_justification && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm">
+                <div className="text-xs font-semibold text-amber-900 mb-1 uppercase tracking-wide">Above-market justification</div>
+                <p className="text-amber-900 whitespace-pre-wrap">{sheet.above_market_justification}</p>
+              </div>
+            )}
             <div className="space-y-2">
               <div className="text-sm font-medium">Approval Notes</div>
               <Textarea

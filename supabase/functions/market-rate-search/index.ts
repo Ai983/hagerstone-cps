@@ -35,9 +35,17 @@ You aggregate live market rates for Indian construction / interior / MEP materia
 
 Per supplier — name, product (brand + spec), rate (e.g. "Rs. 45/sqft"), rate_numeric (number only, same unit for all rows), unit, phone (real digits or "N/A"), location, source platform, url.
 
-Top-level — lowest_rate is the smallest rate_numeric (0 if none); lowest_rate_unit matches the chosen unit; verdict is one line on the price band.
+CRITICAL — lowest_rate is mandatory whenever you have ANY pricing information:
+- If you find specific suppliers with rates → lowest_rate = the smallest rate_numeric.
+- If web_search shows price bands without specific dealers (e.g. "Rs. 140-280/Liter") → lowest_rate = the LOW END of the band (140), lowest_rate_unit = the unit ("Liter"), and put the band in verdict.
+- If the item's unit is unconventional (e.g. paint by SQF) → IGNORE the requested unit, use the standard market unit (e.g. Liter for paint), and note the unit mismatch in verdict.
+- Only return lowest_rate: 0 if you find truly NO pricing data anywhere (very rare).
 
-If no real suppliers found, return suppliers: [], lowest_rate: 0, verdict: "No market data". Sources: IndiaMART, JustDial, TradeIndia, Moglix, Google Maps. Never invent data.`;
+Always populate lowest_rate_unit with the unit you priced in.
+
+If you find prices but no specific suppliers with URLs, still return at least 1 supplier entry — name it "Local market dealers (price band)", set rate to the band string, rate_numeric to the low end, source to "Industry survey", url to "" if none.
+
+Sources: IndiaMART, JustDial, TradeIndia, Moglix, Google Maps. Never invent specific suppliers / rates / phone numbers — but a price band you observed in web search results is fair game even without a specific dealer link.`;
 
 // Strip the outer JSON object cleanly even if the model wrapped it in ```json fences
 function extractJson(text: string): any {
@@ -117,64 +125,83 @@ serve(async (req) => {
       }
     }
 
-    // 2. Fresh Claude call with web_search tool
-    const userPrompt = `Find market suppliers for this item near "${city}":\n${item}\n\nReturn the JSON object exactly as specified, with up to 8 suppliers, lowest_rate (numeric, in the chosen unit), and a 1-line verdict. JSON only.`;
-
-    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "web-search-2025-03-05",
-      },
-      body: JSON.stringify({
-        // Haiku 4.5 — same model the Maal Khojo demo runs on. ~3-4× lower
-        // input token usage than Sonnet on web-search results, fits inside
-        // the 10K TPM cap on the secondary $5 account.
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 2000,
-        system: SYSTEM_PROMPT,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-    });
-
-    const claudeData = await claudeRes.json();
-    if (!claudeRes.ok || claudeData?.error) {
-      const msg = claudeData?.error?.message ?? `Claude HTTP ${claudeRes.status}`;
-      // Soft-fail: Anthropic errors (rate limits, web_search transient failures,
-      // guardrails) should not paint the comparison sheet red. Return 200 with
-      // a no_data payload so the UI flags it as "no live market data" instead.
-      console.error("market-rate-search anthropic error:", msg);
-      return new Response(JSON.stringify({
-        item, city, lowest_rate: 0, lowest_rate_unit: "",
-        verdict: `Live market lookup unavailable (${msg.slice(0, 120)})`,
-        suppliers: [], source: "no_data",
-      }), {
-        status: 200, headers: { ...CORS, "Content-Type": "application/json" },
+    // 2. Fresh Claude call with web_search tool — try with the original query,
+    // and if 0 suppliers come back, retry once with a simpler "<item> price India"
+    // query. Many obscure items only surface on a generic search.
+    async function callClaude(query: string) {
+      const userPrompt = `Find market suppliers for this item near "${city}":\n${query}\n\nReturn the JSON object exactly as specified, with up to 8 suppliers, lowest_rate (numeric, in the chosen unit), and a 1-line verdict. JSON only.`;
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "web-search-2025-03-05",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 2000,
+          system: SYSTEM_PROMPT,
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
+          messages: [{ role: "user", content: userPrompt }],
+        }),
       });
+      const data = await res.json();
+      return { res, data };
     }
 
-    const text = (claudeData.content ?? [])
-      .filter((b: any) => b.type === "text")
-      .map((b: any) => b.text)
-      .join("\n");
-
-    let parsed: any;
-    try {
-      parsed = extractJson(text);
-    } catch (e) {
-      // Don't fail hard — return a graceful "no data" payload so the UI can flag
-      // this item as "no live market data" (allowed with warning) and the
-      // overall market check can still pass.
+    function softFail(reason: string) {
       return new Response(JSON.stringify({
         item, city, lowest_rate: 0, lowest_rate_unit: "",
-        verdict: "AI returned no parseable market data — treat as no live data",
-        suppliers: [], source: "no_data",
-      }), {
-        status: 200, headers: { ...CORS, "Content-Type": "application/json" },
-      });
+        verdict: reason, suppliers: [], source: "no_data",
+      }), { status: 200, headers: { ...CORS, "Content-Type": "application/json" } });
+    }
+
+    // Attempt 1
+    let { res: claudeRes, data: claudeData } = await callClaude(item);
+    if (!claudeRes.ok || claudeData?.error) {
+      const msg = claudeData?.error?.message ?? `Claude HTTP ${claudeRes.status}`;
+      console.error("market-rate-search anthropic error (attempt 1):", msg);
+      return softFail(`Live market lookup unavailable (${msg.slice(0, 120)})`);
+    }
+
+    function parseSuppliers(claudeData: any): any | null {
+      const text = (claudeData.content ?? [])
+        .filter((b: any) => b.type === "text")
+        .map((b: any) => b.text)
+        .join("\n");
+      try {
+        return extractJson(text);
+      } catch {
+        return null;
+      }
+    }
+
+    let parsed = parseSuppliers(claudeData);
+    let attempt = 1;
+
+    // Retry with a generic fallback query if parse failed or no usable price found.
+    // "Usable" means lowest_rate > 0 OR at least one supplier with a rate.
+    const hasUsablePrice = (p: any) => {
+      if (!p) return false;
+      if (Number(p.lowest_rate ?? 0) > 0) return true;
+      return (p.suppliers ?? []).some((s: any) => Number(s?.rate_numeric ?? 0) > 0 || s?.rate);
+    };
+    if (!hasUsablePrice(parsed)) {
+      const fallbackQuery = `${item} price India`;
+      console.log(`market-rate-search retry with fallback query: "${fallbackQuery}"`);
+      const retry = await callClaude(fallbackQuery);
+      if (retry.res.ok && !retry.data?.error) {
+        const retryParsed = parseSuppliers(retry.data);
+        if (hasUsablePrice(retryParsed)) {
+          parsed = retryParsed;
+          attempt = 2;
+        }
+      }
+    }
+
+    if (!parsed) {
+      return softFail("AI returned no parseable market data — treat as no live data");
     }
 
     // Sanitise phone numbers (drop fakes)
@@ -190,23 +217,28 @@ serve(async (req) => {
       city: parsed.city || city,
       lowest_rate: Number(parsed.lowest_rate ?? 0) || 0,
       lowest_rate_unit: String(parsed.lowest_rate_unit ?? ""),
-      verdict: String(parsed.verdict ?? ""),
+      verdict: String(parsed.verdict ?? "") + (attempt === 2 ? " (fallback search)" : ""),
       suppliers: cleanSuppliers,
     };
 
-    // 3. Cache it
-    await supabase.from("cps_market_rate_cache").upsert(
-      {
-        query_normalized: queryNormalized,
-        query_raw: item,
-        city,
-        result,
-        created_at: new Date().toISOString(),
-      },
-      { onConflict: "query_normalized" },
-    );
+    // 3. Cache only when we have a real price — empty results shouldn't poison
+    // the cache for 7 days; the next click should genuinely retry. A valid
+    // lowest_rate counts as a success even if suppliers are empty (Claude often
+    // knows price bands without a specific dealer page).
+    if (result.lowest_rate > 0) {
+      await supabase.from("cps_market_rate_cache").upsert(
+        {
+          query_normalized: queryNormalized,
+          query_raw: item,
+          city,
+          result,
+          created_at: new Date().toISOString(),
+        },
+        { onConflict: "query_normalized" },
+      );
+    }
 
-    return new Response(JSON.stringify({ ...result, source: "fresh" }), {
+    return new Response(JSON.stringify({ ...result, source: result.lowest_rate > 0 ? "fresh" : "no_data" }), {
       status: 200, headers: { ...CORS, "Content-Type": "application/json" },
     });
   } catch (err: any) {
