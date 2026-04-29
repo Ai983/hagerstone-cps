@@ -1108,204 +1108,194 @@ export default function ComparisonSheetPage() {
     return "Rs. " + v.toLocaleString("en-IN", { maximumFractionDigits: 2 });
   };
 
+  // Build the same data the unified on-screen card uses, so CSV/PDF exports
+  // are 1:1 with what the user reviewed. Mirrors the IIFE inside the
+  // "UNIFIED COMPARISON SHEET" Card so the two stay aligned.
+  const buildExportData = () => {
+    if (!sheet || !rfq) return null;
+
+    const supplierTotals = suppliers.map((sup) => {
+      const lines = allQuoteLinesBySupplierId[sup.id] ?? [];
+      const charges = extraChargesBySupplierId[sup.id] ?? [];
+      const lineSubtotal = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
+      const lineGst = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
+      const freight = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
+      const extraSum = charges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
+      const quote = quoteBySupplierId[sup.id];
+      const headerSubtotal = Number(quote?.total_quoted_value ?? 0);
+      const headerLanded = Number(quote?.total_landed_value ?? 0);
+      const subtotal = headerSubtotal > 0 ? headerSubtotal : lineSubtotal;
+      let landedTotal: number; let gst: number;
+      if (headerLanded > 0) {
+        landedTotal = headerLanded;
+        gst = Math.max(0, landedTotal - subtotal - freight - extraSum);
+      } else {
+        gst = lineGst;
+        landedTotal = subtotal + gst + freight + extraSum;
+      }
+      return {
+        sup, subtotal, gst, freight, extraSum, landedTotal,
+        paymentTerms: quote?.payment_terms ?? null,
+        deliveryTerms: quote?.delivery_terms ?? null,
+        warrantyMonths: quote?.warranty_months ?? null,
+        validityDays: quote?.validity_days ?? null,
+        compliance: quote?.compliance_status ?? null,
+      };
+    });
+    const validLanded = supplierTotals.map((t) => t.landedTotal).filter((v) => v > 0);
+    const lowestLanded = validLanded.length ? Math.min(...validLanded) : 0;
+    const winnerSupplierId = supplierTotals.find((t) => t.landedTotal === lowestLanded && lowestLanded > 0)?.sup.id ?? null;
+
+    const aiMatrix = (aiRecommendation?.per_item_matrix ?? {}) as Record<string, Record<string, { rate?: number; source?: string; note?: string }>>;
+    const resolveRate = (prLineId: string, supplierId: string): { rate: number | null; source: "quoted" | "inferred" | "unavailable" } => {
+      const cell = cellsByPrLineIdAndSupplierId[prLineId]?.[supplierId];
+      const cellRate = Number(cell?.rate ?? 0);
+      if (cellRate > 0) return { rate: cellRate, source: "quoted" };
+      const ai = aiMatrix[prLineId]?.[supplierId];
+      const aiRate = Number(ai?.rate ?? 0);
+      if (aiRate > 0) return { rate: aiRate, source: "inferred" };
+      return { rate: null, source: "unavailable" };
+    };
+    const cheapestPerRow: Record<string, string | null> = {};
+    prLineItems.forEach((pli) => {
+      let bestSup: string | null = null;
+      let bestRate = Number.POSITIVE_INFINITY;
+      suppliers.forEach((s) => {
+        const r = resolveRate(pli.id, s.id);
+        if (r.rate !== null && r.rate < bestRate) { bestRate = r.rate; bestSup = s.id; }
+      });
+      cheapestPerRow[pli.id] = bestSup;
+    });
+
+    let aiVerdict: { supplier: string | null; headline: string; watchOuts: string[] } | null = null;
+    if (aiRecommendation) {
+      const r: any = aiRecommendation;
+      if (typeof r.headline === "string") {
+        aiVerdict = {
+          supplier: r.recommended_supplier ?? null,
+          headline: r.headline,
+          watchOuts: Array.isArray(r.watch_outs) ? r.watch_outs.slice(0, 3) : [],
+        };
+      } else if (typeof r.executive_summary === "string" || typeof r.recommended_supplier === "string") {
+        const exec = String(r.executive_summary ?? r.reason ?? "");
+        const firstSentence = exec.split(/(?<=[.!?])\s+/)[0] || exec;
+        aiVerdict = {
+          supplier: r.recommended_supplier ?? null,
+          headline: firstSentence,
+          watchOuts: (Array.isArray(r.warnings) ? r.warnings : []).slice(0, 3),
+        };
+      }
+    }
+
+    const headPickId = sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? null;
+    const headPickName = headPickId ? suppliers.find((s) => s.id === headPickId)?.name ?? null : null;
+
+    const justification = sheet.above_market_justification ?? aboveMarketJustification;
+    const aboveMarketCount = decisionSummary.aboveMarketCount;
+
+    return {
+      supplierTotals, winnerSupplierId,
+      resolveRate, cheapestPerRow,
+      aiVerdict, headPickId, headPickName,
+      justification, aboveMarketCount,
+    };
+  };
+
   const downloadCSV = () => {
     if (!sheet || !rfq) return;
+    const data = buildExportData();
+    if (!data) return;
+    const { supplierTotals, winnerSupplierId, resolveRate, cheapestPerRow, aiVerdict, headPickName, justification, aboveMarketCount } = data;
+
     const rows: string[][] = [];
 
     // Header block
-    rows.push(["HAGERSTONE INTERNATIONAL - QUOTE COMPARISON SHEET"]);
+    rows.push(["HAGERSTONE INTERNATIONAL - COMPARISON SHEET"]);
     rows.push([]);
     rows.push(["RFQ Number", rfq.rfq_number]);
     rows.push(["RFQ Title", rfq.title ?? "-"]);
+    rows.push(["Project Site", projectSite ?? "-"]);
     rows.push(["Quotes Received", String(sheet.total_quotes_received ?? 0)]);
     rows.push(["Compliant Quotes", String(sheet.compliant_quotes_count ?? 0)]);
     rows.push(["Review Status", String(sheet.manual_review_status ?? "-")]);
     rows.push(["Generated On", new Date().toLocaleString("en-IN")]);
     rows.push([]);
 
-    // Decision block at top
-    rows.push(["DECISION SUMMARY"]);
-    const aiPickTop = aiRecommendation?.recommended_supplier ?? "Not generated";
-    const headPickIdTop = sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? null;
-    const headPickNameTop = headPickIdTop ? (suppliers.find(s => s.id === headPickIdTop)?.name ?? "—") : "Awaiting review";
-    const decisionMatchTop = aiRecommendation?.recommended_supplier && headPickIdTop && aiPickTop === headPickNameTop;
-    rows.push(["AI Recommends", aiPickTop]);
-    rows.push(["AI Reason", String(aiRecommendation?.reason ?? aiRecommendation?.executive_summary ?? "-")]);
-    rows.push(["Head's Decision", headPickNameTop]);
-    rows.push(["Head's Reason", sheet.reviewer_recommendation_reason ?? "-"]);
-    rows.push(["Decision Status", decisionMatchTop ? "Matches AI" : (headPickIdTop && aiPickTop !== "Not generated" ? "Override AI" : "—")]);
-    if (sheet.approved_by) rows.push(["Final Approval", `Approved by ${usersById[sheet.approved_by]?.name ?? "—"}`]);
-    rows.push([]);
+    // ===== Unified comparison table =====
+    rows.push(["COMPARISON TABLE"]);
+    rows.push(["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Market"]);
 
-    // Compute per-supplier totals for the clean summary
-    const supplierTotals = suppliers.map((s) => {
-      const lines = allQuoteLinesBySupplierId[s.id] ?? [];
-      const charges = extraChargesBySupplierId[s.id] ?? [];
-      const subtotal = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
-      const gst = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
-      const freight = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
-      const extras = charges.reduce((acc, c) => acc + c.amount * (c.taxable ? 1.18 : 1), 0);
-      const landed = subtotal + gst + freight + extras;
-      return { supplier: s, lines, charges, subtotal, gst, freight, extras, landed };
+    prLineItems.forEach((pli) => {
+      const cheapest = cheapestPerRow[pli.id];
+      const bench = marketBenchmarks[pli.id];
+      const marketRate = bench && bench.market_lowest_rate ? Number(bench.market_lowest_rate) : null;
+      const marketLabel = marketRate !== null
+        ? `Rs. ${marketRate.toLocaleString("en-IN")}${bench?.market_lowest_unit ? "/" + bench.market_lowest_unit : ""}`
+        : (bench?.source === "no_data" || bench?.source === "error" ? "no data" : "pending");
+      const cells = supplierTotals.map((t) => {
+        const info = resolveRate(pli.id, t.sup.id);
+        if (info.rate === null) return "—";
+        const cheapestTag = t.sup.id === cheapest ? "✓ " : "";
+        const inferredTag = info.source === "inferred" ? "≈ " : "";
+        return `${cheapestTag}${inferredTag}Rs. ${info.rate.toLocaleString("en-IN")}`;
+      });
+      rows.push([
+        `${pli.description}${pli.unit ? ` (${pli.unit})` : ""}`,
+        String(pli.quantity ?? ""),
+        ...cells,
+        marketLabel,
+      ]);
     });
 
-    // Bid totals comparison
-    rows.push(["BID TOTALS COMPARISON"]);
-    rows.push(["Metric", ...suppliers.map(s => s.name)]);
-    rows.push(["Items Quoted", ...supplierTotals.map(t => `${t.lines.length}${t.charges.length ? ` (+${t.charges.length} extra)` : ""}`)]);
-    rows.push(["Subtotal (excl GST & freight)", ...supplierTotals.map(t => fmtINR(t.subtotal))]);
-    rows.push(["GST Amount", ...supplierTotals.map(t => fmtINR(t.gst))]);
-    rows.push(["Freight", ...supplierTotals.map(t => t.freight > 0 ? fmtINR(t.freight) : "-")]);
-    rows.push(["Extra Charges", ...supplierTotals.map(t => t.extras > 0 ? fmtINR(t.extras) : "-")]);
-    rows.push(["LANDED TOTAL", ...supplierTotals.map(t => fmtINR(t.landed))]);
-    rows.push(["Payment Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.payment_terms ?? "-")]);
-    rows.push(["Delivery Terms", ...suppliers.map(s => quoteBySupplierId[s.id]?.delivery_terms ?? "-")]);
-    rows.push(["Warranty (months)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.warranty_months; return v != null ? String(v) : "-"; })]);
-    rows.push(["Validity (days)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.validity_days; return v != null ? String(v) : "-"; })]);
-    rows.push(["Compliance Status", ...suppliers.map(s => quoteBySupplierId[s.id]?.compliance_status ?? "-")]);
+    rows.push(["Subtotal (excl GST)", "", ...supplierTotals.map((t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—"), ""]);
+    rows.push(["GST", "", ...supplierTotals.map((t) => t.gst > 0 ? fmtINR(t.gst) : "—"), ""]);
+    rows.push(["Freight / Extras", "", ...supplierTotals.map((t) => (t.freight + t.extraSum) > 0 ? fmtINR(t.freight + t.extraSum) : "—"), ""]);
+    rows.push([
+      "LANDED TOTAL", "",
+      ...supplierTotals.map((t) => {
+        if (t.landedTotal <= 0) return "—";
+        return `${t.sup.id === winnerSupplierId ? "[WIN] " : ""}${fmtINR(t.landedTotal)}`;
+      }),
+      "",
+    ]);
+    rows.push(["Payment Terms", "", ...supplierTotals.map((t) => t.paymentTerms ?? "—"), ""]);
+    rows.push(["Delivery", "", ...supplierTotals.map((t) => t.deliveryTerms ?? "—"), ""]);
+    rows.push(["Warranty", "", ...supplierTotals.map((t) => t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—"), ""]);
+    rows.push(["Validity", "", ...supplierTotals.map((t) => t.validityDays != null ? `${t.validityDays} days` : "—"), ""]);
+    rows.push(["Compliance", "", ...supplierTotals.map((t) => t.compliance ?? "—"), ""]);
     rows.push([]);
 
-    // Full quote breakdown per supplier
-    rows.push(["FULL QUOTE BREAKDOWN"]);
-    supplierTotals.forEach((t) => {
-      if (t.lines.length === 0 && t.charges.length === 0) return;
+    if (aiVerdict) {
+      rows.push(["AI RECOMMENDATION"]);
+      if (aiVerdict.supplier) rows.push(["Recommended Supplier", aiVerdict.supplier]);
+      rows.push(["Headline", aiVerdict.headline]);
+      aiVerdict.watchOuts.forEach((w, i) => rows.push([i === 0 ? "Watch Outs" : "", w]));
       rows.push([]);
-      rows.push([`>> ${t.supplier.name} <<`]);
-      rows.push(["Sr", "Description", "Qty", "Unit", "Rate", "GST%", "Freight", "Line Total"]);
-      t.lines.forEach((li, idx) => {
-        const q = Number(li.quantity ?? 0);
-        const r = Number(li.rate ?? 0);
-        const f = Number(li.freight ?? 0);
-        const g = Number(li.gst_percent ?? 0);
-        const lineTotal = q * r * (1 + g / 100) + q * f;
-        rows.push([
-          String(idx + 1),
-          li.original_description ?? "",
-          String(q),
-          li.unit ?? "",
-          fmtINR(r),
-          g ? `${g}%` : "-",
-          f ? fmtINR(f) : "-",
-          fmtINR(lineTotal),
-        ]);
-      });
-      t.charges.forEach((c, idx) => {
-        const total = c.amount * (c.taxable ? 1.18 : 1);
-        rows.push([
-          `+${idx + 1}`,
-          `${c.name} (extra charge)`,
-          "1", "lot",
-          fmtINR(c.amount),
-          c.taxable ? "18%" : "-",
-          "-",
-          fmtINR(total),
-        ]);
-      });
-      rows.push(["", "", "", "", "", "", "Landed Total", fmtINR(t.landed)]);
-    });
-    rows.push([]);
-
-    // AI Comparison Analysis (if available)
-    if (aiRecommendation) {
-      rows.push(["AI COMPARISON ANALYSIS"]);
-      if (aiRecommendation.comparison_approach) {
-        rows.push(["Approach", String(aiRecommendation.comparison_approach)]);
-        if (aiRecommendation.approach_reason) rows.push(["Approach Reason", String(aiRecommendation.approach_reason)]);
-      }
-      if (aiRecommendation.executive_summary) {
-        rows.push(["Executive Summary", String(aiRecommendation.executive_summary)]);
-      }
-      rows.push([]);
-      rows.push(["RECOMMENDATION"]);
-      rows.push(["Recommended Supplier", String(aiRecommendation.recommended_supplier ?? "-")]);
-      rows.push(["Reason", String(aiRecommendation.reason ?? "-")]);
-      if (aiRecommendation.potential_savings != null) {
-        rows.push(["Potential Savings", fmtINR(aiRecommendation.potential_savings)]);
-      }
-      if (Array.isArray(aiRecommendation.ranking)) {
-        aiRecommendation.ranking.forEach((item: any) => {
-          rows.push([`Rank ${item.rank ?? "-"}`, `${item.supplier ?? "-"}: ${item.rationale ?? ""}`]);
-        });
-      }
-
-      // Commercial analysis
-      if (aiRecommendation.commercial_analysis) {
-        rows.push([]);
-        rows.push(["COMMERCIAL ANALYSIS"]);
-        const ca = aiRecommendation.commercial_analysis;
-        if (ca.lowest_landed) rows.push(["Lowest Landed", `${ca.lowest_landed.supplier} — ${fmtINR(Number(ca.lowest_landed.amount))}`]);
-        if (ca.highest_landed) rows.push(["Highest Landed", `${ca.highest_landed.supplier} — ${fmtINR(Number(ca.highest_landed.amount))}`]);
-        if (ca.price_spread_pct != null) rows.push(["Price Spread", `${Number(ca.price_spread_pct).toFixed(1)}%`]);
-        if (ca.spread_interpretation) rows.push(["Spread Reason", String(ca.spread_interpretation)]);
-      }
-
-      // Supplier profiles
-      if (Array.isArray(aiRecommendation.supplier_profiles) && aiRecommendation.supplier_profiles.length > 0) {
-        rows.push([]);
-        rows.push(["SUPPLIER PROFILES"]);
-        aiRecommendation.supplier_profiles.forEach((sp: any) => {
-          rows.push([sp.name, `Items: ${sp.items_quoted ?? "-"}`, `Landed: ${fmtINR(Number(sp.landed_total ?? 0))}`]);
-          if (Array.isArray(sp.strengths)) sp.strengths.forEach((s: string) => rows.push(["", "Strength", s]));
-          if (Array.isArray(sp.weaknesses)) sp.weaknesses.forEach((w: string) => rows.push(["", "Weakness", w]));
-          if (Array.isArray(sp.risk_flags)) sp.risk_flags.forEach((r: string) => rows.push(["", "Risk", r]));
-        });
-      }
-
-      // Item comparison groups
-      if (Array.isArray(aiRecommendation.item_comparison) && aiRecommendation.item_comparison.length > 0) {
-        rows.push([]);
-        rows.push(["ITEM-BY-ITEM COMPARISON"]);
-        aiRecommendation.item_comparison.forEach((grp: any) => {
-          rows.push([`>> ${grp.category ?? ""}`]);
-          if (grp.description) rows.push(["Description", String(grp.description)]);
-          rows.push(["Supplier", "Item", "Qty", "Unit", "Rate", "Landed/unit"]);
-          (grp.vendor_items ?? []).forEach((vi: any) => {
-            rows.push([
-              String(vi.supplier ?? ""),
-              String(vi.item_description ?? ""),
-              String(vi.quantity ?? ""),
-              String(vi.unit ?? ""),
-              vi.rate_per_unit != null ? fmtINR(Number(vi.rate_per_unit)) : "-",
-              vi.landed_per_unit != null ? fmtINR(Number(vi.landed_per_unit)) : "-",
-            ]);
-          });
-          if (grp.alignment_note) rows.push(["Note", String(grp.alignment_note)]);
-          rows.push([]);
-        });
-      }
-
-      // Unmatched items
-      if (Array.isArray(aiRecommendation.unmatched_items) && aiRecommendation.unmatched_items.length > 0) {
-        rows.push(["UNMATCHED ITEMS"]);
-        aiRecommendation.unmatched_items.forEach((um: any) => {
-          rows.push([String(um.supplier ?? ""), String(um.item_description ?? ""), String(um.note ?? "")]);
-        });
-        rows.push([]);
-      }
-
-      // Warnings
-      if (Array.isArray(aiRecommendation.warnings) && aiRecommendation.warnings.length > 0) {
-        rows.push(["WARNINGS"]);
-        aiRecommendation.warnings.forEach((w: string) => rows.push(["", String(w)]));
-        rows.push([]);
-      }
-
-      // Data quality issues
-      if (Array.isArray(aiRecommendation.data_quality_issues) && aiRecommendation.data_quality_issues.length > 0) {
-        rows.push(["DATA QUALITY ISSUES"]);
-        aiRecommendation.data_quality_issues.forEach((d: string) => rows.push(["", String(d)]));
-        rows.push([]);
-      }
-
-      // Next steps
-      if (Array.isArray(aiRecommendation.next_steps_for_procurement) && aiRecommendation.next_steps_for_procurement.length > 0) {
-        rows.push(["NEXT STEPS FOR PROCUREMENT"]);
-        aiRecommendation.next_steps_for_procurement.forEach((n: string) => rows.push(["", String(n)]));
-        rows.push([]);
-      }
     }
 
-    // Reviewer notes (additional details; Head's Decision already at top)
+    if (headPickName) {
+      rows.push(["PROCUREMENT HEAD'S DECISION"]);
+      rows.push(["Supplier", headPickName]);
+      rows.push(["Reason", sheet.reviewer_recommendation_reason ?? "—"]);
+      if (sheet.manual_review_by) {
+        rows.push(["Reviewed By", `${usersById[sheet.manual_review_by]?.name ?? "—"} on ${formatDateTime(sheet.manual_review_at)}`]);
+      }
+      if (sheet.approved_by) {
+        rows.push(["Approved By", `${usersById[sheet.approved_by]?.name ?? "—"} on ${formatDateTime(sheet.approved_at)}`]);
+      }
+      rows.push([]);
+    }
+
+    if (aboveMarketCount > 0 && justification) {
+      rows.push(["ABOVE-MARKET JUSTIFICATION"]);
+      rows.push(["Items Flagged Above Market", String(aboveMarketCount)]);
+      rows.push(["Reason", justification]);
+      if (sheet.above_market_justified_by) {
+        rows.push(["Justified By", `${usersById[sheet.above_market_justified_by]?.name ?? "—"} on ${formatDateTime(sheet.above_market_justified_at)}`]);
+      }
+      rows.push([]);
+    }
+
     if (sheet.manual_notes) {
       rows.push(["REVIEWER NOTES"]);
       rows.push(["", sheet.manual_notes]);
@@ -1324,13 +1314,16 @@ export default function ComparisonSheetPage() {
 
   const downloadPDF = () => {
     if (!sheet || !rfq) return;
+    const data = buildExportData();
+    if (!data) return;
+    const { supplierTotals, winnerSupplierId, resolveRate, cheapestPerRow, aiVerdict, headPickName, justification, aboveMarketCount } = data;
 
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     const pageWidth = doc.internal.pageSize.getWidth();
     let y = 12;
 
-    // Header — company branding
-    doc.setFillColor(107, 58, 42); // brown
+    // Header banner
+    doc.setFillColor(107, 58, 42);
     doc.rect(0, 0, pageWidth, 18, "F");
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(14);
@@ -1338,7 +1331,7 @@ export default function ComparisonSheetPage() {
     doc.text("HAGERSTONE INTERNATIONAL", 10, 8);
     doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
-    doc.text("Quote Comparison Sheet", 10, 14);
+    doc.text("Comparison Sheet", 10, 14);
     doc.setTextColor(0, 0, 0);
     y = 24;
 
@@ -1353,391 +1346,217 @@ export default function ComparisonSheetPage() {
       doc.text(title, 10, y + 5);
       y += 5 + title.length * 4;
     }
+    if (projectSite) {
+      doc.setFontSize(8);
+      const site = doc.splitTextToSize(`Site: ${projectSite}`, pageWidth - 80);
+      doc.text(site, 10, y + 4);
+      y += 4 + site.length * 3;
+    }
 
     const metaRight = [
-      `Quotes Received: ${sheet.total_quotes_received ?? 0}`,
+      `Quotes: ${sheet.total_quotes_received ?? 0}`,
       `Compliant: ${sheet.compliant_quotes_count ?? 0}`,
       `Status: ${sheet.manual_review_status ?? "-"}`,
       `Generated: ${new Date().toLocaleDateString("en-IN")}`,
     ];
+    doc.setFontSize(9);
     metaRight.forEach((line, i) => {
       doc.text(line, pageWidth - 70, 24 + i * 4);
     });
     y = Math.max(y, 24 + metaRight.length * 4) + 4;
 
-    // === Decision Block: AI Recommendation + Head's Decision side-by-side ===
-    const aiPickName: string | null = aiRecommendation?.recommended_supplier ?? null;
-    const aiReason: string = String(aiRecommendation?.reason ?? aiRecommendation?.executive_summary ?? "—");
-    const headPickId = sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? null;
-    const headPickName: string | null = headPickId ? (suppliers.find(s => s.id === headPickId)?.name ?? "—") : null;
-    const headReason: string = sheet.reviewer_recommendation_reason ?? "—";
-    const decisionMatch = aiPickName && headPickName && aiPickName === headPickName;
-
-    const colWidth = (pageWidth - 30) / 2;
-    const leftX = 10;
-    const rightX = 10 + colWidth + 10;
-    const aiBoxY = y;
-    const aiReasonLines = doc.splitTextToSize(aiReason, colWidth - 6);
-    const headReasonLines = doc.splitTextToSize(headReason, colWidth - 6);
-    const boxH = Math.max(26 + aiReasonLines.length * 4, 26 + headReasonLines.length * 4, 32);
-
-    // AI Recommendation (amber)
-    doc.setFillColor(252, 246, 230);
-    doc.setDrawColor(180, 140, 90);
-    doc.roundedRect(leftX, aiBoxY, colWidth, boxH, 2, 2, "FD");
-    doc.setTextColor(120, 70, 20);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-    doc.text("AI RECOMMENDATION", leftX + 3, aiBoxY + 5);
-    doc.setTextColor(0, 0, 0);
-    doc.setFontSize(10);
-    doc.text(`Supplier: ${aiPickName ?? "Not yet generated"}`, leftX + 3, aiBoxY + 11);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(8);
-    doc.text(aiReasonLines, leftX + 3, aiBoxY + 16);
-
-    // Head's Decision (blue/green)
-    const approved = Boolean(sheet.approved_by && sheet.approved_at);
-    doc.setFillColor(approved ? 232 : 230, approved ? 245 : 242, approved ? 233 : 252);
-    doc.setDrawColor(approved ? 76 : 80, approved ? 175 : 130, approved ? 80 : 210);
-    doc.roundedRect(rightX, aiBoxY, colWidth, boxH, 2, 2, "FD");
-    doc.setTextColor(approved ? 27 : 30, approved ? 94 : 70, approved ? 32 : 140);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-    doc.text(approved ? "APPROVED BY PROCUREMENT" : "PROCUREMENT HEAD'S DECISION", rightX + 3, aiBoxY + 5);
-    doc.setTextColor(0, 0, 0);
-    doc.setFontSize(10);
-    if (headPickName) {
-      let statusTag = "";
-      if (decisionMatch) statusTag = "  [matches AI]";
-      else if (aiPickName) statusTag = "  [override]";
-      doc.text(`Supplier: ${headPickName}${statusTag}`, rightX + 3, aiBoxY + 11);
-    } else {
-      doc.text("Awaiting review", rightX + 3, aiBoxY + 11);
-    }
-    doc.setFont("helvetica", "normal"); doc.setFontSize(8);
-    doc.text(headReasonLines, rightX + 3, aiBoxY + 16);
-
-    y = aiBoxY + boxH + 4;
-
-    // Compute per-supplier totals
-    const supplierTotals = suppliers.map((s) => {
-      const lines = allQuoteLinesBySupplierId[s.id] ?? [];
-      const charges = extraChargesBySupplierId[s.id] ?? [];
-      const subtotal = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
-      const gst = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
-      const freight = lines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
-      const extras = charges.reduce((acc, c) => acc + c.amount * (c.taxable ? 1.18 : 1), 0);
-      const landed = subtotal + gst + freight + extras;
-      return { supplier: s, lines, charges, subtotal, gst, freight, extras, landed };
-    });
-
-    // Section: Bid Totals Comparison (primary)
+    // ===== Unified comparison table =====
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
     doc.setFillColor(240, 235, 230);
     doc.rect(10, y - 4, pageWidth - 20, 6, "F");
-    doc.text("Bid Totals Comparison", 12, y);
+    doc.text("Comparison Table", 12, y);
     y += 4;
 
-    const summaryHead = ["Metric", ...suppliers.map(s => s.name)];
-    const summaryBody = [
-      ["Items Quoted", ...supplierTotals.map(t => `${t.lines.length}${t.charges.length ? ` (+${t.charges.length} extra)` : ""}`)],
-      ["Subtotal (excl GST & freight)", ...supplierTotals.map(t => fmtINR(t.subtotal))],
-      ["GST Amount", ...supplierTotals.map(t => fmtINR(t.gst))],
-      ["Freight", ...supplierTotals.map(t => t.freight > 0 ? fmtINR(t.freight) : "-")],
-      ["Extra Charges", ...supplierTotals.map(t => t.extras > 0 ? fmtINR(t.extras) : "-")],
-      ["LANDED TOTAL", ...supplierTotals.map(t => fmtINR(t.landed))],
-      ["Payment Terms", ...suppliers.map(s => String(quoteBySupplierId[s.id]?.payment_terms ?? "-"))],
-      ["Delivery Terms", ...suppliers.map(s => String(quoteBySupplierId[s.id]?.delivery_terms ?? "-"))],
-      ["Warranty (months)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.warranty_months; return v != null ? String(v) : "-"; })],
-      ["Validity (days)", ...suppliers.map(s => { const v = quoteBySupplierId[s.id]?.validity_days; return v != null ? String(v) : "-"; })],
-      ["Compliance", ...suppliers.map(s => String(quoteBySupplierId[s.id]?.compliance_status ?? "-"))],
-    ];
+    type CellMeta = { kind: "item" | "subtotal" | "gst" | "freight" | "landed" | "term"; isCheapest?: boolean; isWinner?: boolean; isMarketAbove?: boolean; isInferred?: boolean };
+    const tableHead = [["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Market"]];
+    const tableBody: string[][] = [];
+    const rowMeta: CellMeta[][] = [];
+
+    prLineItems.forEach((pli) => {
+      const cheapest = cheapestPerRow[pli.id];
+      const bench = marketBenchmarks[pli.id];
+      const marketRate = bench && bench.market_lowest_rate ? Number(bench.market_lowest_rate) : null;
+      const cheapestRateInfo = cheapest ? resolveRate(pli.id, cheapest) : null;
+      const isAbove = cheapestRateInfo?.rate !== null && cheapestRateInfo !== null && marketRate !== null && cheapestRateInfo.rate! > marketRate;
+      const marketLabel = marketRate !== null
+        ? `${isAbove ? "⚠ " : "✓ "}Rs.${marketRate.toLocaleString("en-IN")}${bench?.market_lowest_unit ? "/" + bench.market_lowest_unit : ""}`
+        : (bench?.source === "no_data" || bench?.source === "error" ? "no data" : "pending");
+
+      const cellsText: string[] = [];
+      const cellsMeta: CellMeta[] = [{ kind: "item" }, { kind: "item" }];
+      supplierTotals.forEach((t) => {
+        const info = resolveRate(pli.id, t.sup.id);
+        if (info.rate === null) {
+          cellsText.push("—");
+          cellsMeta.push({ kind: "item" });
+        } else {
+          const isCheapest = t.sup.id === cheapest;
+          const inferred = info.source === "inferred" ? "≈ " : "";
+          cellsText.push(`${inferred}Rs.${info.rate.toLocaleString("en-IN")}`);
+          cellsMeta.push({ kind: "item", isCheapest, isInferred: info.source === "inferred" });
+        }
+      });
+      cellsMeta.push({ kind: "item", isMarketAbove: isAbove });
+      tableBody.push([
+        `${pli.description}${pli.unit ? ` (${pli.unit})` : ""}`,
+        String(pli.quantity ?? ""),
+        ...cellsText,
+        marketLabel,
+      ]);
+      rowMeta.push(cellsMeta);
+    });
+
+    const pushTotalsRow = (label: string, kind: CellMeta["kind"], values: (t: typeof supplierTotals[0]) => string) => {
+      const meta: CellMeta[] = [{ kind }, { kind }];
+      const cells = supplierTotals.map((t) => {
+        meta.push({ kind, isWinner: kind === "landed" && t.sup.id === winnerSupplierId });
+        return values(t);
+      });
+      meta.push({ kind });
+      tableBody.push([label, "", ...cells, ""]);
+      rowMeta.push(meta);
+    };
+
+    pushTotalsRow("Subtotal (excl GST)", "subtotal", (t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—");
+    pushTotalsRow("GST", "gst", (t) => t.gst > 0 ? fmtINR(t.gst) : "—");
+    pushTotalsRow("Freight / Extras", "freight", (t) => (t.freight + t.extraSum) > 0 ? fmtINR(t.freight + t.extraSum) : "—");
+    pushTotalsRow("LANDED TOTAL", "landed", (t) => t.landedTotal > 0 ? fmtINR(t.landedTotal) : "—");
+    pushTotalsRow("Payment Terms", "term", (t) => t.paymentTerms ?? "—");
+    pushTotalsRow("Delivery", "term", (t) => t.deliveryTerms ?? "—");
+    pushTotalsRow("Warranty", "term", (t) => t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—");
+    pushTotalsRow("Validity", "term", (t) => t.validityDays != null ? `${t.validityDays} days` : "—");
+    pushTotalsRow("Compliance", "term", (t) => t.compliance ?? "—");
 
     autoTable(doc, {
-      head: [summaryHead],
-      body: summaryBody,
+      head: tableHead,
+      body: tableBody,
       startY: y + 2,
-      styles: { fontSize: 8, cellPadding: 2 },
-      headStyles: { fillColor: [107, 58, 42], textColor: 255, fontStyle: "bold" },
+      styles: { fontSize: 7.5, cellPadding: 1.5, valign: "middle" },
+      headStyles: { fillColor: [107, 58, 42], textColor: 255, fontStyle: "bold", halign: "center" },
       alternateRowStyles: { fillColor: [250, 248, 245] },
-      columnStyles: { 0: { cellWidth: 55, fontStyle: "bold" } },
+      columnStyles: {
+        0: { cellWidth: 55, fontStyle: "bold" },
+        1: { cellWidth: 12, halign: "center" },
+      },
       margin: { left: 10, right: 10 },
-      didParseCell: (data) => {
-        if (data.section === "body" && data.row.index === 5) {
-          data.cell.styles.fillColor = [107, 58, 42];
-          data.cell.styles.textColor = 255;
-          data.cell.styles.fontStyle = "bold";
+      didParseCell: (cellData) => {
+        if (cellData.section !== "body") return;
+        const meta = rowMeta[cellData.row.index]?.[cellData.column.index];
+        if (!meta) return;
+        // Item rows — cheapest cell highlight
+        if (meta.kind === "item" && meta.isCheapest) {
+          cellData.cell.styles.fillColor = [220, 245, 230];
+          cellData.cell.styles.textColor = [25, 110, 70];
+          cellData.cell.styles.fontStyle = "bold";
+        }
+        if (meta.kind === "item" && meta.isInferred && !meta.isCheapest) {
+          cellData.cell.styles.textColor = [150, 100, 20];
+        }
+        if (meta.kind === "item" && meta.isMarketAbove) {
+          cellData.cell.styles.fillColor = [253, 235, 200];
+          cellData.cell.styles.textColor = [150, 90, 0];
+          cellData.cell.styles.fontStyle = "bold";
+        }
+        // Market column header tint
+        if (meta.kind === "item" && cellData.column.index === supplierTotals.length + 2 && !meta.isMarketAbove) {
+          cellData.cell.styles.fillColor = [232, 240, 252];
+        }
+        // Totals rows
+        if (meta.kind === "subtotal" || meta.kind === "gst" || meta.kind === "freight") {
+          if (cellData.column.index === 0) cellData.cell.styles.fillColor = [243, 240, 235];
+        }
+        if (meta.kind === "landed") {
+          cellData.cell.styles.fillColor = [107, 58, 42];
+          cellData.cell.styles.textColor = 255;
+          cellData.cell.styles.fontStyle = "bold";
+          if (meta.isWinner) {
+            cellData.cell.styles.fillColor = [40, 110, 60];
+          }
+        }
+        if (meta.kind === "term") {
+          cellData.cell.styles.fillColor = [248, 246, 243];
+          cellData.cell.styles.fontSize = 7;
         }
       },
     });
-    y = (doc as any).lastAutoTable.finalY + 6;
+    y = (doc as any).lastAutoTable.finalY + 5;
 
-    // Section: Full Quote Breakdown per supplier
-    supplierTotals.forEach((t) => {
-      if (t.lines.length === 0 && t.charges.length === 0) return;
-      if (y > 170) { doc.addPage(); y = 15; }
-
-      doc.setFontSize(10);
+    const renderBox = (title: string, color: [number, number, number], bg: [number, number, number], lines: string[], titleColor?: [number, number, number]) => {
+      const wrapped: string[] = [];
+      lines.forEach((l) => {
+        const w = doc.splitTextToSize(l, pageWidth - 24);
+        wrapped.push(...w);
+      });
+      const boxH = 8 + wrapped.length * 4 + 2;
+      if (y + boxH > 195) { doc.addPage(); y = 15; }
+      doc.setFillColor(...bg);
+      doc.setDrawColor(...color);
+      doc.roundedRect(10, y, pageWidth - 20, boxH, 2, 2, "FD");
+      doc.setTextColor(...(titleColor ?? color));
       doc.setFont("helvetica", "bold");
-      doc.setFillColor(240, 235, 230);
-      doc.rect(10, y - 4, pageWidth - 20, 6, "F");
-      doc.text(`${t.supplier.name} — ${t.lines.length} items${t.charges.length ? ` + ${t.charges.length} extra` : ""} | Landed: ${fmtINR(t.landed)}`, 12, y);
-      y += 4;
-
-      const breakHead = ["Sr", "Description", "Qty", "Unit", "Rate", "GST%", "Freight", "Line Total"];
-      const breakBody = t.lines.map((li, idx) => {
-        const q = Number(li.quantity ?? 0);
-        const r = Number(li.rate ?? 0);
-        const f = Number(li.freight ?? 0);
-        const g = Number(li.gst_percent ?? 0);
-        const lineTotal = q * r * (1 + g / 100) + q * f;
-        return [
-          String(idx + 1),
-          li.original_description ?? "",
-          String(q),
-          li.unit ?? "",
-          fmtINR(r),
-          g ? `${g}%` : "-",
-          f ? fmtINR(f) : "-",
-          fmtINR(lineTotal),
-        ];
-      });
-      t.charges.forEach((c, idx) => {
-        const total = c.amount * (c.taxable ? 1.18 : 1);
-        breakBody.push([
-          `+${idx + 1}`,
-          `${c.name} (extra charge)`,
-          "1", "lot",
-          fmtINR(c.amount),
-          c.taxable ? "18%" : "-",
-          "-",
-          fmtINR(total),
-        ]);
-      });
-
-      autoTable(doc, {
-        head: [breakHead],
-        body: breakBody,
-        startY: y + 2,
-        styles: { fontSize: 7, cellPadding: 1.5 },
-        headStyles: { fillColor: [180, 140, 90], textColor: 255, fontStyle: "bold" },
-        alternateRowStyles: { fillColor: [250, 248, 245] },
-        columnStyles: {
-          0: { cellWidth: 10 },
-          1: { cellWidth: 100 },
-          2: { cellWidth: 12 },
-          3: { cellWidth: 14 },
-          4: { cellWidth: 22 },
-          5: { cellWidth: 14 },
-          6: { cellWidth: 18 },
-          7: { cellWidth: 25 },
-        },
-        margin: { left: 10, right: 10 },
-      });
-      y = (doc as any).lastAutoTable.finalY + 4;
-    });
-
-    // AI Comparison Analysis (if available)
-    if (aiRecommendation) {
-      const sectionHeader = (title: string) => {
-        if (y > 175) { doc.addPage(); y = 15; }
-        doc.setFillColor(107, 58, 42);
-        doc.rect(10, y - 4, pageWidth - 20, 7, "F");
-        doc.setTextColor(255, 255, 255);
-        doc.setFontSize(10);
-        doc.setFont("helvetica", "bold");
-        doc.text(title, 12, y + 1);
-        doc.setTextColor(0, 0, 0);
-        y += 8;
-      };
-      const writeLines = (text: string, indent = 14, fontSize = 9) => {
-        doc.setFontSize(fontSize);
-        doc.setFont("helvetica", "normal");
-        const wrapped = doc.splitTextToSize(String(text), pageWidth - 20 - (indent - 10));
-        wrapped.forEach((line: string) => {
-          if (y > 195) { doc.addPage(); y = 15; }
-          doc.text(line, indent, y);
-          y += fontSize * 0.45 + 1;
-        });
-      };
-      const label = (k: string, v: string) => {
-        if (y > 195) { doc.addPage(); y = 15; }
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(9);
-        doc.text(`${k}:`, 14, y);
-        doc.setFont("helvetica", "normal");
-        const wrapped = doc.splitTextToSize(v, pageWidth - 50);
-        doc.text(wrapped, 40, y);
-        y += wrapped.length * 4 + 1;
-      };
-
-      // Section: AI Analysis Header
-      sectionHeader("AI COMPARISON ANALYSIS");
-      if (aiRecommendation.comparison_approach) {
-        label("Approach", `${aiRecommendation.comparison_approach}${aiRecommendation.approach_reason ? " — " + aiRecommendation.approach_reason : ""}`);
-      }
-      if (aiRecommendation.executive_summary) {
-        y += 1;
-        doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-        doc.text("Executive Summary", 14, y); y += 4;
-        writeLines(aiRecommendation.executive_summary);
-        y += 2;
-      }
-
-      // Recommendation
-      if (aiRecommendation.recommended_supplier) {
-        if (y > 180) { doc.addPage(); y = 15; }
-        doc.setFillColor(232, 245, 233);
-        doc.setDrawColor(76, 175, 80);
-        const reason = aiRecommendation.reason ?? "";
-        const reasonLines = doc.splitTextToSize(reason, pageWidth - 28);
-        const boxH = 14 + reasonLines.length * 4;
-        doc.roundedRect(10, y, pageWidth - 20, boxH, 2, 2, "FD");
-        doc.setTextColor(27, 94, 32);
-        doc.setFontSize(9);
-        doc.setFont("helvetica", "bold");
-        doc.text(`Recommended: ${aiRecommendation.recommended_supplier}`, 14, y + 6);
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(0, 0, 0);
-        doc.text(reasonLines, 14, y + 11);
-        y += boxH + 3;
-        if (aiRecommendation.potential_savings != null && Number(aiRecommendation.potential_savings) > 0) {
-          label("Potential Savings", fmtINR(Number(aiRecommendation.potential_savings)));
-        }
-      }
-
-      // Commercial Analysis
-      if (aiRecommendation.commercial_analysis) {
-        sectionHeader("COMMERCIAL ANALYSIS");
-        const ca = aiRecommendation.commercial_analysis;
-        if (ca.lowest_landed) label("Lowest Landed", `${ca.lowest_landed.supplier} — ${fmtINR(Number(ca.lowest_landed.amount))}`);
-        if (ca.highest_landed) label("Highest Landed", `${ca.highest_landed.supplier} — ${fmtINR(Number(ca.highest_landed.amount))}`);
-        if (ca.price_spread_pct != null) label("Spread", `${Number(ca.price_spread_pct).toFixed(1)}%`);
-        if (ca.spread_interpretation) { writeLines(ca.spread_interpretation, 14, 8); }
-        y += 2;
-      }
-
-      // Supplier Profiles as table
-      if (Array.isArray(aiRecommendation.supplier_profiles) && aiRecommendation.supplier_profiles.length > 0) {
-        sectionHeader("SUPPLIER PROFILES");
-        aiRecommendation.supplier_profiles.forEach((sp: any) => {
-          if (y > 170) { doc.addPage(); y = 15; }
-          doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-          doc.text(`${sp.name}${sp.landed_total != null ? `  |  Landed: ${fmtINR(Number(sp.landed_total))}` : ""}`, 14, y);
-          y += 5;
-          doc.setFont("helvetica", "normal");
-          if (Array.isArray(sp.strengths) && sp.strengths.length > 0) {
-            doc.setFontSize(8); doc.setTextColor(20, 90, 50);
-            doc.text("Strengths:", 16, y); doc.setTextColor(0, 0, 0); y += 3.5;
-            sp.strengths.forEach((s: string) => { writeLines(`• ${s}`, 20, 8); });
-          }
-          if (Array.isArray(sp.weaknesses) && sp.weaknesses.length > 0) {
-            doc.setFontSize(8); doc.setTextColor(150, 100, 20);
-            doc.text("Weaknesses:", 16, y); doc.setTextColor(0, 0, 0); y += 3.5;
-            sp.weaknesses.forEach((s: string) => { writeLines(`• ${s}`, 20, 8); });
-          }
-          if (Array.isArray(sp.risk_flags) && sp.risk_flags.length > 0) {
-            doc.setFontSize(8); doc.setTextColor(180, 40, 40);
-            doc.text("Risks:", 16, y); doc.setTextColor(0, 0, 0); y += 3.5;
-            sp.risk_flags.forEach((s: string) => { writeLines(`• ${s}`, 20, 8); });
-          }
-          y += 2;
-        });
-      }
-
-      // Item comparison
-      if (Array.isArray(aiRecommendation.item_comparison) && aiRecommendation.item_comparison.length > 0) {
-        sectionHeader("ITEM-BY-ITEM COMPARISON");
-        aiRecommendation.item_comparison.forEach((grp: any) => {
-          if (y > 170) { doc.addPage(); y = 15; }
-          doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-          doc.text(grp.category ?? "—", 14, y); y += 4;
-          doc.setFont("helvetica", "normal");
-          if (grp.description) { writeLines(grp.description, 14, 8); }
-          const headRow = ["Supplier", "Item", "Qty", "Unit", "Rate", "Landed/unit"];
-          const bodyRows = (grp.vendor_items ?? []).map((vi: any) => [
-            String(vi.supplier ?? ""),
-            String(vi.item_description ?? ""),
-            String(vi.quantity ?? ""),
-            String(vi.unit ?? ""),
-            vi.rate_per_unit != null ? fmtINR(Number(vi.rate_per_unit)) : "-",
-            vi.landed_per_unit != null ? fmtINR(Number(vi.landed_per_unit)) : "-",
-          ]);
-          if (bodyRows.length > 0) {
-            autoTable(doc, {
-              head: [headRow],
-              body: bodyRows,
-              startY: y + 1,
-              styles: { fontSize: 7, cellPadding: 1.5 },
-              headStyles: { fillColor: [180, 140, 90], textColor: 255, fontStyle: "bold" },
-              alternateRowStyles: { fillColor: [250, 248, 245] },
-              columnStyles: { 0: { cellWidth: 40 }, 1: { cellWidth: 90 }, 2: { cellWidth: 14 }, 3: { cellWidth: 14 }, 4: { cellWidth: 22 }, 5: { cellWidth: 26 } },
-              margin: { left: 10, right: 10 },
-            });
-            y = (doc as any).lastAutoTable.finalY + 2;
-          }
-          if (grp.alignment_note) {
-            doc.setFont("helvetica", "italic"); doc.setFontSize(7); doc.setTextColor(150, 100, 20);
-            const note = doc.splitTextToSize(`Note: ${grp.alignment_note}`, pageWidth - 28);
-            doc.text(note, 14, y); y += note.length * 3 + 2;
-            doc.setTextColor(0, 0, 0); doc.setFont("helvetica", "normal");
-          }
-        });
-      }
-
-      // Unmatched items
-      if (Array.isArray(aiRecommendation.unmatched_items) && aiRecommendation.unmatched_items.length > 0) {
-        sectionHeader("UNMATCHED ITEMS");
-        aiRecommendation.unmatched_items.forEach((um: any) => {
-          const line = `• ${um.supplier ?? ""}: ${um.item_description ?? ""}${um.note ? ` — ${um.note}` : ""}`;
-          writeLines(line, 14, 8);
-        });
-        y += 2;
-      }
-
-      // Ranking
-      if (Array.isArray(aiRecommendation.ranking) && aiRecommendation.ranking.length > 0) {
-        sectionHeader("RANKING");
-        aiRecommendation.ranking.forEach((item: any) => {
-          writeLines(`${item.rank ?? "-"}. ${item.supplier ?? "-"}${item.rationale ? ` — ${item.rationale}` : ""}`, 14, 8);
-        });
-        y += 2;
-      }
-
-      // Warnings
-      if (Array.isArray(aiRecommendation.warnings) && aiRecommendation.warnings.length > 0) {
-        sectionHeader("WARNINGS");
-        aiRecommendation.warnings.forEach((w: string) => writeLines(`• ${w}`, 14, 8));
-        y += 2;
-      }
-
-      // Data quality issues
-      if (Array.isArray(aiRecommendation.data_quality_issues) && aiRecommendation.data_quality_issues.length > 0) {
-        sectionHeader("DATA QUALITY ISSUES");
-        aiRecommendation.data_quality_issues.forEach((d: string) => writeLines(`• ${d}`, 14, 8));
-        y += 2;
-      }
-
-      // Next steps
-      if (Array.isArray(aiRecommendation.next_steps_for_procurement) && aiRecommendation.next_steps_for_procurement.length > 0) {
-        sectionHeader("NEXT STEPS FOR PROCUREMENT");
-        aiRecommendation.next_steps_for_procurement.forEach((n: string) => writeLines(`• ${n}`, 14, 8));
-        y += 2;
-      }
-
-      // Disclaimer
-      if (y > 200) { doc.addPage(); y = 15; }
-      doc.setFont("helvetica", "italic");
-      doc.setFontSize(7);
-      doc.setTextColor(120, 120, 120);
-      const disclaimer = doc.splitTextToSize(aiRecommendation.disclaimer ?? "AI-generated analysis for reference only. Human review and approval required.", pageWidth - 28);
-      doc.text(disclaimer, 14, y);
-      y += disclaimer.length * 3 + 3;
+      doc.setFontSize(9);
+      doc.text(title, 14, y + 6);
       doc.setTextColor(0, 0, 0);
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
+      doc.setFontSize(8);
+      doc.text(wrapped, 14, y + 11);
+      y += boxH + 3;
+    };
+
+    // ===== AI Recommendation =====
+    if (aiVerdict) {
+      const lines: string[] = [];
+      if (aiVerdict.supplier) lines.push(`Recommended: ${aiVerdict.supplier}`);
+      lines.push(aiVerdict.headline);
+      if (aiVerdict.watchOuts.length > 0) {
+        lines.push("");
+        lines.push("Watch out:");
+        aiVerdict.watchOuts.forEach((w) => lines.push(`  - ${w}`));
+      }
+      renderBox("AI RECOMMENDATION", [120, 70, 20], [252, 246, 230], lines);
     }
 
-    // (Head's Decision already rendered at the top alongside AI Recommendation)
+    // ===== Procurement Head's Decision =====
+    if (headPickName) {
+      const approved = Boolean(sheet.approved_by && sheet.approved_at);
+      const lines: string[] = [`Supplier: ${headPickName}`];
+      if (sheet.reviewer_recommendation_reason) lines.push(`Reason: ${sheet.reviewer_recommendation_reason}`);
+      if (sheet.manual_review_by) {
+        lines.push(`Reviewed by ${usersById[sheet.manual_review_by]?.name ?? "—"} on ${formatDateTime(sheet.manual_review_at)}`);
+      }
+      if (sheet.approved_by) {
+        lines.push(`Approved by ${usersById[sheet.approved_by]?.name ?? "—"} on ${formatDateTime(sheet.approved_at)}`);
+      }
+      renderBox(
+        approved ? "APPROVED BY PROCUREMENT" : "PROCUREMENT HEAD'S DECISION",
+        approved ? [40, 110, 60] : [50, 80, 160],
+        approved ? [232, 245, 233] : [232, 240, 252],
+        lines,
+      );
+    }
+
+    // ===== Above-market justification =====
+    if (aboveMarketCount > 0 && justification) {
+      const lines: string[] = [
+        `${aboveMarketCount} item${aboveMarketCount === 1 ? "" : "s"} flagged above market.`,
+        `Reason: ${justification}`,
+      ];
+      if (sheet.above_market_justified_by) {
+        lines.push(`Justified by ${usersById[sheet.above_market_justified_by]?.name ?? "—"} on ${formatDateTime(sheet.above_market_justified_at)}`);
+      }
+      renderBox("ABOVE-MARKET JUSTIFICATION", [180, 90, 0], [253, 240, 215], lines);
+    }
+
+    // ===== Reviewer notes =====
+    if (sheet.manual_notes) {
+      renderBox("REVIEWER NOTES", [80, 80, 80], [245, 245, 245], [sheet.manual_notes]);
+    }
 
     // Footer
     const pageCount = (doc as any).internal.getNumberOfPages();
@@ -1755,6 +1574,7 @@ export default function ComparisonSheetPage() {
 
     doc.save(`Comparison_${rfq.rfq_number}_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
+
 
   const handleApprove = async () => {
     if (!sheet || !user) return;
