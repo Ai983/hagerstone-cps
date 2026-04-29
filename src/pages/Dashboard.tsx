@@ -97,14 +97,14 @@ export default function Dashboard() {
       setTotalSuppliers(supplierRes.count ?? 0);
 
       if (canViewPrices) {
-        const { data: poValueData } = await supabase.from("cps_purchase_orders").select("grand_total");
+        const { data: poValueData } = await supabase.from("cps_purchase_orders").select("grand_total").not("status", "in", '("cancelled","superseded")');
         const total = (poValueData ?? []).reduce((sum, r: any) => sum + (Number(r.grand_total) || 0), 0);
         setTotalPOValue(total);
 
         const { data: savingsData } = await supabase.from("cps_comparison_sheets").select("potential_savings");
         if (savingsData && savingsData.length > 0) {
           const vals = (savingsData as any[]).filter((r) => r.potential_savings != null).map((r) => Number(r.potential_savings));
-          setAvgSavings(vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
+          setAvgSavings(vals.length > 0 ? vals.reduce((a, b) => a + b, 0) : null);
         }
       }
 
@@ -315,8 +315,8 @@ export default function Dashboard() {
 
   const priceKpis = canViewPrices
     ? [
-        { title: t("Total PO Value", "Total PO Value"), value: formatCurrency(totalPOValue), icon: IndianRupee, color: "text-emerald-600", bg: "bg-emerald-50", note: t("Sum of all PO grand totals", "Saare POs ka total") },
-        { title: t("Avg Savings vs Benchmark", "Avg Savings"), value: avgSavings != null ? `${avgSavings.toFixed(1)}%` : "—", icon: TrendingDown, color: "text-rose-600", bg: "bg-rose-50", note: t("From comparison sheets", "Comparison sheets se") },
+        { title: t("Total PO Value", "Total PO Value"), value: formatCurrency(totalPOValue), icon: IndianRupee, color: "text-emerald-600", bg: "bg-emerald-50", note: t("Excl. cancelled / superseded", "Saare POs ka total") },
+        { title: t("Total Savings", "Total Savings"), value: avgSavings != null ? formatCurrency(avgSavings) : "—", icon: TrendingDown, color: "text-emerald-600", bg: "bg-emerald-50", note: t("Winner vs 2nd-cheapest, all sheets", "Comparison sheets se bachaya") },
       ]
     : [];
 

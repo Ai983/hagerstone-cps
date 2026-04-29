@@ -14,8 +14,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   IndianRupee, ShoppingCart, Users, Package, TrendingDown, TrendingUp,
   Truck, FileText, RefreshCw, Building2, AlertTriangle, CheckCircle2, BarChart3,
-  Download,
+  Download, FileDown,
 } from "lucide-react";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -33,10 +35,13 @@ type POMini = {
   created_at: string | null;
   delivery_date: string | null;
   pr_id: string | null;
+  rfq_id: string | null;
   payment_terms_type: string | null;
   payment_due_date: string | null;
   supplier_name_text: string | null;
 };
+
+type CompSheet = { rfq_id: string | null; potential_savings: number | null; reviewer_recommendation: string | null };
 
 type Supplier = { id: string; name: string; performance_score: number | null; status: string };
 type PR = { id: string; project_site: string | null; project_code: string | null; created_at: string };
@@ -111,6 +116,7 @@ export default function Analytics() {
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [periodFilter, setPeriodFilter] = useState<string>("all");
   const [benchmarkVariances, setBenchmarkVariances] = useState<number[]>([]);
+  const [compSheets, setCompSheets] = useState<CompSheet[]>([]);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -124,11 +130,11 @@ export default function Analytics() {
         { data: prLineData },
         { data: itemData },
       ] = await Promise.all([
-        supabase.from("cps_purchase_orders").select("id, po_number, supplier_id, project_code, status, grand_total, total_value, gst_amount, created_at, delivery_date, pr_id, payment_terms_type, payment_due_date, supplier_name_text"),
+        supabase.from("cps_purchase_orders").select("id, po_number, supplier_id, project_code, status, grand_total, total_value, gst_amount, created_at, delivery_date, pr_id, rfq_id, payment_terms_type, payment_due_date, supplier_name_text"),
         supabase.from("cps_suppliers").select("id, name, performance_score, status"),
         supabase.from("cps_purchase_requisitions").select("id, project_site, project_code, created_at"),
         supabase.from("cps_grns").select("id, po_id, status, created_at"),
-        supabase.from("cps_comparison_sheets").select("benchmark_variance_pct"),
+        supabase.from("cps_comparison_sheets").select("rfq_id, potential_savings, reviewer_recommendation, benchmark_variance_pct"),
         supabase.from("cps_pr_line_items").select("pr_id, item_id"),
         supabase.from("cps_items").select("id, category"),
       ]);
@@ -142,6 +148,7 @@ export default function Analytics() {
         .map((c: any) => Number(c.benchmark_variance_pct))
         .filter((v: number) => !Number.isNaN(v));
       setBenchmarkVariances(variances);
+      setCompSheets((compData ?? []) as CompSheet[]);
 
       // item category by pr_id
       const itemCatMap: Record<string, string> = {};
@@ -239,36 +246,86 @@ export default function Analytics() {
     };
   }, [filteredPos, grnByPoId, benchmarkVariances]);
 
+  // Savings lookup: rfq_id → { savings, winnerSupplierId }
+  const savingsByRfqId = useMemo(() => {
+    const m: Record<string, { savings: number; winnerSupplierId: string | null }> = {};
+    compSheets.forEach((c) => {
+      if (c.rfq_id && c.potential_savings != null) {
+        m[c.rfq_id] = { savings: Number(c.potential_savings), winnerSupplierId: c.reviewer_recommendation ?? null };
+      }
+    });
+    return m;
+  }, [compSheets]);
+
+  // Total savings: sum directly from all comparison sheets (same source as Dashboard).
+  // Not filtered through POs — some sheets have no PO yet (comparison done, PO pending).
+  // When a project/period filter is active, scope to sheets whose rfq_id has a matching PO.
+  const totalSavings = useMemo(() => {
+    const isFiltered = projectFilter !== "all" || periodFilter !== "all";
+    if (!isFiltered) {
+      return compSheets.reduce((s, c) => s + (Number(c.potential_savings) || 0), 0);
+    }
+    // Filtered: only count sheets linked to a PO that passes the current filters
+    const seen = new Set<string>();
+    let sum = 0;
+    filteredPos.forEach((p) => {
+      if (p.rfq_id && !seen.has(p.rfq_id) && savingsByRfqId[p.rfq_id]) {
+        sum += savingsByRfqId[p.rfq_id].savings;
+        seen.add(p.rfq_id);
+      }
+    });
+    return sum;
+  }, [compSheets, filteredPos, savingsByRfqId, projectFilter, periodFilter]);
+
   // Spend by Project
   const spendByProject = useMemo(() => {
-    const m: Record<string, { value: number; count: number }> = {};
+    const m: Record<string, { value: number; count: number; savings: number }> = {};
+    const seenRfq: Record<string, Set<string>> = {};
     filteredPos.forEach((p) => {
       const key = p.project_code ?? "No Project";
-      const rec = m[key] ?? { value: 0, count: 0 };
+      const rec = m[key] ?? { value: 0, count: 0, savings: 0 };
       rec.value += Number(p.grand_total) || 0;
       rec.count += 1;
+      if (p.rfq_id && savingsByRfqId[p.rfq_id]) {
+        if (!seenRfq[key]) seenRfq[key] = new Set();
+        if (!seenRfq[key].has(p.rfq_id)) {
+          rec.savings += savingsByRfqId[p.rfq_id].savings;
+          seenRfq[key].add(p.rfq_id);
+        }
+      }
       m[key] = rec;
     });
     return Object.entries(m)
       .map(([project, data]) => ({ project, ...data }))
       .sort((a, b) => b.value - a.value);
-  }, [filteredPos]);
+  }, [filteredPos, savingsByRfqId]);
 
   // Spend by Supplier (top 10)
   const spendBySupplier = useMemo(() => {
-    const m: Record<string, { value: number; count: number }> = {};
+    const m: Record<string, { value: number; count: number; savings: number }> = {};
+    const seenRfq: Record<string, Set<string>> = {};
     filteredPos.forEach((p) => {
       if (!p.supplier_id) return;
-      const rec = m[p.supplier_id] ?? { value: 0, count: 0 };
+      const rec = m[p.supplier_id] ?? { value: 0, count: 0, savings: 0 };
       rec.value += Number(p.grand_total) || 0;
       rec.count += 1;
+      if (p.rfq_id && savingsByRfqId[p.rfq_id]) {
+        const winnerId = savingsByRfqId[p.rfq_id].winnerSupplierId;
+        if (winnerId === p.supplier_id) {
+          if (!seenRfq[p.supplier_id]) seenRfq[p.supplier_id] = new Set();
+          if (!seenRfq[p.supplier_id].has(p.rfq_id)) {
+            rec.savings += savingsByRfqId[p.rfq_id].savings;
+            seenRfq[p.supplier_id].add(p.rfq_id);
+          }
+        }
+      }
       m[p.supplier_id] = rec;
     });
     return Object.entries(m)
       .map(([id, data]) => ({ id, name: supplierMap[id]?.name ?? "—", ...data }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 10);
-  }, [filteredPos, supplierMap]);
+  }, [filteredPos, supplierMap, savingsByRfqId]);
 
   // Spend by Category (approximate — via PR line items)
   const spendByCategory = useMemo(() => {
@@ -292,21 +349,29 @@ export default function Analytics() {
 
   // Monthly trend
   const monthlyTrend = useMemo(() => {
-    const m: Record<string, { value: number; count: number; sortKey: number }> = {};
+    const m: Record<string, { value: number; count: number; savings: number; sortKey: number }> = {};
+    const seenRfq: Record<string, Set<string>> = {};
     filteredPos.forEach((p) => {
       const key = monthKey(p.created_at);
       const d = p.created_at ? new Date(p.created_at) : new Date();
       const sortKey = d.getFullYear() * 12 + d.getMonth();
-      const rec = m[key] ?? { value: 0, count: 0, sortKey };
+      const rec = m[key] ?? { value: 0, count: 0, savings: 0, sortKey };
       rec.value += Number(p.grand_total) || 0;
       rec.count += 1;
+      if (p.rfq_id && savingsByRfqId[p.rfq_id]) {
+        if (!seenRfq[key]) seenRfq[key] = new Set();
+        if (!seenRfq[key].has(p.rfq_id)) {
+          rec.savings += savingsByRfqId[p.rfq_id].savings;
+          seenRfq[key].add(p.rfq_id);
+        }
+      }
       m[key] = rec;
     });
     return Object.entries(m)
       .map(([month, data]) => ({ month, ...data }))
       .sort((a, b) => a.sortKey - b.sortKey)
       .slice(-12);
-  }, [filteredPos]);
+  }, [filteredPos, savingsByRfqId]);
 
   // Status distribution
   const statusDist = useMemo(() => {
@@ -317,12 +382,23 @@ export default function Analytics() {
 
   // Supplier performance leaderboard
   const supplierLeaderboard = useMemo(() => {
-    const m: Record<string, { wins: number; totalValue: number; onTime: number; late: number }> = {};
+    const m: Record<string, { wins: number; totalValue: number; onTime: number; late: number; savings: number }> = {};
+    const seenRfq: Record<string, Set<string>> = {};
     filteredPos.forEach((p) => {
       if (!p.supplier_id) return;
-      const rec = m[p.supplier_id] ?? { wins: 0, totalValue: 0, onTime: 0, late: 0 };
+      const rec = m[p.supplier_id] ?? { wins: 0, totalValue: 0, onTime: 0, late: 0, savings: 0 };
       rec.wins += 1;
       rec.totalValue += Number(p.grand_total) || 0;
+      if (p.rfq_id && savingsByRfqId[p.rfq_id]) {
+        const winnerId = savingsByRfqId[p.rfq_id].winnerSupplierId;
+        if (winnerId === p.supplier_id) {
+          if (!seenRfq[p.supplier_id]) seenRfq[p.supplier_id] = new Set();
+          if (!seenRfq[p.supplier_id].has(p.rfq_id)) {
+            rec.savings += savingsByRfqId[p.rfq_id].savings;
+            seenRfq[p.supplier_id].add(p.rfq_id);
+          }
+        }
+      }
       if (["delivered", "closed"].includes(p.status)) {
         const grn = grnByPoId[p.id];
         if (grn && grn.created_at && p.delivery_date) {
@@ -342,7 +418,7 @@ export default function Analytics() {
       }))
       .sort((a, b) => b.totalValue - a.totalValue)
       .slice(0, 15);
-  }, [filteredPos, supplierMap, grnByPoId]);
+  }, [filteredPos, supplierMap, grnByPoId, savingsByRfqId]);
 
   // PR-to-PO conversion insight
   const prInsight = useMemo(() => {
@@ -378,6 +454,7 @@ export default function Analytics() {
     rows.push([]);
     rows.push(["KPIs"]);
     rows.push(["Total Spend", fmtCurrency(kpis.total)]);
+    rows.push(["Total Savings", fmtCurrency(totalSavings)]);
     rows.push(["Total POs", String(kpis.count)]);
     rows.push(["Avg PO Value", fmtCurrency(kpis.avgValue)]);
     rows.push(["Active POs", String(kpis.active)]);
@@ -388,16 +465,20 @@ export default function Analytics() {
     rows.push(["Unique Projects", String(kpis.uniqueProjects)]);
     rows.push([]);
     rows.push(["Spend by Project"]);
-    rows.push(["Project", "POs", "Value"]);
-    spendByProject.forEach((p) => rows.push([p.project, String(p.count), fmtCurrency(p.value)]));
+    rows.push(["Project", "POs", "Spend", "Savings"]);
+    spendByProject.forEach((p) => rows.push([p.project, String(p.count), fmtCurrency(p.value), p.savings > 0 ? fmtCurrency(p.savings) : "—"]));
     rows.push([]);
     rows.push(["Top Suppliers"]);
-    rows.push(["Supplier", "POs", "Value"]);
-    spendBySupplier.forEach((s) => rows.push([s.name, String(s.count), fmtCurrency(s.value)]));
+    rows.push(["Supplier", "POs", "Spend", "Savings"]);
+    spendBySupplier.forEach((s) => rows.push([s.name, String(s.count), fmtCurrency(s.value), s.savings > 0 ? fmtCurrency(s.savings) : "—"]));
     rows.push([]);
     rows.push(["Spend by Category"]);
     rows.push(["Category", "POs", "Value"]);
     spendByCategory.forEach((c) => rows.push([c.category, String(c.count), fmtCurrency(c.value)]));
+    rows.push([]);
+    rows.push(["Monthly Trend"]);
+    rows.push(["Month", "POs", "Spend", "Savings"]);
+    monthlyTrend.forEach((m) => rows.push([m.month, String(m.count), fmtCurrency(m.value), m.savings > 0 ? fmtCurrency(m.savings) : "—"]));
 
     const csv = rows.map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\r\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
@@ -407,6 +488,186 @@ export default function Analytics() {
     a.download = `Analytics_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const exportPDF = () => {
+    // jsPDF Helvetica doesn't support ₹ (U+20B9) — use "Rs." for all PDF values
+    const pdfCurrency = (n: number | null | undefined, short = false): string => {
+      if (n == null || !canViewPrices) return "***";
+      const v = Number(n);
+      if (Number.isNaN(v)) return "—";
+      if (short) {
+        if (v >= 10_000_000) return "Rs. " + (v / 10_000_000).toFixed(2) + " Cr";
+        if (v >= 100_000)    return "Rs. " + (v / 100_000).toFixed(2) + " L";
+        if (v >= 1_000)      return "Rs. " + (v / 1_000).toFixed(1) + " K";
+      }
+      return "Rs. " + v.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+    };
+
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const W = doc.internal.pageSize.getWidth();
+    const brown = [101, 56, 35] as [number, number, number];
+    const gold  = [212, 168, 85] as [number, number, number];
+    const green = [22, 163, 74] as [number, number, number];
+
+    const addHeader = (title: string) => {
+      doc.setFillColor(...brown);
+      doc.rect(0, 0, W, 18, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.text("HAGERSTONE INTERNATIONAL — ANALYTICS REPORT", 14, 7);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text(title, 14, 13);
+      doc.text(`Generated: ${new Date().toLocaleString("en-IN")}`, W - 14, 13, { align: "right" });
+      doc.setTextColor(0, 0, 0);
+    };
+
+    const sectionTitle = (y: number, text: string): number => {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(...brown);
+      doc.text(text, 14, y);
+      doc.setDrawColor(...gold);
+      doc.setLineWidth(0.4);
+      doc.line(14, y + 1.5, W - 14, y + 1.5);
+      doc.setTextColor(0, 0, 0);
+      return y + 7;
+    };
+
+    // ── Page 1: KPIs ──────────────────────────────────────────────────────────
+    addHeader(`Project: ${projectFilter === "all" ? "All" : projectFilter}  |  Period: ${periodFilter === "all" ? "All Time" : periodFilter}`);
+    let y = 26;
+    y = sectionTitle(y, "Key Performance Indicators");
+
+    const kpiRows = [
+      ["Total Spend", pdfCurrency(kpis.total), "Total Savings", pdfCurrency(totalSavings)],
+      ["Total POs", String(kpis.count), "Avg PO Value", pdfCurrency(kpis.avgValue)],
+      ["Active POs", String(kpis.active), "Delivered POs", String(kpis.delivered)],
+      ["On-Time Delivery", kpis.onTimeRate != null ? `${kpis.onTimeRate.toFixed(1)}%  (${kpis.onTime} on-time / ${kpis.late} late)` : "—", "Benchmark Variance", kpis.avgVariance != null ? `${kpis.avgVariance > 0 ? "+" : ""}${kpis.avgVariance.toFixed(1)}%` : "—"],
+      ["Unique Suppliers", String(kpis.uniqueSuppliers), "Projects", String(kpis.uniqueProjects)],
+      ["PR -> PO Rate", `${prInsight.rate.toFixed(0)}%  (${prInsight.converted} of ${prInsight.total} PRs)`, "", ""],
+    ];
+    autoTable(doc, {
+      startY: y,
+      body: kpiRows,
+      theme: "grid",
+      styles: { fontSize: 9, cellPadding: 3 },
+      columnStyles: {
+        0: { fontStyle: "bold", fillColor: [245, 240, 235], textColor: brown, cellWidth: 50 },
+        1: { cellWidth: 70 },
+        2: { fontStyle: "bold", fillColor: [245, 240, 235], textColor: brown, cellWidth: 50 },
+        3: { cellWidth: 70 },
+      },
+    });
+
+    // ── Page 2: By Project ────────────────────────────────────────────────────
+    doc.addPage();
+    addHeader("Spend & Savings by Project");
+    y = 26;
+    y = sectionTitle(y, "Procurement by Project");
+    autoTable(doc, {
+      startY: y,
+      head: [["Project", "POs", "Total Spend", "Savings", "Avg PO", "% of Total"]],
+      body: spendByProject.map((p) => [
+        p.project,
+        p.count,
+        pdfCurrency(p.value),
+        p.savings > 0 ? pdfCurrency(p.savings) : "—",
+        pdfCurrency(p.value / p.count),
+        kpis.total > 0 ? `${((p.value / kpis.total) * 100).toFixed(1)}%` : "—",
+      ]),
+      foot: [["TOTAL", kpis.count, pdfCurrency(kpis.total), pdfCurrency(totalSavings), "", "100%"]],
+      theme: "striped",
+      headStyles: { fillColor: brown, textColor: [255, 255, 255], fontSize: 9, fontStyle: "bold" },
+      footStyles: { fillColor: gold, textColor: [60, 30, 10], fontStyle: "bold", fontSize: 9 },
+      styles: { fontSize: 9, cellPadding: 3 },
+      columnStyles: {
+        2: { halign: "right" },
+        3: { halign: "right", textColor: green },
+        4: { halign: "right" },
+        5: { halign: "right" },
+      },
+    });
+
+    // ── Page 3: By Supplier ───────────────────────────────────────────────────
+    doc.addPage();
+    addHeader("Top Suppliers by Spend");
+    y = 26;
+    y = sectionTitle(y, "Top 10 Suppliers by Spend");
+    autoTable(doc, {
+      startY: y,
+      head: [["Supplier", "POs", "Total Spend", "Savings", "On-Time", "Score"]],
+      body: supplierLeaderboard.map((s) => [
+        s.name,
+        s.wins,
+        pdfCurrency(s.totalValue),
+        s.savings > 0 ? pdfCurrency(s.savings) : "—",
+        s.onTimeRate != null ? `${s.onTimeRate.toFixed(0)}%` : "—",
+        s.score != null ? Number(s.score).toFixed(1) : "—",
+      ]),
+      theme: "striped",
+      headStyles: { fillColor: brown, textColor: [255, 255, 255], fontSize: 9, fontStyle: "bold" },
+      styles: { fontSize: 9, cellPadding: 3 },
+      columnStyles: {
+        2: { halign: "right" },
+        3: { halign: "right", textColor: green },
+        4: { halign: "right" },
+        5: { halign: "right" },
+      },
+    });
+
+    // ── Page 4: By Category + Monthly Trend ──────────────────────────────────
+    doc.addPage();
+    addHeader("Spend by Category & Monthly Trend");
+    y = 26;
+    y = sectionTitle(y, "Spend by Material Category");
+    autoTable(doc, {
+      startY: y,
+      head: [["Category", "POs", "Spend", "% of Total"]],
+      body: spendByCategory.map((c) => [
+        c.category,
+        c.count,
+        pdfCurrency(c.value),
+        kpis.total > 0 ? `${((c.value / kpis.total) * 100).toFixed(1)}%` : "—",
+      ]),
+      theme: "striped",
+      headStyles: { fillColor: brown, textColor: [255, 255, 255], fontSize: 9, fontStyle: "bold" },
+      styles: { fontSize: 9, cellPadding: 3 },
+      columnStyles: { 2: { halign: "right" }, 3: { halign: "right" } },
+    });
+
+    const afterCat = (doc as any).lastAutoTable.finalY + 12;
+    sectionTitle(afterCat, "Monthly Spend & Savings Trend (Last 12 Months)");
+    autoTable(doc, {
+      startY: afterCat + 7,
+      head: [["Month", "POs", "Spend", "Savings"]],
+      body: monthlyTrend.map((m) => [
+        m.month,
+        m.count,
+        pdfCurrency(m.value),
+        m.savings > 0 ? pdfCurrency(m.savings) : "—",
+      ]),
+      theme: "striped",
+      headStyles: { fillColor: brown, textColor: [255, 255, 255], fontSize: 9, fontStyle: "bold" },
+      styles: { fontSize: 9, cellPadding: 3 },
+      columnStyles: {
+        2: { halign: "right" },
+        3: { halign: "right", textColor: green },
+      },
+    });
+
+    // ── Footer on all pages ───────────────────────────────────────────────────
+    const pageCount = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text(`Page ${i} of ${pageCount}  |  Hagerstone International (P) Ltd  |  Confidential`, W / 2, doc.internal.pageSize.getHeight() - 6, { align: "center" });
+    }
+
+    doc.save(`Analytics_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
   if (!user) return null;
@@ -426,6 +687,9 @@ export default function Analytics() {
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={exportCSV} disabled={loading}>
             <Download className="h-3.5 w-3.5 mr-1.5" /> Export CSV
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportPDF} disabled={loading}>
+            <FileDown className="h-3.5 w-3.5 mr-1.5" /> Export PDF
           </Button>
           <Button variant="outline" size="sm" onClick={fetchAll} disabled={loading}>
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${loading ? "animate-spin" : ""}`} /> Refresh
@@ -466,6 +730,19 @@ export default function Analytics() {
           <CardContent>
             <div className="text-2xl font-bold">{loading ? <Skeleton className="h-7 w-24" /> : currencyLabel(kpis.total)}</div>
             <p className="text-xs text-muted-foreground mt-1">Across {kpis.count} POs</p>
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-sm">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-xs font-medium text-muted-foreground">Total Savings</CardTitle>
+            <div className="h-8 w-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+              <TrendingDown className="h-4 w-4 text-emerald-600" />
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-emerald-700">{loading ? <Skeleton className="h-7 w-24" /> : (totalSavings > 0 ? currencyLabel(totalSavings) : "—")}</div>
+            <p className="text-xs text-muted-foreground mt-1">Winner vs 2nd-cheapest quote</p>
           </CardContent>
         </Card>
 
@@ -599,7 +876,7 @@ export default function Analytics() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Procurement by Project</CardTitle>
-              <p className="text-xs text-muted-foreground">Spend across all projects — click to filter on Purchase Orders page</p>
+              <p className="text-xs text-muted-foreground">Spend and savings across all projects</p>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -607,16 +884,29 @@ export default function Analytics() {
               ) : spendByProject.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">No data</p>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-3">
                   {spendByProject.map((p) => (
-                    <HBar
-                      key={p.project}
-                      label={p.project}
-                      value={p.value}
-                      max={maxProjectValue}
-                      valueLabel={`${canViewPrices ? fmtCurrency(p.value, true) : "***"} · ${p.count} PO`}
-                      color="bg-indigo-500"
-                    />
+                    <div key={p.project}>
+                      <HBar
+                        label={p.project}
+                        value={p.value}
+                        max={maxProjectValue}
+                        valueLabel={`${canViewPrices ? fmtCurrency(p.value, true) : "***"} · ${p.count} PO`}
+                        color="bg-indigo-500"
+                      />
+                      {p.savings > 0 && canViewPrices && (
+                        <div className="flex items-center gap-3 -mt-0.5 ml-0">
+                          <div className="w-40" />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <TrendingDown className="h-3 w-3 text-emerald-600" />
+                              <span className="text-xs text-emerald-700 font-medium">Saved {fmtCurrency(p.savings, true)}</span>
+                              <span className="text-xs text-muted-foreground">vs 2nd-cheapest</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               )}
@@ -629,6 +919,7 @@ export default function Analytics() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Top 10 Suppliers by Spend</CardTitle>
+              <p className="text-xs text-muted-foreground">Savings shown only for the winning supplier on each RFQ</p>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -636,16 +927,27 @@ export default function Analytics() {
               ) : spendBySupplier.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">No data</p>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-3">
                   {spendBySupplier.map((s) => (
-                    <HBar
-                      key={s.id}
-                      label={s.name}
-                      value={s.value}
-                      max={maxSupplierValue}
-                      valueLabel={`${canViewPrices ? fmtCurrency(s.value, true) : "***"} · ${s.count} PO`}
-                      color="bg-emerald-500"
-                    />
+                    <div key={s.id}>
+                      <HBar
+                        label={s.name}
+                        value={s.value}
+                        max={maxSupplierValue}
+                        valueLabel={`${canViewPrices ? fmtCurrency(s.value, true) : "***"} · ${s.count} PO`}
+                        color="bg-emerald-500"
+                      />
+                      {s.savings > 0 && canViewPrices && (
+                        <div className="flex items-center gap-3 -mt-0.5">
+                          <div className="w-40" />
+                          <div className="flex items-center gap-1.5">
+                            <TrendingDown className="h-3 w-3 text-emerald-600" />
+                            <span className="text-xs text-emerald-700 font-medium">Saved {fmtCurrency(s.savings, true)}</span>
+                            <span className="text-xs text-muted-foreground">vs 2nd-cheapest</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               )}
@@ -726,7 +1028,7 @@ export default function Analytics() {
         <TabsContent value="trend">
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Monthly Spend Trend (Last 12 Months)</CardTitle>
+              <CardTitle className="text-base">Monthly Spend & Savings (Last 12 Months)</CardTitle>
             </CardHeader>
             <CardContent>
               {loading ? (
@@ -734,16 +1036,26 @@ export default function Analytics() {
               ) : monthlyTrend.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">No data</p>
               ) : (
-                <div className="space-y-1">
+                <div className="space-y-3">
                   {monthlyTrend.map((m) => (
-                    <HBar
-                      key={m.month}
-                      label={m.month}
-                      value={m.value}
-                      max={maxMonthValue}
-                      valueLabel={`${canViewPrices ? fmtCurrency(m.value, true) : "***"} · ${m.count} PO`}
-                      color="bg-sky-500"
-                    />
+                    <div key={m.month}>
+                      <HBar
+                        label={m.month}
+                        value={m.value}
+                        max={maxMonthValue}
+                        valueLabel={`${canViewPrices ? fmtCurrency(m.value, true) : "***"} · ${m.count} PO`}
+                        color="bg-sky-500"
+                      />
+                      {m.savings > 0 && canViewPrices && (
+                        <HBar
+                          label=""
+                          value={m.savings}
+                          max={maxMonthValue}
+                          valueLabel={`Saved ${fmtCurrency(m.savings, true)}`}
+                          color="bg-emerald-400"
+                        />
+                      )}
+                    </div>
                   ))}
                 </div>
               )}
@@ -913,7 +1225,8 @@ export default function Analytics() {
                 <TableRow>
                   <TableHead>Project</TableHead>
                   <TableHead className="text-right">PO Count</TableHead>
-                  <TableHead className="text-right">Total Value</TableHead>
+                  <TableHead className="text-right">Total Spend</TableHead>
+                  <TableHead className="text-right">Savings</TableHead>
                   <TableHead className="text-right">Avg PO</TableHead>
                   <TableHead className="text-right">% of Total</TableHead>
                 </TableRow>
@@ -924,6 +1237,9 @@ export default function Analytics() {
                     <TableCell className="font-medium">{p.project}</TableCell>
                     <TableCell className="text-right">{p.count}</TableCell>
                     <TableCell className="text-right">{currencyLabel(p.value)}</TableCell>
+                    <TableCell className="text-right text-emerald-700 font-medium">
+                      {p.savings > 0 && canViewPrices ? fmtCurrency(p.savings) : "—"}
+                    </TableCell>
                     <TableCell className="text-right">{currencyLabel(p.value / p.count)}</TableCell>
                     <TableCell className="text-right text-muted-foreground">
                       {kpis.total > 0 ? `${((p.value / kpis.total) * 100).toFixed(1)}%` : "—"}
@@ -932,7 +1248,7 @@ export default function Analytics() {
                 ))}
                 {spendByProject.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground py-6">No data</TableCell>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-6">No data</TableCell>
                   </TableRow>
                 )}
               </TableBody>

@@ -1071,6 +1071,22 @@ export default function ComparisonSheetPage() {
               above_market_justified_at: now,
             }
           : { above_market_justification: null, above_market_justified_by: null, above_market_justified_at: null };
+
+        // Savings = rupee difference between 2nd cheapest and cheapest supplier
+        // e.g. Winner ₹1,72,588 · 2nd ₹1,79,928 → savings = ₹7,340
+        let savingsAmount: number | null = null;
+        const exportData = buildExportData();
+        if (exportData) {
+          const validTotals = exportData.supplierTotals
+            .map((t) => t.landedTotal)
+            .filter((v) => v > 0)
+            .sort((a, b) => a - b);
+          if (validTotals.length >= 2) {
+            const [lowest, second] = validTotals;
+            savingsAmount = Math.round(second - lowest);
+          }
+        }
+
         const { error } = await supabase.from("cps_comparison_sheets").update({
           manual_notes: reviewNotes.trim() || null,
           line_item_overrides: overrides,
@@ -1079,6 +1095,7 @@ export default function ComparisonSheetPage() {
           manual_review_status: "reviewed",
           manual_review_by: user.id,
           manual_review_at: now,
+          ...(savingsAmount !== null ? { potential_savings: savingsAmount } : {}),
           ...justificationPayload,
           ...(aiRecommendation ? { ai_recommendation: aiRecommendation } : {}),
         }).eq("id", sheet.id);
