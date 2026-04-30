@@ -54,6 +54,9 @@ export interface PoPdfData {
   /* optional logo — pass base64 string (without data-uri prefix) */
   logoBase64?: string | null;
 
+  /* Hagerstone GSTIN to print on this PO (stored per-PO; defaults to UP) */
+  hagerstoneGstin?: string | null;
+
   /* amendment fields — version > 1 triggers "AMENDMENT NO. X" banner */
   version?: number | null;
   revisionReason?: string | null;
@@ -196,9 +199,12 @@ export function buildPoPdf(data: PoPdfData): Blob {
   const poUpto     = addDays(data.deliveryDate, 5);
   const validUpto  = addDays(data.deliveryDate, 13);
 
-  /* Resolve which Hagerstone GSTIN to use + whether this is intra-state (CGST+SGST) or inter-state (IGST) */
-  const { gstin: hagerstoneGstin, isIntraState } = resolveHagerstoneGstin(data.supplierGstin, data.supplierState);
-  const hagerstoneGstLine = "GST NO: " + hagerstoneGstin;
+  /* Use the GSTIN stored on the PO record; fall back to UP GSTIN */
+  const resolvedHagerstoneGstin = data.hagerstoneGstin ?? PRIMARY_HAGERSTONE_GSTIN;
+  const supplierStateCode = data.supplierGstin?.slice(0, 2) ?? null;
+  const hagerstoneStateCode = resolvedHagerstoneGstin.slice(0, 2);
+  const isIntraState = !!supplierStateCode && supplierStateCode === hagerstoneStateCode;
+  const hagerstoneGstLine = "GST NO: " + resolvedHagerstoneGstin;
 
   let y = ML;
 

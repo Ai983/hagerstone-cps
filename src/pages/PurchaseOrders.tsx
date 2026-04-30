@@ -93,6 +93,7 @@ type PoRow = {
   revision_reason?: string | null;
   cancel_reason?: string | null;
   parent_po_id?: string | null;
+  hagerstone_gstin?: string | null;
 };
 
 type SupplierRow = {
@@ -342,6 +343,8 @@ export default function PurchaseOrders() {
   const [editBankName, setEditBankName] = useState("");
   const [editBankIfsc, setEditBankIfsc] = useState("");
   const [editBankAccountNumber, setEditBankAccountNumber] = useState("");
+  const [createHagerstoneGstin, setCreateHagerstoneGstin] = useState("09AAECH3768B1ZM");
+  const [editHagerstoneGstin, setEditHagerstoneGstin] = useState("09AAECH3768B1ZM");
   // Supplier details (edits persist to cps_suppliers so they're reusable)
   const [editSupplierName, setEditSupplierName] = useState("");
   const [editSupplierGstin, setEditSupplierGstin] = useState("");
@@ -409,7 +412,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
         )
         .order("created_at", { ascending: false });
 
@@ -497,6 +500,7 @@ export default function PurchaseOrders() {
     setRejectReason("");
     setIsSingleVendor(false);
     setSingleVendorReason("");
+    setCreateHagerstoneGstin("09AAECH3768B1ZM");
   }, [createOpen]);
 
   const computeLineTotals = (li: Omit<CreateLine, "gst_amount" | "total_value">): Omit<CreateLine, "gst_amount" | "total_value"> & { gst_amount: number; total_value: number } => {
@@ -814,6 +818,7 @@ export default function PurchaseOrders() {
             bank_name: createBankName.trim() || null,
             bank_ifsc: createBankIfsc.trim().toUpperCase() || null,
             bank_account_number: createBankAccountNumber.trim() || null,
+            hagerstone_gstin: createHagerstoneGstin,
             created_by: user.id,
           },
         ])
@@ -935,6 +940,7 @@ export default function PurchaseOrders() {
             gstAmount: _gstTotal,
             grandTotal: _grandTotal,
             logoBase64: _logoBase64,
+            hagerstoneGstin: createHagerstoneGstin,
             bankAccountHolderName: createBankHolderName.trim() || null,
             bankName: createBankName.trim() || null,
             bankIfsc: createBankIfsc.trim().toUpperCase() || null,
@@ -1033,7 +1039,7 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
         )
         .eq("id", poId)
         .single();
@@ -1387,6 +1393,7 @@ export default function PurchaseOrders() {
             supplier_name_text: viewPo.supplier_name_text,
             site_supervisor_id: viewPo.site_supervisor_id,
             source: viewPo.source ?? "workflow",
+            hagerstone_gstin: viewPo.hagerstone_gstin ?? "09AAECH3768B1ZM",
             created_by: user.id,
             parent_po_id: viewPo.id,
             revision_reason: trimmedReason,
@@ -1483,6 +1490,7 @@ export default function PurchaseOrders() {
         gstAmount,
         grandTotal,
         logoBase64,
+        hagerstoneGstin: viewPo.hagerstone_gstin ?? "09AAECH3768B1ZM",
         bankAccountHolderName: viewPo.bank_account_holder_name,
         bankName: viewPo.bank_name,
         bankIfsc: viewPo.bank_ifsc,
@@ -1533,6 +1541,7 @@ export default function PurchaseOrders() {
     setEditSupplierAddress(viewSupplier?.address_text ?? "");
     setEditSupplierPhone(viewSupplier?.phone ?? "");
     setEditSupplierEmail(viewSupplier?.email ?? "");
+    setEditHagerstoneGstin(viewPo.hagerstone_gstin ?? "09AAECH3768B1ZM");
     setEditMode(true);
   };
 
@@ -1747,6 +1756,7 @@ export default function PurchaseOrders() {
         bank_name: editBankName.trim() || null,
         bank_ifsc: editBankIfsc.trim().toUpperCase() || null,
         bank_account_number: editBankAccountNumber.trim() || null,
+        hagerstone_gstin: editHagerstoneGstin,
       }).eq("id", viewPo.id);
       if (poErr) throw poErr;
 
@@ -2505,6 +2515,19 @@ export default function PurchaseOrders() {
                           <div className="space-y-1 sm:col-span-2">
                             <Label className="text-xs">Address</Label>
                             <Textarea rows={2} value={editSupplierAddress} onChange={(e) => setEditSupplierAddress(e.target.value)} placeholder="Supplier address" />
+                          </div>
+                          <div className="space-y-1 sm:col-span-2 border-t border-border pt-2">
+                            <Label className="text-xs font-semibold">Hagerstone GSTIN (Our Company)</Label>
+                            <Select value={editHagerstoneGstin} onValueChange={setEditHagerstoneGstin}>
+                              <SelectTrigger className="h-9 font-mono text-xs">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="09AAECH3768B1ZM">09AAECH3768B1ZM — Uttar Pradesh (Primary)</SelectItem>
+                                <SelectItem value="07AAECH3768B1ZQ">07AAECH3768B1ZQ — Delhi</SelectItem>
+                                <SelectItem value="06AAECH3768B1ZS">06AAECH3768B1ZS — Haryana</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
                         </div>
                       ) : (
