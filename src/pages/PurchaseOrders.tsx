@@ -788,13 +788,15 @@ export default function PurchaseOrders() {
       const poNumber = typeof poNumberData === "string" ? poNumberData : (poNumberData as any)?.po_number ?? (poNumberData as any)?.result ?? null;
       if (!poNumber) throw new Error("Failed to generate PO number");
 
+      const linkedPrId: string | null = (eligibleRfqsOptions.find((r) => r.id === selectedRfqId) as any)?.pr_id ?? null;
+
       const { data: insertedPo, error: insPoErr } = await supabase
         .from("cps_purchase_orders")
         .insert([
           {
             po_number: String(poNumber),
             rfq_id: selectedRfqId,
-            pr_id: (eligibleRfqsOptions.find((r) => r.id === selectedRfqId) as any)?.pr_id ?? null,
+            pr_id: linkedPrId,
             supplier_id: createSupplierId,
             comparison_sheet_id: comparisonSheetId || null,
             status: "pending_approval",
@@ -839,6 +841,15 @@ export default function PurchaseOrders() {
 
       const { error: insLinesErr } = await supabase.from("cps_po_line_items").insert(poLinesPayload);
       if (insLinesErr) throw insLinesErr;
+
+      // Update linked PR status to po_issued
+      if (linkedPrId) {
+        await supabase
+          .from("cps_purchase_requisitions")
+          .update({ status: "po_issued" })
+          .eq("id", linkedPrId)
+          .in("status", ["rfq_created", "validated"]);
+      }
 
       // Audit log for single-vendor justification
       if (isSingleVendor && singleVendorReason.trim()) {
@@ -1807,10 +1818,12 @@ export default function PurchaseOrders() {
   const stats = useMemo(() => {
     const liveRows = rows.filter((r) => r.status !== "superseded" && r.status !== "cancelled");
     const total = liveRows.length;
+    const legacy = liveRows.filter((r) => r.source === "legacy").length;
+    const workflow = total - legacy;
     const pending = liveRows.filter((r) => r.status === "pending_approval").length;
     const active = liveRows.filter((r) => ["approved", "sent", "acknowledged", "dispatched", "delivered"].includes(String(r.status))).length;
     const totalValue = liveRows.reduce((acc, r) => acc + Number(r.grand_total ?? 0), 0);
-    return { total, pending, active, totalValue };
+    return { total, legacy, workflow, pending, active, totalValue };
   }, [rows]);
 
   return (
@@ -1834,41 +1847,49 @@ export default function PurchaseOrders() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-3">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total POs</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.total}</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Approval Pending</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.pending}</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Approve / Active</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.active}</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Amount</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-foreground">{loading ? "—" : formatCurrency(stats.totalValue, canViewPrices)}</div>
-            </CardContent>
-          </Card>
-        </div>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Digital Flow POs</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.workflow}</div>
+            <p className="text-xs text-muted-foreground mt-1">PR → RFQ → Comparison → PO</p>
+          </CardContent>
+        </Card>
+        <Card className="border-amber-200 bg-amber-50/40">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-amber-700">Legacy POs</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-amber-800">{loading ? "—" : stats.legacy}</div>
+            <p className="text-xs text-amber-600 mt-1">Uploaded manually (Purana PO)</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Approval Pending</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.pending}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Approved / Active</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-foreground">{loading ? "—" : stats.active}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total Amount</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-foreground">{loading ? "—" : formatCurrency(stats.totalValue, canViewPrices)}</div>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

@@ -165,21 +165,8 @@ const HAGERSTONE_GSTIN_BY_STATE_CODE: Record<string, string> = {
 const PRIMARY_HAGERSTONE_GSTIN = "09AAECH3768B1ZM"; // UP — fallback for inter-state
 
 /** Decide which Hagerstone GSTIN applies and whether tax is intra-state (CGST+SGST) or inter-state (IGST). */
-function resolveHagerstoneGstin(vendorGstin?: string | null, vendorState?: string | null): { gstin: string; isIntraState: boolean } {
-  // Primary: vendor's GSTIN first 2 digits = their state code (authoritative)
-  if (vendorGstin && vendorGstin.trim().length >= 2) {
-    const stateCode = vendorGstin.trim().substring(0, 2);
-    const match = HAGERSTONE_GSTIN_BY_STATE_CODE[stateCode];
-    if (match) return { gstin: match, isIntraState: true };
-  }
-  // Fallback: match vendor's state name (if GSTIN missing/invalid)
-  if (vendorState) {
-    const s = vendorState.trim().toUpperCase();
-    if (s === "UTTAR PRADESH" || s === "UP") return { gstin: HAGERSTONE_GSTIN_BY_STATE_CODE["09"], isIntraState: true };
-    if (s === "DELHI" || s === "NEW DELHI" || s === "DELHI NCR") return { gstin: HAGERSTONE_GSTIN_BY_STATE_CODE["07"], isIntraState: true };
-    if (s === "HARYANA") return { gstin: HAGERSTONE_GSTIN_BY_STATE_CODE["06"], isIntraState: true };
-  }
-  // Inter-state transaction — use primary GSTIN, IGST applies
+function resolveHagerstoneGstin(_vendorGstin?: string | null, _vendorState?: string | null): { gstin: string; isIntraState: boolean } {
+  // Using UP GSTIN for all sites until per-state billing is enabled
   return { gstin: PRIMARY_HAGERSTONE_GSTIN, isIntraState: false };
 }
 

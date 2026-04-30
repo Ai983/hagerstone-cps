@@ -949,9 +949,11 @@ export default function PurchaseRequisitions() {
     const q = debouncedSearch.trim().toLowerCase();
     const list = prList.filter((p) => {
       const matchesStatus =
-        statusFilter === "all" ? true :
-        statusFilter === "review" ? (p.status === "pending" || p.status === "pending_design" || p.status === "duplicate_flagged") :
-        p.status === statusFilter;
+        statusFilter === "all"         ? true :
+        statusFilter === "review"      ? ["pending","pending_design","duplicate_flagged"].includes(p.status) :
+        statusFilter === "rfq_created" ? ["rfq_created","validated"].includes(p.status) :
+        statusFilter === "po_issued"   ? ["po_issued","delivered"].includes(p.status) :
+        statusFilter === "cancelled"   ? p.status === "cancelled" : true;
       const matchesPriority = priorityFilter === "all" ? true : (p.priority ?? "normal") === priorityFilter;
       const matchesQ =
         !q ||
@@ -1564,14 +1566,12 @@ export default function PurchaseRequisitions() {
 
   // Status counts for KPI cards and tabs
   const statusCounts = useMemo(() => {
-    const c: Record<string, number> = {
-      all: prList.length,
-      review: 0, validated: 0, duplicate_flagged: 0,
-      rfq_created: 0, po_issued: 0, delivered: 0, cancelled: 0,
-    };
+    const c: Record<string, number> = { all: prList.length, review: 0, rfq_created: 0, po_issued: 0, cancelled: 0 };
     prList.forEach((p) => {
-      if (p.status === "pending" || p.status === "pending_design" || p.status === "duplicate_flagged") c.review += 1;
-      if (c[p.status] !== undefined) c[p.status] += 1;
+      if (["pending","pending_design","duplicate_flagged"].includes(p.status)) c.review += 1;
+      if (["rfq_created","validated"].includes(p.status))  c.rfq_created += 1;
+      if (["po_issued","delivered"].includes(p.status))    c.po_issued += 1;
+      if (p.status === "cancelled")                        c.cancelled += 1;
     });
     return c;
   }, [prList]);
@@ -1651,13 +1651,12 @@ export default function PurchaseRequisitions() {
       )}
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
           { label: lang === 'hi' ? "Saari Requests" : "Total PRs", count: statusCounts.all, color: "text-blue-700", bg: "bg-blue-50" },
-          { label: lang === 'hi' ? "Review Mein Hai" : "Pending Review", count: statusCounts.review, color: "text-amber-700", bg: "bg-amber-50" },
-          { label: lang === 'hi' ? "Approved" : "Validated", count: statusCounts.validated, color: "text-cyan-700", bg: "bg-cyan-50" },
-          { label: lang === 'hi' ? "Supplier Ko Bheja" : "RFQ Created", count: statusCounts.rfq_created, color: "text-violet-700", bg: "bg-violet-50" },
-          { label: lang === 'hi' ? "Duplicate" : "Duplicate Flagged", count: statusCounts.duplicate_flagged, color: "text-orange-700", bg: "bg-orange-50" },
+          { label: lang === 'hi' ? "Review Mein Hai" : "Under Review", count: statusCounts.review, color: "text-amber-700", bg: "bg-amber-50" },
+          { label: lang === 'hi' ? "RFQ Ban Gaya" : "RFQ Created", count: statusCounts.rfq_created, color: "text-violet-700", bg: "bg-violet-50" },
+          { label: lang === 'hi' ? "PO Ban Gaya" : "PO Issued", count: statusCounts.po_issued, color: "text-emerald-700", bg: "bg-emerald-50" },
           { label: lang === 'hi' ? "Cancel" : "Cancelled", count: statusCounts.cancelled, color: "text-red-700", bg: "bg-red-50" },
         ].map((k) => (
           <Card key={k.label} className="shadow-sm">
@@ -1675,11 +1674,9 @@ export default function PurchaseRequisitions() {
           <TabsList className="w-full overflow-x-auto justify-start flex-nowrap h-auto p-1">
             <TabsTrigger value="all" className="text-xs gap-1.5">{lang === 'hi' ? 'Sab' : 'All'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.all}</Badge></TabsTrigger>
             <TabsTrigger value="review" className="text-xs gap-1.5">
-              <ClipboardCheck className="h-3 w-3" /> {lang === 'hi' ? 'Review Mein' : 'Pending Review'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.review}</Badge>
+              <ClipboardCheck className="h-3 w-3" /> {lang === 'hi' ? 'Review Mein' : 'Under Review'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.review}</Badge>
             </TabsTrigger>
-            <TabsTrigger value="validated" className="text-xs gap-1.5">{lang === 'hi' ? 'Approved' : 'Validated'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.validated}</Badge></TabsTrigger>
-            <TabsTrigger value="rfq_created" className="text-xs gap-1.5">{lang === 'hi' ? 'Supplier Ko Bheja' : 'RFQ Created'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.rfq_created}</Badge></TabsTrigger>
-            <TabsTrigger value="duplicate_flagged" className="text-xs gap-1.5">Duplicate <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.duplicate_flagged}</Badge></TabsTrigger>
+            <TabsTrigger value="rfq_created" className="text-xs gap-1.5">{lang === 'hi' ? 'RFQ Ban Gaya' : 'RFQ Created'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.rfq_created}</Badge></TabsTrigger>
             <TabsTrigger value="po_issued" className="text-xs gap-1.5">{lang === 'hi' ? 'PO Ban Gaya' : 'PO Issued'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.po_issued}</Badge></TabsTrigger>
             <TabsTrigger value="cancelled" className="text-xs gap-1.5">{lang === 'hi' ? 'Cancel' : 'Cancelled'} <Badge variant="outline" className="ml-1 text-[10px] px-1.5">{statusCounts.cancelled}</Badge></TabsTrigger>
           </TabsList>
