@@ -752,11 +752,6 @@ export default function PurchaseRequisitions() {
     setExpandLoading(false);
   };
 
-  // Procurement cancel PR state
-  const [cancelPrTarget, setCancelPrTarget] = useState<PurchaseRequisition | null>(null);
-  const [cancelPrReason, setCancelPrReason] = useState("");
-  const [cancelPrSaving, setCancelPrSaving] = useState(false);
-
   // Wizard state
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(1);
@@ -1286,35 +1281,31 @@ export default function PurchaseRequisitions() {
     await refresh();
   };
 
-  const procurementCancelPr = async () => {
-    if (!cancelPrTarget || !user) return;
-    if (!cancelPrReason.trim()) { toast.error("Cancel karne ki wajah batao"); return; }
-    setCancelPrSaving(true);
+  const procurementCancelPr = async (pr: PurchaseRequisition, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!user) return;
+    if (!confirm(`Cancel PR ${pr.pr_number}? This cannot be undone.`)) return;
     try {
       const { error } = await supabase
         .from("cps_purchase_requisitions")
         .update({ status: "cancelled" })
-        .eq("id", cancelPrTarget.id)
+        .eq("id", pr.id)
         .in("status", ["rfq_created", "validated"]);
       if (error) throw error;
       await supabase.from("cps_audit_log").insert([{
         action_type: "PR_CANCELLED",
         entity_type: "cps_purchase_requisitions",
-        entity_id: cancelPrTarget.id,
-        entity_number: cancelPrTarget.pr_number,
+        entity_id: pr.id,
+        entity_number: pr.pr_number,
         performed_by: user.id,
-        description: `PR cancelled by procurement: ${cancelPrReason.trim()}`,
+        description: `PR cancelled by procurement during RFQ stage review`,
         severity: "warning",
         logged_at: new Date().toISOString(),
       }]);
-      toast.success(`${cancelPrTarget.pr_number} cancel ho gaya`);
-      setCancelPrTarget(null);
-      setCancelPrReason("");
+      toast.success(`${pr.pr_number} cancel ho gaya`);
       await refresh();
     } catch (e: any) {
       toast.error(e.message || "Cancel karne mein dikkat aayi");
-    } finally {
-      setCancelPrSaving(false);
     }
   };
 
@@ -1817,8 +1808,8 @@ export default function PurchaseRequisitions() {
                           </Button>
                         )}
                         {isProcurementUser && statusFilter === "rfq_created" && ["rfq_created", "validated"].includes(pr.status) && (
-                          <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); setCancelPrTarget(pr); setCancelPrReason(""); }} className="text-destructive hover:bg-destructive/10 border-destructive/30 text-xs">
-                            Cancel PR
+                          <Button variant="outline" size="sm" onClick={(e) => procurementCancelPr(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
+                            <X className="h-3.5 w-3.5" />
                           </Button>
                         )}
                       </div>
@@ -1943,8 +1934,8 @@ export default function PurchaseRequisitions() {
                             </Button>
                           )}
                           {isProcurementUser && statusFilter === "rfq_created" && ["rfq_created", "validated"].includes(pr.status) && (
-                            <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); setCancelPrTarget(pr); setCancelPrReason(""); }} className="text-destructive hover:bg-destructive/10 border-destructive/30 text-xs">
-                              Cancel PR
+                            <Button variant="outline" size="sm" onClick={(e) => procurementCancelPr(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
+                              <X className="h-3.5 w-3.5" />
                             </Button>
                           )}
                         </div>
@@ -2015,8 +2006,8 @@ export default function PurchaseRequisitions() {
                     {pr.items_count} items · Required by {formatRequiredByDate(pr.required_by)}
                   </div>
                   {isProcurementUser && statusFilter === "rfq_created" && ["rfq_created", "validated"].includes(pr.status) && (
-                    <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); setCancelPrTarget(pr); setCancelPrReason(""); }} className="text-destructive hover:bg-destructive/10 border-destructive/30 text-xs h-7">
-                      Cancel PR
+                    <Button variant="outline" size="sm" onClick={(e) => procurementCancelPr(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30 h-7">
+                      <X className="h-3.5 w-3.5" />
                     </Button>
                   )}
                 </div>
@@ -2038,36 +2029,6 @@ export default function PurchaseRequisitions() {
         onSaved={() => { refresh(); }}
         lang={lang}
       />
-
-      {/* Procurement Cancel PR Dialog */}
-      <Dialog open={!!cancelPrTarget} onOpenChange={(v) => { if (!v) { setCancelPrTarget(null); setCancelPrReason(""); } }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-destructive">Cancel PR — {cancelPrTarget?.pr_number}</DialogTitle>
-            <DialogDescription>
-              {cancelPrTarget?.project_code ?? cancelPrTarget?.project_site} · {cancelPrTarget?.items_count} items
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            <Label className="text-sm font-medium">Cancel karne ki wajah <span className="text-destructive">*</span></Label>
-            <Textarea
-              rows={3}
-              placeholder="e.g. No quotes received after follow-up, project on hold, duplicate PR..."
-              value={cancelPrReason}
-              onChange={(e) => setCancelPrReason(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">Yeh reason audit log mein save ho jayega.</p>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setCancelPrTarget(null); setCancelPrReason(""); }} disabled={cancelPrSaving}>
-              Back Jao
-            </Button>
-            <Button variant="destructive" onClick={procurementCancelPr} disabled={cancelPrSaving || !cancelPrReason.trim()}>
-              {cancelPrSaving ? "Cancel ho raha hai..." : "Haan, Cancel Karo"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Typeform Wizard Overlay */}
       {wizardOpen && (
