@@ -57,6 +57,9 @@ export interface PoPdfData {
   /* Hagerstone GSTIN to print on this PO (stored per-PO; defaults to UP) */
   hagerstoneGstin?: string | null;
 
+  /* Name of the person who created this PO — shown in the Prepared By field */
+  createdByName?: string | null;
+
   /* amendment fields — version > 1 triggers "AMENDMENT NO. X" banner */
   version?: number | null;
   revisionReason?: string | null;
@@ -630,20 +633,18 @@ export function buildPoPdf(data: PoPdfData): Blob {
   doc.line(ML, y, W - MR, y);
   y += 5;
 
-  const sigCols = [ML, ML + CW * 0.25, ML + CW * 0.50, ML + CW * 0.75];
+  const sigCols = [ML, ML + CW * 0.75];
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7);
   doc.setTextColor(60, 60, 60);
-  doc.text("Prepared By :", sigCols[0], y);
-  doc.text("Prepared By : " + PREPARED(), sigCols[1], y);
-  doc.text("Chk By : " + CHK(), sigCols[2], y);
-  doc.text("Authorised Signatory", sigCols[3], y);
+  doc.text("Prepared By : " + (data.createdByName ?? PREPARED()), sigCols[0], y);
+  doc.text("Authorised Signatory", sigCols[1], y);
   y += 5;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7.5);
   doc.setTextColor(20, 20, 20);
-  doc.text(AUTH_SIG(), sigCols[3], y);
+  doc.text(AUTH_SIG(), sigCols[1], y);
 
   /* ── 8. Footer notice ── */
   y = H - 10;

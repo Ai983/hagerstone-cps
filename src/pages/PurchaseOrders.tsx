@@ -310,6 +310,7 @@ export default function PurchaseOrders() {
   const [viewRfq, setViewRfq] = useState<RfqRow | null>(null);
   const [viewPr, setViewPr] = useState<PrRow | null>(null);
   const [viewApprovedByUser, setViewApprovedByUser] = useState<UserRow | null>(null);
+  const [viewPoCreatorName, setViewPoCreatorName] = useState<string | null>(null);
   const [viewPoLineItems, setViewPoLineItems] = useState<PoLineItemRow[]>([]);
   const [viewPoTokens, setViewPoTokens] = useState<Array<{ id: string; founder_name: string; response: string | null; reason: string | null; used_at: string | null }>>([]);
 
@@ -941,6 +942,7 @@ export default function PurchaseOrders() {
             grandTotal: _grandTotal,
             logoBase64: _logoBase64,
             hagerstoneGstin: createHagerstoneGstin,
+            createdByName: user.name ?? user.email ?? null,
             bankAccountHolderName: createBankHolderName.trim() || null,
             bankName: createBankName.trim() || null,
             bankIfsc: createBankIfsc.trim().toUpperCase() || null,
@@ -1031,6 +1033,7 @@ export default function PurchaseOrders() {
     setViewRfq(null);
     setViewPr(null);
     setViewApprovedByUser(null);
+    setViewPoCreatorName(null);
     setRevisedByPo(null);
     setViewPoLineItems([]);
     setViewPoTokens([]);
@@ -1067,11 +1070,13 @@ export default function PurchaseOrders() {
       const prId = po.pr_id;
       const approvedBy = po.approved_by;
 
-      const [supplierRes, rfqRes, prRes, userRes, lineRes, configRes, scheduleRes, tokensRes] = await Promise.all([
+      const createdBy = po.created_by;
+      const [supplierRes, rfqRes, prRes, userRes, creatorRes, lineRes, configRes, scheduleRes, tokensRes] = await Promise.all([
         supplierId ? supabase.from("cps_suppliers").select("id,name,gstin,phone,email,address_text,city,state").eq("id", supplierId).single() : Promise.resolve({ data: null, error: null }),
         rfqId ? supabase.from("cps_rfqs").select("id,rfq_number").eq("id", rfqId).single() : Promise.resolve({ data: null, error: null }),
         prId ? supabase.from("cps_purchase_requisitions").select("id,pr_number,project_site,project_code").eq("id", prId).single() : Promise.resolve({ data: null, error: null }),
         approvedBy ? supabase.from("cps_users").select("id,name").eq("id", approvedBy).single() : Promise.resolve({ data: null, error: null }),
+        createdBy ? supabase.from("cps_users").select("id,name").eq("id", createdBy).maybeSingle() : Promise.resolve({ data: null, error: null }),
         supabase
           .from("cps_po_line_items")
           .select("id,po_id,description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code,sort_order")
@@ -1103,6 +1108,7 @@ export default function PurchaseOrders() {
       setViewRfq((rfqRes as any).data as RfqRow | null);
       setViewPr((prRes as any).data as PrRow | null);
       setViewApprovedByUser((userRes as any).data as UserRow | null);
+      setViewPoCreatorName((creatorRes as any).data?.name ?? null);
       setViewPoLineItems((lineRes as any).data as PoLineItemRow[]);
       setViewPaymentSchedule(((scheduleRes as any).data ?? []) as PaymentScheduleRow[]);
       setViewPoTokens(((tokensRes as any).data ?? []) as Array<{ id: string; founder_name: string; response: string | null; reason: string | null; used_at: string | null }>);
@@ -1491,6 +1497,7 @@ export default function PurchaseOrders() {
         grandTotal,
         logoBase64,
         hagerstoneGstin: viewPo.hagerstone_gstin ?? "09AAECH3768B1ZM",
+        createdByName: viewPoCreatorName,
         bankAccountHolderName: viewPo.bank_account_holder_name,
         bankName: viewPo.bank_name,
         bankIfsc: viewPo.bank_ifsc,
