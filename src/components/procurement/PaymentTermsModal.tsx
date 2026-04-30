@@ -292,6 +292,11 @@ If you cannot find any payment terms, set confidence to 0 and leave payment_term
         payment_terms_source: source,
         payment_due_date: values.payment_due_date || null,
         payment_terms_notes: values.payment_terms_notes || null,
+        bank_account_holder_name: po.bank_account_holder_name || null,
+        bank_name: po.bank_name || null,
+        bank_ifsc: po.bank_ifsc || null,
+        bank_account_number: po.bank_account_number || null,
+        po_pdf_url: po.po_pdf_url || null,
         dispatched_at: new Date().toISOString(),
       };
 
