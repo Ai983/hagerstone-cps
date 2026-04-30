@@ -8,6 +8,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -801,6 +802,9 @@ export default function PurchaseRequisitions() {
   const [docLines, setDocLines] = useState<DetailLineItem[]>([]);
   const [docLoading, setDocLoading] = useState(false);
 
+  const [cancelPrTarget, setCancelPrTarget] = useState<PurchaseRequisition | null>(null);
+  const [cancelPrSaving, setCancelPrSaving] = useState(false);
+
   const [itemsMaster, setItemsMaster] = useState<ItemMasterRow[]>([]);
 
   const emptyLine = (): LineItem => ({
@@ -1251,61 +1255,51 @@ export default function PurchaseRequisitions() {
     await refresh();
   };
 
-  const closePR = async (pr: PurchaseRequisition, e: React.MouseEvent) => {
+  const closePR = (pr: PurchaseRequisition, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!user) return;
-    // Ownership check — requestor/site_receiver can only close their own PRs
-    if (isRequestor && pr.requested_by !== user.id) {
-      toast.error("You can only cancel PRs you created");
-      return;
-    }
-    // Site team can only cancel PRs still awaiting procurement action.
-    // Once procurement has moved the PR forward (validated, rfq_created, po_issued, delivered),
-    // cancellation must go through procurement.
-    if (pr.status !== "pending" && pr.status !== "pending_design") {
-      toast.error(lang === 'hi'
-        ? "Ye PR procurement team ne aage badha diya hai — ab cancel nahi ho sakti"
-        : "Procurement has already started work on this PR — it can no longer be cancelled");
-      return;
-    }
-    if (!confirm(`Cancel PR ${pr.pr_number}? This cannot be undone.`)) return;
-    let query = supabase
-      .from("cps_purchase_requisitions")
-      .update({ status: "cancelled" })
-      .eq("id", pr.id);
-    // Extra safety: enforce ownership at DB level for requestors
-    if (isRequestor) query = query.eq("requested_by", user.id);
-    const { error } = await query;
-    if (error) { toast.error("Failed to cancel PR"); return; }
-    toast.success(`${pr.pr_number} cancelled`);
-    await refresh();
+    setCancelPrTarget(pr);
   };
 
-  const procurementCancelPr = async (pr: PurchaseRequisition, e: React.MouseEvent) => {
+  const procurementCancelPr = (pr: PurchaseRequisition, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!user) return;
-    if (!confirm(`Cancel PR ${pr.pr_number}? This cannot be undone.`)) return;
+    setCancelPrTarget(pr);
+  };
+
+  const executeCancelPr = async () => {
+    if (!cancelPrTarget || !user) return;
+    setCancelPrSaving(true);
     try {
-      const { error } = await supabase
+      const isRfqStage = ["rfq_created", "validated"].includes(cancelPrTarget.status);
+      let query = supabase
         .from("cps_purchase_requisitions")
         .update({ status: "cancelled" })
-        .eq("id", pr.id)
-        .in("status", ["rfq_created", "validated"]);
+        .eq("id", cancelPrTarget.id);
+      if (isRfqStage) {
+        query = query.in("status", ["rfq_created", "validated"]);
+      } else if (isRequestor) {
+        query = query.eq("requested_by", user.id);
+      }
+      const { error } = await query;
       if (error) throw error;
       await supabase.from("cps_audit_log").insert([{
         action_type: "PR_CANCELLED",
         entity_type: "cps_purchase_requisitions",
-        entity_id: pr.id,
-        entity_number: pr.pr_number,
+        entity_id: cancelPrTarget.id,
+        entity_number: cancelPrTarget.pr_number,
         performed_by: user.id,
-        description: `PR cancelled by procurement during RFQ stage review`,
+        description: isRfqStage
+          ? `PR cancelled by procurement during RFQ stage review`
+          : `PR cancelled by requestor`,
         severity: "warning",
         logged_at: new Date().toISOString(),
       }]);
-      toast.success(`${pr.pr_number} cancel ho gaya`);
+      toast.success(`${cancelPrTarget.pr_number} cancel ho gaya`);
+      setCancelPrTarget(null);
       await refresh();
     } catch (e: any) {
       toast.error(e.message || "Cancel karne mein dikkat aayi");
+    } finally {
+      setCancelPrSaving(false);
     }
   };
 
@@ -3078,6 +3072,28 @@ export default function PurchaseRequisitions() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Cancel PR confirmation dialog */}
+      <AlertDialog open={!!cancelPrTarget} onOpenChange={(o) => { if (!o && !cancelPrSaving) setCancelPrTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel {cancelPrTarget?.pr_number}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ye PR cancel ho jayega aur dobara open nahi ho sakta. Kya aap confirm karte hain?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancelPrSaving}>Wapas Jao</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={cancelPrSaving}
+              onClick={(e) => { e.preventDefault(); executeCancelPr(); }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {cancelPrSaving ? "Cancel ho raha hai…" : "Haan, Cancel Karo"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
