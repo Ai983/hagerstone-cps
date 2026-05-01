@@ -293,7 +293,7 @@ export function LegacyQuoteUploadModal({
     supabase
       .from("cps_rfqs")
       .select("id,rfq_number,title,deadline,pr_id,target_category")
-      .in("status", ["draft", "sent", "reminder_1", "reminder_2", "reminder_3"])
+      .in("status", ["draft", "sent", "reminder_1", "reminder_2", "reminder_3", "comparison_ready"])
       .order("created_at", { ascending: false })
       .then(async ({ data, error }) => {
         if (error) { setRfqsLoading(false); return; }
