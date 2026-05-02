@@ -1112,10 +1112,18 @@ export default function RFQs() {
                           </Button>
                         ) : ["sent", "reminder_1", "reminder_2"].includes(r.status) ? (
                           <div className="flex flex-col items-end gap-1">
-                            <Button variant="outline" size="sm" onClick={() => openReview(r)}>
-                              View Dispatch
-                            </Button>
-                            <span className="text-[10px] text-muted-foreground">{total} quote{total !== 1 ? "s" : ""} received</span>
+                            {approved >= 1 ? (
+                              <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
+                                Comparison Khol →
+                              </Button>
+                            ) : (
+                              <Button variant="outline" size="sm" onClick={() => openReview(r)}>
+                                View Dispatch
+                              </Button>
+                            )}
+                            <span className="text-[10px] text-muted-foreground">
+                              {approved}/3 approved · {total} received
+                            </span>
                           </div>
                         ) : (
                           <span className="text-muted-foreground">—</span>
@@ -1184,6 +1192,8 @@ export default function RFQs() {
                         <Button size="sm" onClick={() => openReview(r)}>Review &amp; Send</Button>
                       ) : r.status === "draft" && total > 0 ? (
                         <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>View Quotes ({total}) →</Button>
+                      ) : ["sent", "reminder_1", "reminder_2"].includes(r.status) && approved >= 1 ? (
+                        <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>Comparison Khol →</Button>
                       ) : ["sent", "reminder_1", "reminder_2"].includes(r.status) ? (
                         <Button variant="outline" size="sm" onClick={() => openReview(r)}>View Dispatch</Button>
                       ) : canCompare ? (
