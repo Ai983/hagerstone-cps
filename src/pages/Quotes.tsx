@@ -1052,7 +1052,7 @@ Rules:
         await supabase.from("cps_rfqs")
           .update({ status: "comparison_ready" })
           .eq("id", reviewQuote.rfq_id)
-          .eq("status", "sent");
+          .in("status", ["sent", "draft", "active"]);
       }
 
       await supabase.from("cps_audit_log").insert({
@@ -1150,7 +1150,7 @@ Rules:
         await supabase.from("cps_rfqs")
           .update({ status: "comparison_ready" })
           .eq("id", reviewQuote.rfq_id)
-          .eq("status", "sent");
+          .in("status", ["sent", "draft", "active"]);
       }
 
       await supabase.from("cps_audit_log").insert({
