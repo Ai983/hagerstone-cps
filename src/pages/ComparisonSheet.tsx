@@ -1261,15 +1261,29 @@ export default function ComparisonSheetPage() {
 
     // ===== Unified comparison table =====
     rows.push(["COMPARISON TABLE"]);
-    rows.push(["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Market"]);
+    rows.push(["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Market 1 (Lowest)", "Market 2"]);
 
     prLineItems.forEach((pli) => {
       const cheapest = cheapestPerRow[pli.id];
       const bench = marketBenchmarks[pli.id];
       const marketRate = bench && bench.market_lowest_rate ? Number(bench.market_lowest_rate) : null;
-      const marketLabel = marketRate !== null
-        ? `Rs. ${marketRate.toLocaleString("en-IN")}${bench?.market_lowest_unit ? "/" + bench.market_lowest_unit : ""}`
-        : (bench?.source === "no_data" || bench?.source === "error" ? "no data" : "pending");
+      const topSources = (bench?.market_suppliers ?? [])
+        .filter((s) => Number(s.rate_numeric ?? 0) > 0)
+        .sort((a, b) => Number(a.rate_numeric ?? Infinity) - Number(b.rate_numeric ?? Infinity))
+        .slice(0, 2);
+      const labelForSource = (src: typeof topSources[0] | undefined, fallbackRate: number | null) => {
+        if (src) {
+          const name = src.name ?? src.source ?? "Source";
+          const unit = src.unit ?? bench?.market_lowest_unit ?? "";
+          return `Rs. ${Number(src.rate_numeric).toLocaleString("en-IN")}${unit ? "/" + unit : ""} — ${name}`;
+        }
+        if (fallbackRate !== null) {
+          return `Rs. ${fallbackRate.toLocaleString("en-IN")}${bench?.market_lowest_unit ? "/" + bench.market_lowest_unit : ""}`;
+        }
+        return bench?.source === "no_data" || bench?.source === "error" ? "no data" : (marketRate === null ? "pending" : "—");
+      };
+      const market1Label = labelForSource(topSources[0], topSources.length === 0 ? marketRate : null);
+      const market2Label = topSources[1] ? labelForSource(topSources[1], null) : "—";
       const cells = supplierTotals.map((t) => {
         const info = resolveRate(pli.id, t.sup.id);
         if (info.rate === null) return "—";
@@ -1281,26 +1295,27 @@ export default function ComparisonSheetPage() {
         `${pli.description}${pli.unit ? ` (${pli.unit})` : ""}`,
         String(pli.quantity ?? ""),
         ...cells,
-        marketLabel,
+        market1Label,
+        market2Label,
       ]);
     });
 
-    rows.push(["Subtotal (excl GST)", "", ...supplierTotals.map((t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—"), ""]);
-    rows.push(["GST", "", ...supplierTotals.map((t) => t.gst > 0 ? fmtINR(t.gst) : "—"), ""]);
-    rows.push(["Freight / Extras", "", ...supplierTotals.map((t) => (t.freight + t.extraSum) > 0 ? fmtINR(t.freight + t.extraSum) : "—"), ""]);
+    rows.push(["Subtotal (excl GST)", "", ...supplierTotals.map((t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—"), "", ""]);
+    rows.push(["GST", "", ...supplierTotals.map((t) => t.gst > 0 ? fmtINR(t.gst) : "—"), "", ""]);
+    rows.push(["Freight / Extras", "", ...supplierTotals.map((t) => (t.freight + t.extraSum) > 0 ? fmtINR(t.freight + t.extraSum) : "—"), "", ""]);
     rows.push([
       "LANDED TOTAL", "",
       ...supplierTotals.map((t) => {
         if (t.landedTotal <= 0) return "—";
         return `${t.sup.id === winnerSupplierId ? "[WIN] " : ""}${fmtINR(t.landedTotal)}`;
       }),
-      "",
+      "", "",
     ]);
-    rows.push(["Payment Terms", "", ...supplierTotals.map((t) => t.paymentTerms ?? "—"), ""]);
-    rows.push(["Delivery", "", ...supplierTotals.map((t) => t.deliveryTerms ?? "—"), ""]);
-    rows.push(["Warranty", "", ...supplierTotals.map((t) => t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—"), ""]);
-    rows.push(["Validity", "", ...supplierTotals.map((t) => t.validityDays != null ? `${t.validityDays} days` : "—"), ""]);
-    rows.push(["Compliance", "", ...supplierTotals.map((t) => t.compliance ?? "—"), ""]);
+    rows.push(["Payment Terms", "", ...supplierTotals.map((t) => t.paymentTerms ?? "—"), "", ""]);
+    rows.push(["Delivery", "", ...supplierTotals.map((t) => t.deliveryTerms ?? "—"), "", ""]);
+    rows.push(["Warranty", "", ...supplierTotals.map((t) => t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—"), "", ""]);
+    rows.push(["Validity", "", ...supplierTotals.map((t) => t.validityDays != null ? `${t.validityDays} days` : "—"), "", ""]);
+    rows.push(["Compliance", "", ...supplierTotals.map((t) => t.compliance ?? "—"), "", ""]);
     rows.push([]);
 
     if (aiVerdict) {
@@ -1412,7 +1427,7 @@ export default function ComparisonSheetPage() {
     y += 4;
 
     type CellMeta = { kind: "item" | "subtotal" | "gst" | "freight" | "landed" | "term"; isCheapest?: boolean; isWinner?: boolean; isMarketAbove?: boolean; isInferred?: boolean };
-    const tableHead = [["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Market"]];
+    const tableHead = [["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Market 1 (Lowest)", "Market 2"]];
     const tableBody: string[][] = [];
     const rowMeta: CellMeta[][] = [];
 
@@ -1422,9 +1437,31 @@ export default function ComparisonSheetPage() {
       const marketRate = bench && bench.market_lowest_rate ? Number(bench.market_lowest_rate) : null;
       const cheapestRateInfo = cheapest ? resolveRate(pli.id, cheapest) : null;
       const isAbove = cheapestRateInfo?.rate !== null && cheapestRateInfo !== null && marketRate !== null && cheapestRateInfo.rate! > marketRate;
-      const marketLabel = marketRate !== null
-        ? `${isAbove ? "⚠ " : "✓ "}Rs.${marketRate.toLocaleString("en-IN")}${bench?.market_lowest_unit ? "/" + bench.market_lowest_unit : ""}`
-        : (bench?.source === "no_data" || bench?.source === "error" ? "no data" : "pending");
+      const topSources = (bench?.market_suppliers ?? [])
+        .filter((s) => Number(s.rate_numeric ?? 0) > 0)
+        .sort((a, b) => Number(a.rate_numeric ?? Infinity) - Number(b.rate_numeric ?? Infinity))
+        .slice(0, 2);
+      const market1Label = (() => {
+        if (topSources[0]) {
+          const src = topSources[0];
+          const unit = src.unit ?? bench?.market_lowest_unit ?? "";
+          const name = src.name ?? src.source ?? "Source";
+          return `${isAbove ? "⚠ " : "✓ "}Rs.${Number(src.rate_numeric).toLocaleString("en-IN")}${unit ? "/" + unit : ""}\n${name}`;
+        }
+        if (marketRate !== null) {
+          return `${isAbove ? "⚠ " : "✓ "}Rs.${marketRate.toLocaleString("en-IN")}${bench?.market_lowest_unit ? "/" + bench.market_lowest_unit : ""}`;
+        }
+        return bench?.source === "no_data" || bench?.source === "error" ? "no data" : "pending";
+      })();
+      const market2Label = (() => {
+        if (topSources[1]) {
+          const src = topSources[1];
+          const unit = src.unit ?? bench?.market_lowest_unit ?? "";
+          const name = src.name ?? src.source ?? "Source";
+          return `Rs.${Number(src.rate_numeric).toLocaleString("en-IN")}${unit ? "/" + unit : ""}\n${name}`;
+        }
+        return "—";
+      })();
 
       const cellsText: string[] = [];
       const cellsMeta: CellMeta[] = [{ kind: "item" }, { kind: "item" }];
@@ -1441,11 +1478,13 @@ export default function ComparisonSheetPage() {
         }
       });
       cellsMeta.push({ kind: "item", isMarketAbove: isAbove });
+      cellsMeta.push({ kind: "item" });
       tableBody.push([
         `${pli.description}${pli.unit ? ` (${pli.unit})` : ""}`,
         String(pli.quantity ?? ""),
         ...cellsText,
-        marketLabel,
+        market1Label,
+        market2Label,
       ]);
       rowMeta.push(cellsMeta);
     });
@@ -1457,7 +1496,8 @@ export default function ComparisonSheetPage() {
         return values(t);
       });
       meta.push({ kind });
-      tableBody.push([label, "", ...cells, ""]);
+      meta.push({ kind });
+      tableBody.push([label, "", ...cells, "", ""]);
       rowMeta.push(meta);
     };
 
@@ -1501,8 +1541,10 @@ export default function ComparisonSheetPage() {
           cellData.cell.styles.textColor = [150, 90, 0];
           cellData.cell.styles.fontStyle = "bold";
         }
-        // Market column header tint
-        if (meta.kind === "item" && cellData.column.index === supplierTotals.length + 2 && !meta.isMarketAbove) {
+        // Market columns header tint (Market 1 and Market 2 — 2nd-to-last and last columns)
+        const market1Idx = supplierTotals.length + 2;
+        const market2Idx = supplierTotals.length + 3;
+        if (meta.kind === "item" && (cellData.column.index === market1Idx || cellData.column.index === market2Idx) && !meta.isMarketAbove) {
           cellData.cell.styles.fillColor = [232, 240, 252];
         }
         // Totals rows
@@ -2601,7 +2643,8 @@ Rules:
                           </div>
                         </TableHead>
                       ))}
-                      <TableHead className="min-w-[120px] bg-blue-50/50">Market</TableHead>
+                      <TableHead className="min-w-[140px] bg-blue-50/50">Market 1 (Lowest)</TableHead>
+                      <TableHead className="min-w-[140px] bg-blue-50/50">Market 2</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -2643,17 +2686,20 @@ Rules:
                               </TableCell>
                             );
                           })}
-                          <TableCell className="text-sm align-top bg-blue-50/30 min-w-[150px]">
-                            {marketRate !== null ? (() => {
-                              const topSources = (bench?.market_suppliers ?? [])
-                                .filter((s) => Number(s.rate_numeric ?? 0) > 0)
-                                .sort((a, b) => Number(a.rate_numeric ?? Infinity) - Number(b.rate_numeric ?? Infinity))
-                                .slice(0, 2);
-                              return (
-                                <div className="space-y-2">
-                                  {topSources.length > 0 ? topSources.map((src, i) => (
-                                    <div key={i} className="text-right">
-                                      <div className="font-mono text-xs font-semibold text-blue-800">
+                          {(() => {
+                            const topSources = (bench?.market_suppliers ?? [])
+                              .filter((s) => Number(s.rate_numeric ?? 0) > 0)
+                              .sort((a, b) => Number(a.rate_numeric ?? Infinity) - Number(b.rate_numeric ?? Infinity))
+                              .slice(0, 2);
+                            const noDataLabel = bench?.source === "no_data" || bench?.source === "error" ? "no data" : "pending";
+                            const renderMarketCell = (src: typeof topSources[0] | undefined, idx: 0 | 1) => (
+                              <TableCell className="text-sm align-top bg-blue-50/30 min-w-[140px]">
+                                {marketRate === null ? (
+                                  idx === 0 ? <span className="text-xs italic text-muted-foreground">{noDataLabel}</span> : <span className="text-xs italic text-muted-foreground">—</span>
+                                ) : src ? (
+                                  <div className="space-y-1.5">
+                                    <div className="text-right">
+                                      <div className="font-mono text-sm font-semibold text-blue-800">
                                         ₹{Number(src.rate_numeric).toLocaleString("en-IN")}
                                         {src.unit ? <span className="font-normal text-[10px] text-muted-foreground">/{src.unit}</span> : ""}
                                       </div>
@@ -2672,27 +2718,42 @@ Rules:
                                         )}
                                       </div>
                                     </div>
-                                  )) : (
-                                    <div className="text-right">
-                                      <div className="font-mono text-xs font-semibold text-blue-800">₹{marketRate.toLocaleString("en-IN")}</div>
-                                      <div className="text-[10px] text-muted-foreground">{bench?.market_verdict ? bench.market_verdict.slice(0, 40) : "Price band"}</div>
-                                    </div>
-                                  )}
-                                  <div className="flex justify-end">
-                                    {isAbove ? (
-                                      <Badge className="text-[10px] bg-amber-100 text-amber-900 border-amber-300 border">⚠ Above</Badge>
-                                    ) : (
-                                      <Badge className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300 border">✓</Badge>
+                                    {idx === 0 && (
+                                      <div className="flex justify-end">
+                                        {isAbove ? (
+                                          <Badge className="text-[10px] bg-amber-100 text-amber-900 border-amber-300 border">⚠ Above</Badge>
+                                        ) : (
+                                          <Badge className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300 border">✓</Badge>
+                                        )}
+                                      </div>
                                     )}
                                   </div>
-                                </div>
-                              );
-                            })() : (
-                              <span className="text-xs italic text-muted-foreground">
-                                {bench?.source === "no_data" || bench?.source === "error" ? "no data" : "pending"}
-                              </span>
-                            )}
-                          </TableCell>
+                                ) : idx === 0 && topSources.length === 0 ? (
+                                  <div className="space-y-1.5">
+                                    <div className="text-right">
+                                      <div className="font-mono text-sm font-semibold text-blue-800">₹{marketRate.toLocaleString("en-IN")}</div>
+                                      <div className="text-[10px] text-muted-foreground">{bench?.market_verdict ? bench.market_verdict.slice(0, 40) : "Price band"}</div>
+                                    </div>
+                                    <div className="flex justify-end">
+                                      {isAbove ? (
+                                        <Badge className="text-[10px] bg-amber-100 text-amber-900 border-amber-300 border">⚠ Above</Badge>
+                                      ) : (
+                                        <Badge className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300 border">✓</Badge>
+                                      )}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-xs italic text-muted-foreground">—</span>
+                                )}
+                              </TableCell>
+                            );
+                            return (
+                              <>
+                                {renderMarketCell(topSources[0], 0)}
+                                {renderMarketCell(topSources[1], 1)}
+                              </>
+                            );
+                          })()}
                         </TableRow>
                       );
                     })}
@@ -2704,12 +2765,14 @@ Rules:
                         <TableCell key={t.sup.id} className="text-right text-sm font-mono">{t.subtotal > 0 ? `₹${t.subtotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>
                       ))}
                       <TableCell />
+                      <TableCell />
                     </TableRow>
                     <TableRow>
                       <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">GST</TableCell>
                       {supplierTotals.map((t) => (
                         <TableCell key={t.sup.id} className="text-right text-sm font-mono">{t.gst > 0 ? `₹${t.gst.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>
                       ))}
+                      <TableCell />
                       <TableCell />
                     </TableRow>
                     <TableRow>
@@ -2718,6 +2781,7 @@ Rules:
                         const v = t.freight + t.extraSum;
                         return <TableCell key={t.sup.id} className="text-right text-sm font-mono">{v > 0 ? `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>;
                       })}
+                      <TableCell />
                       <TableCell />
                     </TableRow>
                     <TableRow className="bg-primary/5">
@@ -2733,6 +2797,7 @@ Rules:
                         </TableCell>
                       ))}
                       <TableCell />
+                      <TableCell />
                     </TableRow>
 
                     {/* Commercial terms */}
@@ -2742,12 +2807,14 @@ Rules:
                         <TableCell key={t.sup.id} className="text-xs whitespace-pre-wrap break-words">{t.paymentTerms ?? "—"}</TableCell>
                       ))}
                       <TableCell />
+                      <TableCell />
                     </TableRow>
                     <TableRow>
                       <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Delivery</TableCell>
                       {supplierTotals.map((t) => (
                         <TableCell key={t.sup.id} className="text-xs">{t.deliveryTerms ?? "—"}</TableCell>
                       ))}
+                      <TableCell />
                       <TableCell />
                     </TableRow>
                     <TableRow>
@@ -2756,12 +2823,14 @@ Rules:
                         <TableCell key={t.sup.id} className="text-xs">{t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—"}</TableCell>
                       ))}
                       <TableCell />
+                      <TableCell />
                     </TableRow>
                     <TableRow>
                       <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Validity</TableCell>
                       {supplierTotals.map((t) => (
                         <TableCell key={t.sup.id} className="text-xs">{t.validityDays != null ? `${t.validityDays} days` : "—"}</TableCell>
                       ))}
+                      <TableCell />
                       <TableCell />
                     </TableRow>
                     <TableRow>
@@ -2771,6 +2840,7 @@ Rules:
                           <Badge className={`text-[10px] border ${complianceBadgeCls(t.compliance)}`}>{t.compliance ?? "—"}</Badge>
                         </TableCell>
                       ))}
+                      <TableCell />
                       <TableCell />
                     </TableRow>
                   </TableBody>
