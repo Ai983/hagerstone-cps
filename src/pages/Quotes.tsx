@@ -1048,7 +1048,7 @@ Rules:
         .eq("rfq_id", reviewQuote.rfq_id)
         .eq("parse_status", "approved");
 
-      if (approvedCount !== null && approvedCount >= 2) {
+      if (approvedCount !== null && approvedCount >= 1) {
         await supabase.from("cps_rfqs")
           .update({ status: "comparison_ready" })
           .eq("id", reviewQuote.rfq_id)
@@ -1146,7 +1146,7 @@ Rules:
         .eq("rfq_id", reviewQuote.rfq_id)
         .eq("parse_status", "approved");
 
-      if (approvedCount !== null && approvedCount >= 2) {
+      if (approvedCount !== null && approvedCount >= 1) {
         await supabase.from("cps_rfqs")
           .update({ status: "comparison_ready" })
           .eq("id", reviewQuote.rfq_id)
