@@ -2609,30 +2609,48 @@ Rules:
                               </TableCell>
                             );
                           })}
-                          <TableCell className="text-right text-sm font-mono align-top bg-blue-50/30">
+                          <TableCell className="text-sm align-top bg-blue-50/30 min-w-[150px]">
                             {marketRate !== null ? (() => {
-                              // Find the supplier whose rate matches the lowest — that's the source we link to.
-                              const sources = bench?.market_suppliers ?? [];
-                              const matchedSrc = sources.find((s) => Number(s.rate_numeric ?? 0) === marketRate)
-                                ?? sources.slice().sort((a, b) => Number(a.rate_numeric ?? Infinity) - Number(b.rate_numeric ?? Infinity))[0];
-                              const tooltip = matchedSrc
-                                ? `${matchedSrc.name ?? "Source"}${matchedSrc.source ? ` · ${matchedSrc.source}` : ""}${matchedSrc.location ? ` · ${matchedSrc.location}` : ""}`
-                                : "Market source";
-                              const inner = (
-                                <span className={matchedSrc?.url ? "text-blue-700 hover:text-blue-900 hover:underline cursor-pointer" : ""}>
-                                  ₹{marketRate.toLocaleString("en-IN")}
-                                </span>
-                              );
+                              const topSources = (bench?.market_suppliers ?? [])
+                                .filter((s) => Number(s.rate_numeric ?? 0) > 0)
+                                .sort((a, b) => Number(a.rate_numeric ?? Infinity) - Number(b.rate_numeric ?? Infinity))
+                                .slice(0, 2);
                               return (
-                                <div className="flex items-center justify-end gap-1" title={tooltip}>
-                                  {matchedSrc?.url ? (
-                                    <a href={matchedSrc.url} target="_blank" rel="noopener noreferrer">{inner}</a>
-                                  ) : inner}
-                                  {isAbove ? (
-                                    <Badge className="text-[10px] bg-amber-100 text-amber-900 border-amber-300 border">⚠</Badge>
-                                  ) : (
-                                    <Badge className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300 border">✓</Badge>
+                                <div className="space-y-2">
+                                  {topSources.length > 0 ? topSources.map((src, i) => (
+                                    <div key={i} className="text-right">
+                                      <div className="font-mono text-xs font-semibold text-blue-800">
+                                        ₹{Number(src.rate_numeric).toLocaleString("en-IN")}
+                                        {src.unit ? <span className="font-normal text-[10px] text-muted-foreground">/{src.unit}</span> : ""}
+                                      </div>
+                                      <div className="text-[10px] text-muted-foreground leading-tight mt-0.5 space-y-0.5">
+                                        {src.url ? (
+                                          <a href={src.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline block truncate max-w-[140px] ml-auto">
+                                            {src.name ?? src.source ?? "Source"}
+                                          </a>
+                                        ) : (
+                                          <span className="block truncate max-w-[140px] ml-auto">{src.name ?? src.source ?? "Source"}</span>
+                                        )}
+                                        {src.phone && src.phone !== "N/A" && (
+                                          <a href={`tel:${src.phone}`} className="text-blue-500 hover:underline block">
+                                            {src.phone}
+                                          </a>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )) : (
+                                    <div className="text-right">
+                                      <div className="font-mono text-xs font-semibold text-blue-800">₹{marketRate.toLocaleString("en-IN")}</div>
+                                      <div className="text-[10px] text-muted-foreground">{bench?.market_verdict ? bench.market_verdict.slice(0, 40) : "Price band"}</div>
+                                    </div>
                                   )}
+                                  <div className="flex justify-end">
+                                    {isAbove ? (
+                                      <Badge className="text-[10px] bg-amber-100 text-amber-900 border-amber-300 border">⚠ Above</Badge>
+                                    ) : (
+                                      <Badge className="text-[10px] bg-emerald-100 text-emerald-800 border-emerald-300 border">✓</Badge>
+                                    )}
+                                  </div>
                                 </div>
                               );
                             })() : (

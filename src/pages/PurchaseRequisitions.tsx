@@ -1281,6 +1281,13 @@ export default function PurchaseRequisitions() {
       }
       const { error } = await query;
       if (error) throw error;
+      if (isRfqStage) {
+        await supabase
+          .from("cps_rfqs")
+          .update({ status: "cancelled" })
+          .eq("pr_id", cancelPrTarget.id)
+          .not("status", "in", '("cancelled")');
+      }
       await supabase.from("cps_audit_log").insert([{
         action_type: "PR_CANCELLED",
         entity_type: "cps_purchase_requisitions",
@@ -1289,7 +1296,9 @@ export default function PurchaseRequisitions() {
         performed_by: user.id,
         description: isRfqStage
           ? `PR cancelled by procurement during RFQ stage review`
-          : `PR cancelled by requestor`,
+          : cancelPrTarget.status === "duplicate_flagged"
+            ? `Duplicate-flagged PR cancelled during review`
+            : `PR cancelled by requestor`,
         severity: "warning",
         logged_at: new Date().toISOString(),
       }]);
@@ -1796,7 +1805,12 @@ export default function PurchaseRequisitions() {
                         <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="Print">
                           <Printer className="h-3.5 w-3.5" />
                         </Button>
-                        {(pr.status === "pending" || pr.status === "pending_design") && pr.requested_by === user?.id && (
+                        {(pr.status === "pending" || pr.status === "pending_design" || pr.status === "duplicate_flagged") && pr.requested_by === user?.id && (
+                          <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {isProcurementUser && pr.status === "duplicate_flagged" && (
                           <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
                             <X className="h-3.5 w-3.5" />
                           </Button>
@@ -1922,7 +1936,7 @@ export default function PurchaseRequisitions() {
                           <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="View as Document">
                             <Printer className="h-3.5 w-3.5" />
                           </Button>
-                          {(pr.status === "pending" || pr.status === "pending_design") && (
+                          {(pr.status === "pending" || pr.status === "pending_design" || pr.status === "duplicate_flagged") && (
                             <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
                               <X className="h-3.5 w-3.5" />
                             </Button>
