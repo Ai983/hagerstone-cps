@@ -106,7 +106,7 @@ const STAGES: Array<{
 }> = [
   { key: "pr_raised",     label: "1. PR Raised",         icon: FileText,      color: "text-blue-700",    bg: "bg-blue-50",    border: "border-blue-200",    desc: "New requests from site" },
   { key: "rfq_sent",      label: "2. RFQ Sent",          icon: Send,          color: "text-indigo-700",  bg: "bg-indigo-50",  border: "border-indigo-200",  desc: "Dispatched to vendors" },
-  { key: "quotes_in",     label: "3. Quotes Received",   icon: MessageSquare, color: "text-violet-700",  bg: "bg-violet-50",  border: "border-violet-200",  desc: "Responses received" },
+  { key: "quotes_in",     label: "3. Pending for Review", icon: MessageSquare, color: "text-violet-700",  bg: "bg-violet-50",  border: "border-violet-200",  desc: "Quotes in, comparison not started" },
   { key: "review",        label: "4. Comparison Review", icon: BarChart3,     color: "text-amber-700",   bg: "bg-amber-50",   border: "border-amber-200",   desc: "Procurement reviewing" },
   { key: "approval",      label: "5. Pending Approval",  icon: CheckCircle2,  color: "text-orange-700",  bg: "bg-orange-50",  border: "border-orange-200",  desc: "Awaiting founder" },
   { key: "finance",       label: "6. Sent to Finance",   icon: Landmark,      color: "text-teal-700",    bg: "bg-teal-50",    border: "border-teal-200",    desc: "Awaiting payment" },
@@ -178,7 +178,6 @@ const deriveStage = (
   if (rfq) {
     if (rfq.comparison_status === "sent_for_approval") return "approval";
     if (rfq.comparison_status === "in_review" || rfq.comparison_status === "reviewed") return "review";
-    if (rfq.quotes_count > 0 && rfq.has_approved_quote) return "review";
     if (rfq.quotes_count > 0) return "quotes_in";
     if (["sent", "reminder_1", "reminder_2", "reminder_3", "draft", "comparison_ready", "closed"].includes(rfq.status ?? "")) return "rfq_sent";
   }
