@@ -46,6 +46,7 @@ type Rfq = {
   deadline: string | null;
   created_at: string | null;
   target_category: string | null;
+  min_quotes_override_status?: "none" | "requested" | "allowed" | "denied" | null;
 };
 
 type Supplier = {
@@ -235,7 +236,7 @@ export default function RFQs() {
     setSupplierCountByRfqId({});
     setTotalQuotesByRfq({});
     setApprovedQuotesByRfq({});
-    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,pr_id,title,status,deadline,created_at,target_category").order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,pr_id,title,status,deadline,created_at,target_category,min_quotes_override_status").order("created_at", { ascending: false });
     if (error) {
       toast.error("Failed to load RFQs");
       setRfqs([]);
@@ -1032,7 +1033,8 @@ export default function RFQs() {
                   const sc = statusColor[r.status] ?? statusColor.draft;
                   const total = totalQuotesByRfq[r.id] ?? 0;
                   const approved = approvedQuotesByRfq[r.id] ?? 0;
-                  const canCompare = r.status === "comparison_ready";
+                  const overrideAllowed = r.min_quotes_override_status === "allowed";
+                  const canCompare = r.status === "comparison_ready" || overrideAllowed;
                   return (
                     <TableRow key={r.id} className="hover:bg-muted/30">
                       <TableCell className="font-mono text-primary">
@@ -1060,13 +1062,24 @@ export default function RFQs() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">{supplierCountByRfqId[r.id] ?? 0}</TableCell>
                       <TableCell>
-                        {total > 0 ? (
-                          <Badge className={`text-xs border-0 ${approved >= 3 ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
-                            {approved}/3 approved
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground text-xs">—</span>
-                        )}
+                        <div className="flex flex-col gap-0.5">
+                          {total > 0 ? (
+                            <Badge className={`text-xs border-0 w-fit ${(approved >= 3 || overrideAllowed) ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+                              {approved}/3 approved
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">—</span>
+                          )}
+                          {r.min_quotes_override_status === "requested" && (
+                            <span className="text-[10px] bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded w-fit">⏳ Override pending</span>
+                          )}
+                          {r.min_quotes_override_status === "allowed" && (
+                            <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded w-fit">✓ Override allowed</span>
+                          )}
+                          {r.min_quotes_override_status === "denied" && (
+                            <span className="text-[10px] bg-red-100 text-red-800 px-1.5 py-0.5 rounded w-fit">✗ Override denied</span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-muted-foreground">{formatIndianDateTime(r.deadline)}</TableCell>
                       <TableCell>
@@ -1131,7 +1144,8 @@ export default function RFQs() {
                 const sc = statusColor[r.status] ?? statusColor.draft;
                 const total = totalQuotesByRfq[r.id] ?? 0;
                 const approved = approvedQuotesByRfq[r.id] ?? 0;
-                const canCompare = r.status === "comparison_ready";
+                const overrideAllowed = r.min_quotes_override_status === "allowed";
+                const canCompare = r.status === "comparison_ready" || overrideAllowed;
                 return (
                   <div key={r.id} className="p-4 space-y-2">
                     <div className="flex items-start justify-between gap-2">
@@ -1151,9 +1165,18 @@ export default function RFQs() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-muted-foreground">{supplierCountByRfqId[r.id] ?? 0} suppliers</span>
                         {total > 0 && (
-                          <Badge className={`text-xs border-0 ${approved >= 3 ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+                          <Badge className={`text-xs border-0 ${(approved >= 3 || overrideAllowed) ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
                             {approved}/3 approved
                           </Badge>
+                        )}
+                        {r.min_quotes_override_status === "requested" && (
+                          <span className="text-[10px] bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded">⏳ Override pending</span>
+                        )}
+                        {r.min_quotes_override_status === "allowed" && (
+                          <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">✓ Override allowed</span>
+                        )}
+                        {r.min_quotes_override_status === "denied" && (
+                          <span className="text-[10px] bg-red-100 text-red-800 px-1.5 py-0.5 rounded">✗ Override denied</span>
                         )}
                         <span className="text-xs text-muted-foreground">Due {formatIndianDateTime(r.deadline)}</span>
                       </div>
