@@ -223,7 +223,7 @@ export default function AdminOverrides() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><ShieldAlert className="h-5 w-5 text-amber-600" /> Access Restricted</CardTitle>
-            <CardDescription>Override requests page sirf IT head dekh sakte hain.</CardDescription>
+            <CardDescription>Override requests page sirf IT team dekh sakti hai.</CardDescription>
           </CardHeader>
           <CardContent>
             <Button variant="outline" onClick={() => navigate("/dashboard")}>Go to Dashboard</Button>
@@ -359,7 +359,7 @@ export default function AdminOverrides() {
                         <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(r.min_quotes_override_allowed_at)}</TableCell>
                         <TableCell className="text-xs max-w-[320px] whitespace-pre-wrap">
                           {r.min_quotes_override_reason && <div><span className="text-muted-foreground">Procurement:</span> {r.min_quotes_override_reason}</div>}
-                          {r.min_quotes_override_admin_note && <div className="mt-1"><span className="text-muted-foreground">IT note:</span> {r.min_quotes_override_admin_note}</div>}
+                          {r.min_quotes_override_admin_note && <div className="mt-1"><span className="text-muted-foreground">IT team note:</span> {r.min_quotes_override_admin_note}</div>}
                         </TableCell>
                       </TableRow>
                     ))}

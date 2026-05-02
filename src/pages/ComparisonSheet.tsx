@@ -736,7 +736,7 @@ export default function ComparisonSheetPage() {
       const currentApproved = aqCount ?? 0;
       setApprovedQuoteCount(currentApproved);
       if (currentApproved < 3 && overrideStatus !== "allowed") {
-        toast.error(`Kam se kam 3 quotes approve karo, ya IT head se override approval lo. Abhi ${currentApproved}/3 approved hain.`);
+        toast.error(`Kam se kam 3 quotes approve karo, ya IT team se override approval lo. Abhi ${currentApproved}/3 approved hain.`);
         setGenerating(false);
         return;
       }
@@ -805,7 +805,7 @@ export default function ComparisonSheetPage() {
       setOverrideStatus("requested");
       setOverrideRequestedAt(nowIso);
       setOverrideRequestOpen(false);
-      toast.success("Request submit ho gayi. IT head ko bata do.");
+      toast.success("Request submit ho gayi. IT team ko bata do.");
     } catch (e: any) {
       toast.error(e?.message ?? "Override request fail ho gayi");
     } finally {
@@ -2360,14 +2360,14 @@ Rules:
             {overrideStatus === "requested" && (
               <div className="text-xs text-yellow-900 bg-yellow-50 border border-yellow-300 rounded px-3 py-2 max-w-md text-left">
                 <div className="font-semibold mb-0.5">⏳ Override request submit ho gayi</div>
-                <div>IT head se approval ka wait karo.{overrideRequestedAt ? ` (Submitted: ${formatDateTime(overrideRequestedAt)})` : ""}</div>
+                <div>IT team se approval ka wait karo.{overrideRequestedAt ? ` (Submitted: ${formatDateTime(overrideRequestedAt)})` : ""}</div>
                 {overrideReason && <div className="mt-1 text-yellow-800/80">Reason: {overrideReason}</div>}
               </div>
             )}
             {overrideStatus === "allowed" && (
               <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-300 rounded px-3 py-2 max-w-md text-left">
                 <div className="font-semibold mb-0.5">✓ Override allowed</div>
-                <div>{overrideAllowedByName ?? "IT head"} ne allow kiya{overrideAllowedAt ? ` on ${formatDateTime(overrideAllowedAt)}` : ""}. Aap proceed kar sakte ho.</div>
+                <div>{overrideAllowedByName ?? "IT team"} ne allow kiya{overrideAllowedAt ? ` on ${formatDateTime(overrideAllowedAt)}` : ""}. Aap proceed kar sakte ho.</div>
                 {overrideAdminNote && <div className="mt-1 text-emerald-800/80">Note: {overrideAdminNote}</div>}
               </div>
             )}
@@ -2390,7 +2390,7 @@ Rules:
                 size="sm"
                 onClick={() => { setOverrideReason(""); setOverrideRequestOpen(true); }}
               >
-                Request Override from IT Head
+                Request Override from IT Team
               </Button>
             )}
           </CardContent>
@@ -2400,9 +2400,9 @@ Rules:
         <Dialog open={overrideRequestOpen} onOpenChange={(o) => { if (!overrideRequesting) setOverrideRequestOpen(o); }}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Request Override from IT Head</DialogTitle>
+              <DialogTitle>Request Override from IT Team</DialogTitle>
               <DialogDescription>
-                Sir se approval lene ke baad, IT head (Aniket) ko ye request bhejo. Reason mein likho ki 3 vendors kyun nahi mil rahe.
+                Sir se approval lene ke baad, IT team ko ye request bhejo. Reason mein likho ki 3 vendors kyun nahi mil rahe.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-2 py-2">
