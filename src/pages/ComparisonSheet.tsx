@@ -236,6 +236,14 @@ export default function ComparisonSheetPage() {
   const [loading, setLoading] = useState(true);
   const [sheet, setSheet] = useState<ComparisonSheetRow | null>(null);
   const [approvedQuoteCount, setApprovedQuoteCount] = useState<number>(0);
+  const [overrideStatus, setOverrideStatus] = useState<"none" | "requested" | "allowed" | "denied">("none");
+  const [overrideReason, setOverrideReason] = useState<string>("");
+  const [overrideRequestOpen, setOverrideRequestOpen] = useState(false);
+  const [overrideRequesting, setOverrideRequesting] = useState(false);
+  const [overrideRequestedAt, setOverrideRequestedAt] = useState<string | null>(null);
+  const [overrideAllowedByName, setOverrideAllowedByName] = useState<string | null>(null);
+  const [overrideAllowedAt, setOverrideAllowedAt] = useState<string | null>(null);
+  const [overrideAdminNote, setOverrideAdminNote] = useState<string | null>(null);
   const [rfq, setRfq] = useState<RfqRow | null>(null);
   const [existingPo, setExistingPo] = useState<{ id: string; po_number: string } | null>(null);
   const [prLineItems, setPrLineItems] = useState<PrLineItem[]>([]);
@@ -335,13 +343,29 @@ export default function ComparisonSheetPage() {
     try {
       const { data: rfqRow, error: rfqErr } = await supabase
         .from("cps_rfqs")
-        .select("id,rfq_number,title,pr_id")
+        .select("id,rfq_number,title,pr_id,min_quotes_override_status,min_quotes_override_reason,min_quotes_override_requested_at,min_quotes_override_allowed_by,min_quotes_override_allowed_at,min_quotes_override_admin_note")
         .eq("id", rfqId)
         .single();
       if (rfqErr) throw rfqErr;
 
       const prId = (rfqRow as RfqRow).pr_id;
       setRfq(rfqRow as RfqRow);
+
+      // Hydrate override state from the RFQ
+      const ovStatus = ((rfqRow as any).min_quotes_override_status ?? "none") as "none" | "requested" | "allowed" | "denied";
+      setOverrideStatus(ovStatus);
+      setOverrideReason((rfqRow as any).min_quotes_override_reason ?? "");
+      setOverrideRequestedAt((rfqRow as any).min_quotes_override_requested_at ?? null);
+      setOverrideAllowedAt((rfqRow as any).min_quotes_override_allowed_at ?? null);
+      setOverrideAdminNote((rfqRow as any).min_quotes_override_admin_note ?? null);
+      const allowedById = (rfqRow as any).min_quotes_override_allowed_by as string | null;
+      if (allowedById) {
+        const { data: allowedUser } = await supabase
+          .from("cps_users").select("name").eq("id", allowedById).maybeSingle();
+        setOverrideAllowedByName((allowedUser as any)?.name ?? null);
+      } else {
+        setOverrideAllowedByName(null);
+      }
 
       const { data: prRows, error: prErr } = await supabase
         .from("cps_pr_line_items")
@@ -383,6 +407,7 @@ export default function ComparisonSheetPage() {
           .eq("rfq_id", rfqId)
           .eq("parse_status", "approved");
         setApprovedQuoteCount(aqCount ?? 0);
+        // Override state was already hydrated above when we loaded rfqRow.
         setSheet(null);
         setSuppliers([]);
         setQuoteBySupplierId({});
@@ -702,6 +727,7 @@ export default function ComparisonSheetPage() {
       }
 
       // Hard gate: need at least 3 approved quotes before comparison can be generated
+      // — unless IT head has allowed an override for this RFQ.
       const { count: aqCount } = await supabase
         .from("cps_quotes")
         .select("id", { count: "exact", head: true })
@@ -709,8 +735,8 @@ export default function ComparisonSheetPage() {
         .eq("parse_status", "approved");
       const currentApproved = aqCount ?? 0;
       setApprovedQuoteCount(currentApproved);
-      if (currentApproved < 3) {
-        toast.error(`Kam se kam 3 quotes approve karo pehle. Abhi sirf ${currentApproved}/3 approved hain.`);
+      if (currentApproved < 3 && overrideStatus !== "allowed") {
+        toast.error(`Kam se kam 3 quotes approve karo, ya IT head se override approval lo. Abhi ${currentApproved}/3 approved hain.`);
         setGenerating(false);
         return;
       }
@@ -738,6 +764,52 @@ export default function ComparisonSheetPage() {
       toast.error(e?.message || "Failed to generate comparison sheet");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // Procurement submits a request asking the IT head to allow comparison
+  // generation with fewer than 3 approved quotes. Sir's verbal approval
+  // happens outside the system; this just records the request so Aniket
+  // can act on it from /admin/overrides.
+  const submitOverrideRequest = async () => {
+    if (!rfqId || !user || !rfq) return;
+    const reason = overrideReason.trim();
+    if (!reason) {
+      toast.error("Reason zaroori hai");
+      return;
+    }
+    setOverrideRequesting(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabase.from("cps_rfqs").update({
+        min_quotes_override_status: "requested",
+        min_quotes_override_reason: reason,
+        min_quotes_override_requested_by: user.id,
+        min_quotes_override_requested_at: nowIso,
+      }).eq("id", rfqId);
+      if (error) throw error;
+
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+        action_type: "RFQ_OVERRIDE_REQUESTED",
+        entity_type: "cps_rfqs",
+        entity_id: rfqId,
+        entity_number: rfq.rfq_number,
+        description: `Override requested for ${rfq.rfq_number}: ${reason}`,
+        severity: "info",
+        logged_at: nowIso,
+      });
+
+      setOverrideStatus("requested");
+      setOverrideRequestedAt(nowIso);
+      setOverrideRequestOpen(false);
+      toast.success("Request submit ho gayi. IT head ko bata do.");
+    } catch (e: any) {
+      toast.error(e?.message ?? "Override request fail ho gayi");
+    } finally {
+      setOverrideRequesting(false);
     }
   };
 
@@ -2278,16 +2350,79 @@ Rules:
                 {approvedQuoteCount}/3 quotes approved
               </span>
             </div>
-            {approvedQuoteCount < 3 && (
+            {approvedQuoteCount < 3 && overrideStatus !== "allowed" && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 max-w-xs">
                 Comparison sheet ke liye kam se kam <strong>3 quotes approve</strong> karne honge. Quotes page par jao aur baaki quotes review karo.
               </p>
             )}
-            <Button onClick={generateSheetIfMissing} disabled={generating || approvedQuoteCount < 3}>
+
+            {/* Override status banners */}
+            {overrideStatus === "requested" && (
+              <div className="text-xs text-yellow-900 bg-yellow-50 border border-yellow-300 rounded px-3 py-2 max-w-md text-left">
+                <div className="font-semibold mb-0.5">⏳ Override request submit ho gayi</div>
+                <div>IT head se approval ka wait karo.{overrideRequestedAt ? ` (Submitted: ${formatDateTime(overrideRequestedAt)})` : ""}</div>
+                {overrideReason && <div className="mt-1 text-yellow-800/80">Reason: {overrideReason}</div>}
+              </div>
+            )}
+            {overrideStatus === "allowed" && (
+              <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-300 rounded px-3 py-2 max-w-md text-left">
+                <div className="font-semibold mb-0.5">✓ Override allowed</div>
+                <div>{overrideAllowedByName ?? "IT head"} ne allow kiya{overrideAllowedAt ? ` on ${formatDateTime(overrideAllowedAt)}` : ""}. Aap proceed kar sakte ho.</div>
+                {overrideAdminNote && <div className="mt-1 text-emerald-800/80">Note: {overrideAdminNote}</div>}
+              </div>
+            )}
+            {overrideStatus === "denied" && (
+              <div className="text-xs text-red-900 bg-red-50 border border-red-300 rounded px-3 py-2 max-w-md text-left">
+                <div className="font-semibold mb-0.5">✗ Override denied</div>
+                <div>3 quotes procure karne honge.</div>
+                {overrideAdminNote && <div className="mt-1 text-red-800/80">Note: {overrideAdminNote}</div>}
+              </div>
+            )}
+
+            <Button onClick={generateSheetIfMissing} disabled={generating || (approvedQuoteCount < 3 && overrideStatus !== "allowed")}>
               {generating ? "Ban rahi hai..." : "Comparison Sheet Banao"}
             </Button>
+
+            {/* Request override button — only when blocked and not already requested/decided */}
+            {approvedQuoteCount < 3 && overrideStatus === "none" && canCreateRFQ && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { setOverrideReason(""); setOverrideRequestOpen(true); }}
+              >
+                Request Override from IT Head
+              </Button>
+            )}
           </CardContent>
         </Card>
+
+        {/* Override request dialog */}
+        <Dialog open={overrideRequestOpen} onOpenChange={(o) => { if (!overrideRequesting) setOverrideRequestOpen(o); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Request Override from IT Head</DialogTitle>
+              <DialogDescription>
+                Sir se approval lene ke baad, IT head (Aniket) ko ye request bhejo. Reason mein likho ki 3 vendors kyun nahi mil rahe.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <Label htmlFor="override-reason" className="text-xs">Reason</Label>
+              <Textarea
+                id="override-reason"
+                rows={4}
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+                placeholder="Example: Sirf Vendor X ke paas ye material hai. Baaki 4 vendors ko approach kiya, response nahi mila."
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOverrideRequestOpen(false)} disabled={overrideRequesting}>Cancel</Button>
+              <Button onClick={submitOverrideRequest} disabled={overrideRequesting || !overrideReason.trim()}>
+                {overrideRequesting ? "Submit ho rahi hai…" : "Submit Request"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }

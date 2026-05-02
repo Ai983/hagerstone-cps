@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy, ShieldCheck } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +19,7 @@ const NAV = [
   { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Items", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head","it_head"] },
   { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor","procurement_head","it_head","management"] },
+  { title: "Override Requests", url: "/admin/overrides", icon: ShieldCheck, roles: ["it_head"] },
 ];
 
 
