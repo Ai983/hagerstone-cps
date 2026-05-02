@@ -1061,8 +1061,8 @@ export default function RFQs() {
                       <TableCell className="text-muted-foreground">{supplierCountByRfqId[r.id] ?? 0}</TableCell>
                       <TableCell>
                         {total > 0 ? (
-                          <Badge className={`text-xs border-0 ${approved >= 2 ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
-                            {approved}/{total} reviewed
+                          <Badge className={`text-xs border-0 ${approved >= 3 ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+                            {approved}/3 approved
                           </Badge>
                         ) : (
                           <span className="text-muted-foreground text-xs">—</span>
@@ -1092,7 +1092,7 @@ export default function RFQs() {
                             Compare →
                           </Button>
                         ) : r.status === "comparison_ready" ? (
-                          <span className="text-xs text-amber-600">Awaiting Reviews ({approved}/{total})</span>
+                          <span className="text-xs text-amber-600">Awaiting Reviews ({approved}/3 approved)</span>
                         ) : ["closed", "negotiating", "approved"].includes(r.status) ? (
                           <Button variant="ghost" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
                             View Comparison
@@ -1151,8 +1151,8 @@ export default function RFQs() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-muted-foreground">{supplierCountByRfqId[r.id] ?? 0} suppliers</span>
                         {total > 0 && (
-                          <Badge className={`text-xs border-0 ${approved >= 2 ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
-                            {approved}/{total} reviewed
+                          <Badge className={`text-xs border-0 ${approved >= 3 ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+                            {approved}/3 approved
                           </Badge>
                         )}
                         <span className="text-xs text-muted-foreground">Due {formatIndianDateTime(r.deadline)}</span>

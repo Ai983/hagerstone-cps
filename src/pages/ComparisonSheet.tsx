@@ -235,6 +235,7 @@ export default function ComparisonSheetPage() {
 
   const [loading, setLoading] = useState(true);
   const [sheet, setSheet] = useState<ComparisonSheetRow | null>(null);
+  const [approvedQuoteCount, setApprovedQuoteCount] = useState<number>(0);
   const [rfq, setRfq] = useState<RfqRow | null>(null);
   const [existingPo, setExistingPo] = useState<{ id: string; po_number: string } | null>(null);
   const [prLineItems, setPrLineItems] = useState<PrLineItem[]>([]);
@@ -375,7 +376,13 @@ export default function ComparisonSheetPage() {
       }
 
       if (!sheetRow) {
-        // No sheet exists: show empty state.
+        // No sheet exists: fetch approved quote count so UI can show progress toward 3.
+        const { count: aqCount } = await supabase
+          .from("cps_quotes")
+          .select("id", { count: "exact", head: true })
+          .eq("rfq_id", rfqId)
+          .eq("parse_status", "approved");
+        setApprovedQuoteCount(aqCount ?? 0);
         setSheet(null);
         setSuppliers([]);
         setQuoteBySupplierId({});
@@ -691,6 +698,20 @@ export default function ComparisonSheetPage() {
         // Already exists — just refresh; no new row needed
         toast.success("Comparison Sheet loaded");
         await fetchAll();
+        return;
+      }
+
+      // Hard gate: need at least 3 approved quotes before comparison can be generated
+      const { count: aqCount } = await supabase
+        .from("cps_quotes")
+        .select("id", { count: "exact", head: true })
+        .eq("rfq_id", rfqId)
+        .eq("parse_status", "approved");
+      const currentApproved = aqCount ?? 0;
+      setApprovedQuoteCount(currentApproved);
+      if (currentApproved < 3) {
+        toast.error(`Kam se kam 3 quotes approve karo pehle. Abhi sirf ${currentApproved}/3 approved hain.`);
+        setGenerating(false);
         return;
       }
 
@@ -2207,7 +2228,20 @@ Rules:
               <Sparkles className="h-6 w-6 text-primary" />
             </div>
             <div className="text-muted-foreground">Abhi koi comparison sheet nahi bani hai.</div>
-            <Button onClick={generateSheetIfMissing} disabled={generating}>
+            <div className="flex items-center gap-2">
+              {[1, 2, 3].map((n) => (
+                <div key={n} className={`h-3 w-3 rounded-full border-2 ${approvedQuoteCount >= n ? "bg-emerald-500 border-emerald-500" : "bg-muted border-border"}`} />
+              ))}
+              <span className="text-sm font-medium ml-1">
+                {approvedQuoteCount}/3 quotes approved
+              </span>
+            </div>
+            {approvedQuoteCount < 3 && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 max-w-xs">
+                Comparison sheet ke liye kam se kam <strong>3 quotes approve</strong> karne honge. Quotes page par jao aur baaki quotes review karo.
+              </p>
+            )}
+            <Button onClick={generateSheetIfMissing} disabled={generating || approvedQuoteCount < 3}>
               {generating ? "Ban rahi hai..." : "Comparison Sheet Banao"}
             </Button>
           </CardContent>
