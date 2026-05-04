@@ -240,48 +240,58 @@ export default function Dashboard() {
         setPrImages(imageRows.slice(0, 12));
       }
 
-      // Low-stock items — pulls stock and compares to the project's BOQ planned quantity
+      // Low-stock items — pulls BOQ items and compares against current stock per project.
+      // Free-text BOQ keyed on (project_code, lower(item_description)).
       if (user?.id) {
-        let stockQuery = supabase
-          .from("cps_stock")
-          .select("id, project_code, current_qty, unit, item_id, cps_items(name)");
-        // For site users: restrict to project_codes on their own PRs
+        const norm = (s: string) => s.trim().toLowerCase();
+        let restrictedCodes: string[] | null = null;
         if (user.role === "requestor" || user.role === "site_receiver") {
           const { data: myProjects } = await supabase
             .from("cps_purchase_requisitions")
             .select("project_code")
             .eq("requested_by", user.id);
-          const codes = Array.from(new Set((myProjects ?? [])
+          restrictedCodes = Array.from(new Set((myProjects ?? [])
             .map((r: { project_code: string | null }) => r.project_code)
             .filter((c): c is string => !!c)));
-          if (codes.length === 0) {
+        }
+
+        let boqQ = supabase
+          .from("cps_project_boqs")
+          .select("project_code, item_description, unit, planned_quantity");
+        let stockQ = supabase
+          .from("cps_stock")
+          .select("project_code, item_description, current_qty");
+        if (restrictedCodes !== null) {
+          if (restrictedCodes.length === 0) {
             setLowStockItems([]);
           } else {
-            stockQuery = stockQuery.in("project_code", codes);
+            boqQ = boqQ.in("project_code", restrictedCodes);
+            stockQ = stockQ.in("project_code", restrictedCodes);
           }
         }
-        const { data: stockData } = await stockQuery;
-        // Pull BOQ planned quantities for these stock rows so we can flag low-stock vs plan
-        const { data: boqData } = await supabase
-          .from("cps_project_boqs")
-          .select("project_code, item_id, planned_quantity");
-        const boqByKey = new Map<string, number>();
-        (boqData ?? []).forEach((b: any) => boqByKey.set(`${b.project_code}::${b.item_id}`, Number(b.planned_quantity)));
 
-        const lowItems = ((stockData ?? []) as any[])
-          .map((s) => {
-            const planned = boqByKey.get(`${s.project_code}::${s.item_id}`) ?? null;
+        const [{ data: boqData }, { data: stockData }] = await Promise.all([boqQ, stockQ]);
+        const stockByKey = new Map<string, number>();
+        (stockData ?? []).forEach((s: any) => {
+          if (!s.project_code) return;
+          stockByKey.set(`${s.project_code}::${norm(s.item_description)}`, Number(s.current_qty));
+        });
+
+        const lowItems = ((boqData ?? []) as any[])
+          .map((b) => {
+            const key = `${b.project_code}::${norm(b.item_description)}`;
+            const current = stockByKey.get(key) ?? 0;
             return {
-              id: s.id,
-              project_site: s.project_code, // renamed conceptually — UI prop still called project_site
-              current_qty: Number(s.current_qty),
-              min_threshold: planned, // use planned qty as the low-stock reference
-              unit: s.unit,
-              item_name: s.cps_items?.name ?? "Unknown",
+              id: key,
+              project_site: b.project_code,
+              current_qty: current,
+              min_threshold: Number(b.planned_quantity),
+              unit: b.unit,
+              item_name: b.item_description,
             };
           })
-          .filter((s) => s.current_qty <= 0 || (s.min_threshold != null && s.current_qty < s.min_threshold))
-          .sort((a, b) => a.current_qty - b.current_qty)
+          .filter((s) => s.current_qty < s.min_threshold)
+          .sort((a, b) => (a.current_qty / Math.max(a.min_threshold, 1)) - (b.current_qty / Math.max(b.min_threshold, 1)))
           .slice(0, 8);
         setLowStockItems(lowItems);
       }

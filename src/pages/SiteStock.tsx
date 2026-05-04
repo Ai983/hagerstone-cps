@@ -15,25 +15,25 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Boxes, Plus, Edit2, Search } from "lucide-react";
 
-type ItemMaster = { id: string; name: string; unit: string | null; category: string | null };
-type BoqRow = { id: string; item_id: string; item_description: string; unit: string | null; planned_quantity: number; notes: string | null };
-type StockRow = { id: string; item_id: string; current_qty: number; unit: string | null; updated_at: string | null; last_movement_at: string | null };
+type BoqRow = { id: string; item_description: string; unit: string | null; planned_quantity: number | null; notes: string | null };
+type StockRow = { id: string; item_description: string; current_qty: number; unit: string | null; updated_at: string | null; last_movement_at: string | null };
 
 type UnifiedRow = {
-  item_id: string;
+  key: string;                    // lower(item_description)
   item_description: string;
   unit: string | null;
-  planned_qty: number | null;  // null → item is extra (not in BOQ)
+  planned_qty: number | null;     // null → item is extra (not in BOQ)
   current_qty: number;
   last_updated: string | null;
   stock_id: string | null;
   from_boq: boolean;
 };
 
+const norm = (s: string) => s.trim().toLowerCase();
+
 export default function SiteStock() {
   const { user } = useAuth();
   const [projects, setProjects] = useState<string[]>([]);
-  const [items, setItems] = useState<ItemMaster[]>([]);
   const [boq, setBoq] = useState<BoqRow[]>([]);
   const [stock, setStock] = useState<StockRow[]>([]);
   const [projectCode, setProjectCode] = useState<string>("");
@@ -47,14 +47,13 @@ export default function SiteStock() {
   const [saving, setSaving] = useState(false);
 
   const [addExtraOpen, setAddExtraOpen] = useState(false);
-  const [extraItemId, setExtraItemId] = useState("");
+  const [extraName, setExtraName] = useState("");
+  const [extraUnit, setExtraUnit] = useState("");
   const [extraQty, setExtraQty] = useState("");
   const [extraNotes, setExtraNotes] = useState("");
-  const [extraItemSearch, setExtraItemSearch] = useState("");
 
   useEffect(() => {
     void loadProjects();
-    void loadItems();
   }, []);
 
   useEffect(() => {
@@ -63,24 +62,16 @@ export default function SiteStock() {
   }, [projectCode]);
 
   const loadProjects = async () => {
-    const { data } = await supabase
-      .from("cps_purchase_requisitions")
-      .select("project_code")
-      .neq("project_code", null);
-    const unique = Array.from(new Set(((data ?? []) as Array<{ project_code: string | null }>)
-      .map((r) => (r.project_code ?? "").trim())
-      .filter(Boolean)))
-      .sort();
+    const [prRes, boqRes] = await Promise.all([
+      supabase.from("cps_purchase_requisitions").select("project_code").neq("project_code", null),
+      supabase.from("cps_project_boqs").select("project_code"),
+    ]);
+    const all = [
+      ...((prRes.data ?? []) as Array<{ project_code: string | null }>),
+      ...((boqRes.data ?? []) as Array<{ project_code: string | null }>),
+    ];
+    const unique = Array.from(new Set(all.map((r) => (r.project_code ?? "").trim()).filter(Boolean))).sort();
     setProjects(unique);
-  };
-
-  const loadItems = async () => {
-    const { data } = await supabase
-      .from("cps_items")
-      .select("id,name,unit,category")
-      .eq("active", true)
-      .order("name");
-    setItems((data ?? []) as ItemMaster[]);
   };
 
   const loadAll = async (code: string) => {
@@ -89,11 +80,11 @@ export default function SiteStock() {
       const [boqRes, stockRes] = await Promise.all([
         supabase
           .from("cps_project_boqs")
-          .select("id,item_id,item_description,unit,planned_quantity,notes")
+          .select("id,item_description,unit,planned_quantity,notes")
           .eq("project_code", code),
         supabase
           .from("cps_stock")
-          .select("id,item_id,current_qty,unit,updated_at,last_movement_at")
+          .select("id,item_description,current_qty,unit,updated_at,last_movement_at")
           .eq("project_code", code),
       ]);
       if (boqRes.error) throw boqRes.error;
@@ -107,42 +98,36 @@ export default function SiteStock() {
     }
   };
 
-  const itemsById = useMemo(() => {
-    const m = new Map<string, ItemMaster>();
-    items.forEach((i) => m.set(i.id, i));
-    return m;
-  }, [items]);
-
   const unified: UnifiedRow[] = useMemo(() => {
-    const stockByItem = new Map<string, StockRow>();
-    stock.forEach((s) => stockByItem.set(s.item_id, s));
+    const stockByKey = new Map<string, StockRow>();
+    stock.forEach((s) => stockByKey.set(norm(s.item_description), s));
 
     const rows: UnifiedRow[] = [];
     const seen = new Set<string>();
 
     boq.forEach((b) => {
-      const s = stockByItem.get(b.item_id);
-      const item = itemsById.get(b.item_id);
+      const k = norm(b.item_description);
+      const s = stockByKey.get(k);
       rows.push({
-        item_id: b.item_id,
-        item_description: b.item_description || item?.name || "—",
-        unit: b.unit || item?.unit || null,
-        planned_qty: Number(b.planned_quantity),
+        key: k,
+        item_description: b.item_description,
+        unit: b.unit ?? s?.unit ?? null,
+        planned_qty: b.planned_quantity != null ? Number(b.planned_quantity) : null,
         current_qty: s ? Number(s.current_qty) : 0,
         last_updated: s?.last_movement_at ?? s?.updated_at ?? null,
         stock_id: s?.id ?? null,
         from_boq: true,
       });
-      seen.add(b.item_id);
+      seen.add(k);
     });
 
     stock.forEach((s) => {
-      if (seen.has(s.item_id)) return;
-      const item = itemsById.get(s.item_id);
+      const k = norm(s.item_description);
+      if (seen.has(k)) return;
       rows.push({
-        item_id: s.item_id,
-        item_description: item?.name ?? "—",
-        unit: s.unit || item?.unit || null,
+        key: k,
+        item_description: s.item_description,
+        unit: s.unit ?? null,
         planned_qty: null,
         current_qty: Number(s.current_qty),
         last_updated: s.last_movement_at ?? s.updated_at ?? null,
@@ -155,7 +140,7 @@ export default function SiteStock() {
       if (a.from_boq !== b.from_boq) return a.from_boq ? -1 : 1;
       return a.item_description.localeCompare(b.item_description);
     });
-  }, [boq, stock, itemsById]);
+  }, [boq, stock]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -193,7 +178,8 @@ export default function SiteStock() {
           .from("cps_stock")
           .insert({
             project_code: projectCode,
-            item_id: updateRow.item_id,
+            item_id: null,
+            item_description: updateRow.item_description,
             unit: updateRow.unit,
             current_qty: qty,
             last_movement_at: new Date().toISOString(),
@@ -209,18 +195,20 @@ export default function SiteStock() {
         if (upErr) throw upErr;
       }
 
-      await supabase.from("cps_stock_movements").insert({
-        stock_id: stockId,
-        project_code: projectCode,
-        item_id: updateRow.item_id,
-        movement_type: diff >= 0 ? "in" : "out",
-        quantity: Math.abs(diff),
-        reference_type: "manual_update",
-        notes: updateNotes.trim() || null,
-        logged_by: user.id,
-        logged_by_name: user.name ?? user.email ?? null,
-        balance_after: qty,
-      } as any);
+      if (diff !== 0) {
+        await supabase.from("cps_stock_movements").insert({
+          stock_id: stockId,
+          project_code: projectCode,
+          item_id: null,
+          movement_type: diff >= 0 ? "in" : "out",
+          quantity: Math.abs(diff),
+          reference_type: "manual_update",
+          notes: updateNotes.trim() || null,
+          logged_by: user.id,
+          logged_by_name: user.name ?? user.email ?? null,
+          balance_after: qty,
+        } as any);
+      }
 
       toast.success("Stock updated");
       setUpdateOpen(false);
@@ -232,23 +220,18 @@ export default function SiteStock() {
     }
   };
 
-  const filteredExtraItems = useMemo(() => {
-    const q = extraItemSearch.trim().toLowerCase();
-    const existing = new Set(unified.map((u) => u.item_id));
-    const available = items.filter((i) => !existing.has(i.id));
-    if (!q) return available.slice(0, 100);
-    return available.filter((i) => i.name.toLowerCase().includes(q)
-      || (i.category ?? "").toLowerCase().includes(q)).slice(0, 200);
-  }, [items, unified, extraItemSearch]);
-
   const saveExtra = async () => {
     if (!user || !projectCode) return;
-    if (!extraItemId) { toast.error("Select an item"); return; }
+    const name = extraName.trim();
+    if (!name) { toast.error("Item name daalo"); return; }
     const qty = parseFloat(extraQty);
-    if (!Number.isFinite(qty) || qty < 0) { toast.error("Enter a valid quantity"); return; }
+    if (!Number.isFinite(qty) || qty < 0) { toast.error("Sahi quantity daalo"); return; }
 
-    const item = itemsById.get(extraItemId);
-    if (!item) { toast.error("Item not found"); return; }
+    // Prevent duplicate of an existing BOQ or stock entry (case-insensitive).
+    if (unified.some((u) => u.key === norm(name))) {
+      toast.error("Yeh item to already list mein hai — Update use karo");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -256,33 +239,39 @@ export default function SiteStock() {
         .from("cps_stock")
         .insert({
           project_code: projectCode,
-          item_id: extraItemId,
-          unit: item.unit,
+          item_id: null,
+          item_description: name,
+          unit: extraUnit.trim() || null,
           current_qty: qty,
           last_movement_at: new Date().toISOString(),
         } as any)
         .select("id").single();
-      if (insErr) throw insErr;
+      if (insErr) {
+        if ((insErr as any).code === "23505") { toast.error("Same naam ka stock row already hai"); return; }
+        throw insErr;
+      }
 
-      await supabase.from("cps_stock_movements").insert({
-        stock_id: (inserted as any).id,
-        project_code: projectCode,
-        item_id: extraItemId,
-        movement_type: "in",
-        quantity: qty,
-        reference_type: "extra_item",
-        notes: extraNotes.trim() || "Extra item (not in BOQ)",
-        logged_by: user.id,
-        logged_by_name: user.name ?? user.email ?? null,
-        balance_after: qty,
-      } as any);
+      if (qty > 0) {
+        await supabase.from("cps_stock_movements").insert({
+          stock_id: (inserted as any).id,
+          project_code: projectCode,
+          item_id: null,
+          movement_type: "in",
+          quantity: qty,
+          reference_type: "extra_item",
+          notes: extraNotes.trim() || "Extra item (not in BOQ)",
+          logged_by: user.id,
+          logged_by_name: user.name ?? user.email ?? null,
+          balance_after: qty,
+        } as any);
+      }
 
       toast.success("Extra item added to stock");
       setAddExtraOpen(false);
-      setExtraItemId("");
+      setExtraName("");
+      setExtraUnit("");
       setExtraQty("");
       setExtraNotes("");
-      setExtraItemSearch("");
       await loadAll(projectCode);
     } catch (e: any) {
       toast.error(e?.message || "Failed to add item");
@@ -359,14 +348,15 @@ export default function SiteStock() {
                 : "No items match your search"}
             </CardContent></Card>
           ) : (
-            filtered.map((r) => {
+            filtered.map((r, idx) => {
               const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
               return (
-                <Card key={r.item_id} className={!r.from_boq ? "border-amber-300 bg-amber-50/50" : undefined}>
+                <Card key={r.key} className={!r.from_boq ? "border-amber-300 bg-amber-50/50" : undefined}>
                   <CardContent className="p-3 space-y-1.5">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-mono text-muted-foreground bg-muted/40 rounded px-1">#{idx + 1}</span>
                           <span className="font-medium text-sm">{r.item_description}</span>
                           {!r.from_boq && <Badge variant="outline" className="text-[9px] bg-amber-100 text-amber-800 border-amber-300 h-4 px-1">EXTRA</Badge>}
                         </div>
@@ -405,35 +395,37 @@ export default function SiteStock() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Unit</TableHead>
-                  <TableHead className="text-right">Planned</TableHead>
-                  <TableHead className="text-right">Current</TableHead>
-                  <TableHead className="text-right">Diff</TableHead>
-                  <TableHead>Last Updated</TableHead>
-                  <TableHead className="w-24 text-right">Actions</TableHead>
+                  <TableHead className="w-14">Sr. No</TableHead>
+                  <TableHead>Item Ka Naam</TableHead>
+                  <TableHead className="w-24">Unit</TableHead>
+                  <TableHead className="w-28 text-right">Planned</TableHead>
+                  <TableHead className="w-28 text-right">Current</TableHead>
+                  <TableHead className="w-24 text-right">Diff</TableHead>
+                  <TableHead className="w-32">Last Updated</TableHead>
+                  <TableHead className="w-24 text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   [1, 2, 3].map((i) => (
                     <TableRow key={i}>
-                      {[1, 2, 3, 4, 5, 6, 7].map((j) => <TableCell key={j}><Skeleton className="h-4 w-20" /></TableCell>)}
+                      {[1, 2, 3, 4, 5, 6, 7, 8].map((j) => <TableCell key={j}><Skeleton className="h-4 w-20" /></TableCell>)}
                     </TableRow>
                   ))
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
                       {unified.length === 0
-                        ? "No BOQ yet for this project — ask procurement to set it up, or add items as extras."
-                        : "No items match your search"}
+                        ? "Is project ke liye abhi koi BOQ nahi hai — procurement se kaho ya extra item add karo."
+                        : "Search se kuch nahi mila"}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filtered.map((r) => {
+                  filtered.map((r, idx) => {
                     const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
                     return (
-                      <TableRow key={r.item_id} className={!r.from_boq ? "bg-amber-50/50" : undefined}>
+                      <TableRow key={r.key} className={!r.from_boq ? "bg-amber-50/50" : undefined}>
+                        <TableCell className="text-muted-foreground font-mono text-xs">{idx + 1}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <span className="font-medium">{r.item_description}</span>
@@ -510,28 +502,23 @@ export default function SiteStock() {
               This item is not in the project BOQ. It will show up as <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300 mx-1">EXTRA</Badge> in the stock list.
             </p>
             <div className="space-y-1">
-              <Label className="text-xs">Item</Label>
-              <Input placeholder="Search items…" value={extraItemSearch} onChange={(e) => setExtraItemSearch(e.target.value)} />
-              <div className="border rounded-md max-h-40 overflow-y-auto">
-                {filteredExtraItems.map((i) => (
-                  <button
-                    key={i.id}
-                    type="button"
-                    onClick={() => { setExtraItemId(i.id); setExtraItemSearch(i.name); }}
-                    className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/50 ${extraItemId === i.id ? "bg-primary/10" : ""}`}
-                  >
-                    <span className="font-medium">{i.name}</span>
-                    {i.unit && <span className="text-muted-foreground"> · {i.unit}</span>}
-                  </button>
-                ))}
-                {filteredExtraItems.length === 0 && (
-                  <p className="text-xs text-muted-foreground px-3 py-2">No items match</p>
-                )}
-              </div>
+              <Label className="text-xs">Item Name *</Label>
+              <Input
+                value={extraName}
+                onChange={(e) => setExtraName(e.target.value)}
+                placeholder="e.g. Wooden flooring, Cat6 cable"
+                autoFocus
+              />
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Current Qty *</Label>
-              <Input type="number" min={0} step="0.01" value={extraQty} onChange={(e) => setExtraQty(e.target.value)} />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Unit</Label>
+                <Input value={extraUnit} onChange={(e) => setExtraUnit(e.target.value)} placeholder="pcs, box, mtr…" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Current Qty *</Label>
+                <Input type="number" min={0} step="0.01" value={extraQty} onChange={(e) => setExtraQty(e.target.value)} />
+              </div>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Notes</Label>

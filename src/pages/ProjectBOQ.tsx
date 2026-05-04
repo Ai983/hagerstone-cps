@@ -13,78 +13,95 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Search, Trash2, Edit2, Package } from "lucide-react";
+import { Plus, Search, Trash2, Edit2, Package, Check, X } from "lucide-react";
 
-type ItemMaster = { id: string; name: string; unit: string | null; category: string | null };
 type BoqRow = {
   id: string;
   project_code: string;
-  item_id: string;
-  item_description: string | null;
+  item_id: string | null;
+  item_description: string;
   unit: string | null;
-  planned_quantity: number;
+  planned_quantity: number | null;
   notes: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
 
+type StockEntry = { id: string; current_qty: number; unit: string | null };
+
+const norm = (s: string) => s.trim().toLowerCase();
+
 export default function ProjectBOQ() {
   const { user } = useAuth();
   const [projects, setProjects] = useState<string[]>([]);
-  const [items, setItems] = useState<ItemMaster[]>([]);
   const [boqRows, setBoqRows] = useState<BoqRow[]>([]);
+  const [stockMap, setStockMap] = useState<Map<string, StockEntry>>(new Map());
   const [loading, setLoading] = useState(false);
   const [projectCode, setProjectCode] = useState<string>("");
   const [search, setSearch] = useState("");
 
+  // Add-new dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingRow, setEditingRow] = useState<BoqRow | null>(null);
-  const [formItemId, setFormItemId] = useState<string>("");
+  const [formItemName, setFormItemName] = useState<string>("");
+  const [formUnit, setFormUnit] = useState<string>("");
   const [formQty, setFormQty] = useState<string>("");
+  const [formStock, setFormStock] = useState<string>("");
   const [formNotes, setFormNotes] = useState<string>("");
-  const [itemSearch, setItemSearch] = useState<string>("");
   const [saving, setSaving] = useState(false);
+
+  // Inline-edit state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editUnit, setEditUnit] = useState("");
+  const [editQty, setEditQty] = useState("");
+  const [editStock, setEditStock] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   useEffect(() => {
     void loadProjects();
-    void loadItems();
   }, []);
 
   useEffect(() => {
     if (projectCode) void loadBoq(projectCode);
-    else setBoqRows([]);
+    else { setBoqRows([]); setStockMap(new Map()); }
+    setEditingId(null);
   }, [projectCode]);
 
   const loadProjects = async () => {
-    const { data } = await supabase
-      .from("cps_purchase_requisitions")
-      .select("project_code")
-      .neq("project_code", null);
-    const unique = Array.from(new Set(((data ?? []) as Array<{ project_code: string | null }>)
-      .map((r) => (r.project_code ?? "").trim())
-      .filter(Boolean)))
-      .sort();
+    const [prRes, boqRes] = await Promise.all([
+      supabase.from("cps_purchase_requisitions").select("project_code").neq("project_code", null),
+      supabase.from("cps_project_boqs").select("project_code"),
+    ]);
+    const all = [
+      ...((prRes.data ?? []) as Array<{ project_code: string | null }>),
+      ...((boqRes.data ?? []) as Array<{ project_code: string | null }>),
+    ];
+    const unique = Array.from(new Set(all.map((r) => (r.project_code ?? "").trim()).filter(Boolean))).sort();
     setProjects(unique);
-  };
-
-  const loadItems = async () => {
-    const { data } = await supabase
-      .from("cps_items")
-      .select("id,name,unit,category")
-      .eq("active", true)
-      .order("name");
-    setItems((data ?? []) as ItemMaster[]);
   };
 
   const loadBoq = async (code: string) => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("cps_project_boqs")
-      .select("id,project_code,item_id,item_description,unit,planned_quantity,notes,created_at,updated_at")
-      .eq("project_code", code)
-      .order("item_description", { ascending: true });
-    if (error) toast.error(error.message);
-    setBoqRows((data ?? []) as BoqRow[]);
+    const [boqRes, stockRes] = await Promise.all([
+      supabase
+        .from("cps_project_boqs")
+        .select("id,project_code,item_id,item_description,unit,planned_quantity,notes,created_at,updated_at")
+        .eq("project_code", code)
+        .order("item_description", { ascending: true }),
+      supabase
+        .from("cps_stock")
+        .select("id,item_description,current_qty,unit")
+        .eq("project_code", code),
+    ]);
+    if (boqRes.error) toast.error(boqRes.error.message);
+    if (stockRes.error) toast.error(stockRes.error.message);
+    setBoqRows((boqRes.data ?? []) as BoqRow[]);
+    const m = new Map<string, StockEntry>();
+    (stockRes.data ?? []).forEach((s: any) => {
+      m.set(norm(s.item_description), { id: s.id, current_qty: Number(s.current_qty), unit: s.unit });
+    });
+    setStockMap(m);
     setLoading(false);
   };
 
@@ -92,96 +109,229 @@ export default function ProjectBOQ() {
     const q = search.trim().toLowerCase();
     if (!q) return boqRows;
     return boqRows.filter((r) =>
-      (r.item_description ?? "").toLowerCase().includes(q)
+      r.item_description.toLowerCase().includes(q)
       || (r.notes ?? "").toLowerCase().includes(q));
   }, [boqRows, search]);
 
-  const filteredItems = useMemo(() => {
-    const q = itemSearch.trim().toLowerCase();
-    if (!q) return items.slice(0, 100);
-    return items.filter((i) => i.name.toLowerCase().includes(q)
-      || (i.category ?? "").toLowerCase().includes(q)).slice(0, 200);
-  }, [items, itemSearch]);
-
-  const itemsById = useMemo(() => {
-    const m = new Map<string, ItemMaster>();
-    items.forEach((i) => m.set(i.id, i));
-    return m;
-  }, [items]);
+  const getExisting = (desc: string) => stockMap.get(norm(desc))?.current_qty ?? null;
 
   const openAdd = () => {
-    setEditingRow(null);
-    setFormItemId("");
+    setFormItemName("");
+    setFormUnit("");
     setFormQty("");
+    setFormStock("");
     setFormNotes("");
-    setItemSearch("");
     setDialogOpen(true);
   };
 
-  const openEdit = (row: BoqRow) => {
-    setEditingRow(row);
-    setFormItemId(row.item_id);
-    setFormQty(String(row.planned_quantity));
-    setFormNotes(row.notes ?? "");
-    setItemSearch("");
-    setDialogOpen(true);
-  };
-
-  const save = async () => {
+  const saveAdd = async () => {
     if (!user || !projectCode) return;
-    if (!formItemId) { toast.error("Select an item"); return; }
-    const qty = parseFloat(formQty);
-    if (!Number.isFinite(qty) || qty < 0) { toast.error("Enter a valid quantity"); return; }
-
-    const item = itemsById.get(formItemId);
-    if (!item) { toast.error("Item not found"); return; }
+    const name = formItemName.trim();
+    if (!name) { toast.error("Item ka naam daalo"); return; }
+    let plannedQty: number | null = null;
+    if (formQty.trim()) {
+      plannedQty = parseFloat(formQty);
+      if (!Number.isFinite(plannedQty) || plannedQty < 0) { toast.error("Sahi planned qty daalo (ya khaali chhodo)"); return; }
+    }
+    let stockQty: number | null = null;
+    if (formStock.trim()) {
+      stockQty = parseFloat(formStock);
+      if (!Number.isFinite(stockQty) || stockQty < 0) { toast.error("Sahi existing qty daalo (ya khaali chhodo)"); return; }
+    }
 
     setSaving(true);
     try {
-      if (editingRow) {
-        const { error } = await supabase
-          .from("cps_project_boqs")
-          .update({
-            planned_quantity: qty,
-            notes: formNotes.trim() || null,
-            item_description: item.name,
-            unit: item.unit,
-            updated_at: new Date().toISOString(),
-          } as any)
-          .eq("id", editingRow.id);
-        if (error) throw error;
-        toast.success("BOQ item updated");
-      } else {
-        const { error } = await supabase.from("cps_project_boqs").insert({
-          project_code: projectCode,
-          item_id: formItemId,
-          item_description: item.name,
-          unit: item.unit,
-          planned_quantity: qty,
-          notes: formNotes.trim() || null,
-          created_by: user.id,
-        } as any);
-        if (error) {
-          if (error.code === "23505") toast.error("This item is already in the BOQ for this project");
-          else throw error;
-          return;
-        }
-        toast.success("Added to BOQ");
+      const { error: boqErr } = await supabase.from("cps_project_boqs").insert({
+        project_code: projectCode,
+        item_id: null,
+        item_description: name,
+        unit: formUnit.trim() || null,
+        planned_quantity: plannedQty,
+        notes: formNotes.trim() || null,
+        created_by: user.id,
+      } as any);
+      if (boqErr) {
+        if ((boqErr as any).code === "23505") { toast.error("Is naam ka item already BOQ mein hai"); return; }
+        throw boqErr;
       }
+
+      if (stockQty != null) {
+        const { data: stockInserted, error: stockErr } = await supabase
+          .from("cps_stock")
+          .insert({
+            project_code: projectCode,
+            item_id: null,
+            item_description: name,
+            unit: formUnit.trim() || null,
+            current_qty: stockQty,
+            last_movement_at: new Date().toISOString(),
+          } as any)
+          .select("id").single();
+        if (stockErr) {
+          toast.error("BOQ add hua, par stock save fail: " + (stockErr as any).message);
+        } else if (stockQty > 0) {
+          await supabase.from("cps_stock_movements").insert({
+            stock_id: (stockInserted as any).id,
+            project_code: projectCode,
+            item_id: null,
+            movement_type: "in",
+            quantity: stockQty,
+            reference_type: "opening_stock",
+            notes: "Opening stock entry from BOQ page",
+            logged_by: user.id,
+            logged_by_name: user.name ?? user.email ?? null,
+            balance_after: stockQty,
+          } as any);
+        }
+      }
+
+      toast.success("BOQ mein add ho gaya");
       setDialogOpen(false);
       await loadBoq(projectCode);
     } catch (e: any) {
-      toast.error(e?.message || "Save failed");
+      toast.error(e?.message || "Save fail ho gaya");
     } finally {
       setSaving(false);
     }
   };
 
+  const startEdit = (row: BoqRow) => {
+    setEditingId(row.id);
+    setEditName(row.item_description);
+    setEditUnit(row.unit ?? "");
+    setEditQty(row.planned_quantity != null ? String(row.planned_quantity) : "");
+    const ex = getExisting(row.item_description);
+    setEditStock(ex != null ? String(ex) : "");
+    setEditNotes(row.notes ?? "");
+  };
+
+  const cancelEdit = () => setEditingId(null);
+
+  const saveEdit = async () => {
+    if (!user || !editingId || !projectCode) return;
+    const oldRow = boqRows.find((r) => r.id === editingId);
+    if (!oldRow) return;
+
+    const name = editName.trim();
+    if (!name) { toast.error("Item ka naam daalo"); return; }
+    let plannedQty: number | null = null;
+    if (editQty.trim()) {
+      plannedQty = parseFloat(editQty);
+      if (!Number.isFinite(plannedQty) || plannedQty < 0) { toast.error("Sahi planned qty daalo (ya khaali chhodo)"); return; }
+    }
+    let stockQty: number | null = null;
+    if (editStock.trim()) {
+      stockQty = parseFloat(editStock);
+      if (!Number.isFinite(stockQty) || stockQty < 0) { toast.error("Sahi existing qty daalo (ya khaali chhodo)"); return; }
+    }
+
+    setEditSaving(true);
+    try {
+      // 1. Update BOQ row
+      const { error: boqErr } = await supabase
+        .from("cps_project_boqs")
+        .update({
+          item_description: name,
+          unit: editUnit.trim() || null,
+          planned_quantity: plannedQty,
+          notes: editNotes.trim() || null,
+          updated_at: new Date().toISOString(),
+        } as any)
+        .eq("id", editingId);
+      if (boqErr) {
+        if ((boqErr as any).code === "23505") { toast.error("Is naam ka item already BOQ mein hai"); return; }
+        throw boqErr;
+      }
+
+      // 2. Sync stock row by old item_description (since stock is keyed on description)
+      const oldStock = stockMap.get(norm(oldRow.item_description));
+      const newUnit = editUnit.trim() || null;
+
+      if (oldStock) {
+        const stockUpdates: any = {};
+        if (oldRow.item_description !== name) stockUpdates.item_description = name;
+        if (oldStock.unit !== newUnit) stockUpdates.unit = newUnit;
+        const qtyChanged = stockQty != null && stockQty !== oldStock.current_qty;
+        if (qtyChanged) {
+          stockUpdates.current_qty = stockQty;
+          stockUpdates.last_movement_at = new Date().toISOString();
+        }
+        if (Object.keys(stockUpdates).length > 0) {
+          stockUpdates.updated_at = new Date().toISOString();
+          const { error: stockErr } = await supabase
+            .from("cps_stock")
+            .update(stockUpdates)
+            .eq("id", oldStock.id);
+          if (stockErr) {
+            if ((stockErr as any).code === "23505") {
+              toast.error("Is naam ka stock already mojood hai — manually merge karo /stock par");
+            } else {
+              throw stockErr;
+            }
+          } else if (qtyChanged && stockQty != null) {
+            const diff = stockQty - oldStock.current_qty;
+            if (diff !== 0) {
+              await supabase.from("cps_stock_movements").insert({
+                stock_id: oldStock.id,
+                project_code: projectCode,
+                item_id: null,
+                movement_type: diff >= 0 ? "in" : "out",
+                quantity: Math.abs(diff),
+                reference_type: "manual_update",
+                notes: "Stock update from BOQ page",
+                logged_by: user.id,
+                logged_by_name: user.name ?? user.email ?? null,
+                balance_after: stockQty,
+              } as any);
+            }
+          }
+        }
+      } else if (stockQty != null) {
+        // No stock row yet — insert one
+        const { data: inserted, error: insErr } = await supabase
+          .from("cps_stock")
+          .insert({
+            project_code: projectCode,
+            item_id: null,
+            item_description: name,
+            unit: newUnit,
+            current_qty: stockQty,
+            last_movement_at: new Date().toISOString(),
+          } as any)
+          .select("id").single();
+        if (insErr) {
+          toast.error("Stock save fail: " + (insErr as any).message);
+        } else if (stockQty > 0) {
+          await supabase.from("cps_stock_movements").insert({
+            stock_id: (inserted as any).id,
+            project_code: projectCode,
+            item_id: null,
+            movement_type: "in",
+            quantity: stockQty,
+            reference_type: "opening_stock",
+            notes: "Opening stock from BOQ page",
+            logged_by: user.id,
+            logged_by_name: user.name ?? user.email ?? null,
+            balance_after: stockQty,
+          } as any);
+        }
+      }
+
+      toast.success("Update ho gaya");
+      setEditingId(null);
+      await loadBoq(projectCode);
+    } catch (e: any) {
+      toast.error(e?.message || "Save fail ho gaya");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   const remove = async (row: BoqRow) => {
-    if (!confirm(`Remove "${row.item_description}" from BOQ?`)) return;
+    if (!confirm(`"${row.item_description}" ko BOQ se hata dein? (Stock row tab bhi rahega — alag se /stock par delete karo)`)) return;
     const { error } = await supabase.from("cps_project_boqs").delete().eq("id", row.id);
     if (error) { toast.error(error.message); return; }
-    toast.success("Removed from BOQ");
+    toast.success("Hata diya");
     await loadBoq(projectCode);
   };
 
@@ -191,7 +341,7 @@ export default function ProjectBOQ() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">Project BOQ</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Har project ke liye BOQ items add karo — site team isi list ke hisab se stock update karega.
+            Har project ke liye BOQ items + existing stock yahan dikhta hai. Pencil click karke seedha row mein edit karo. Planned Qty optional hai.
           </p>
         </div>
       </div>
@@ -229,15 +379,17 @@ export default function ProjectBOQ() {
         </Card>
       ) : (
         <Card>
-          <CardContent className="p-0">
+          <CardContent className="p-0 overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Unit</TableHead>
-                  <TableHead className="text-right">Planned Qty</TableHead>
-                  <TableHead>Notes</TableHead>
-                  <TableHead className="w-24 text-right">Actions</TableHead>
+                  <TableHead className="w-14">Sr. No</TableHead>
+                  <TableHead>Item Ka Naam</TableHead>
+                  <TableHead className="w-24">Unit</TableHead>
+                  <TableHead className="w-32 text-right">Planned Qty</TableHead>
+                  <TableHead className="w-32 text-right">Existing Qty</TableHead>
+                  <TableHead>Remarks</TableHead>
+                  <TableHead className="w-28 text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -245,35 +397,111 @@ export default function ProjectBOQ() {
                   <>
                     {[1, 2, 3].map((i) => (
                       <TableRow key={i}>
-                        {[1, 2, 3, 4, 5].map((j) => <TableCell key={j}><Skeleton className="h-4 w-24" /></TableCell>)}
+                        {[1, 2, 3, 4, 5, 6, 7].map((j) => <TableCell key={j}><Skeleton className="h-4 w-24" /></TableCell>)}
                       </TableRow>
                     ))}
                   </>
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-10 text-muted-foreground">
-                      {boqRows.length === 0 ? "No BOQ items yet for this project" : "No items match your search"}
+                    <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">
+                      {boqRows.length === 0 ? "Is project ke liye abhi koi BOQ items nahi hain" : "Search se kuch nahi mila"}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filtered.map((r) => (
-                    <TableRow key={r.id}>
-                      <TableCell className="font-medium">{r.item_description ?? "—"}</TableCell>
-                      <TableCell className="text-muted-foreground">{r.unit ?? "—"}</TableCell>
-                      <TableCell className="text-right font-mono">{Number(r.planned_quantity).toLocaleString("en-IN")}</TableCell>
-                      <TableCell className="text-muted-foreground text-xs max-w-xs truncate">{r.notes ?? "—"}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button variant="ghost" size="sm" onClick={() => openEdit(r)} title="Edit">
-                            <Edit2 className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => remove(r)} title="Remove" className="text-destructive hover:bg-destructive/10">
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
+                  filtered.map((r, idx) => {
+                    const isEdit = editingId === r.id;
+                    const existing = getExisting(r.item_description);
+                    return (
+                      <TableRow key={r.id} className={isEdit ? "bg-amber-50/40" : undefined}>
+                        <TableCell className="text-muted-foreground font-mono text-xs">{idx + 1}</TableCell>
+
+                        <TableCell className="font-medium">
+                          {isEdit ? (
+                            <Input
+                              value={editName}
+                              onChange={(e) => setEditName(e.target.value)}
+                              className="h-8"
+                              autoFocus
+                            />
+                          ) : r.item_description}
+                        </TableCell>
+
+                        <TableCell className="text-muted-foreground">
+                          {isEdit ? (
+                            <Input
+                              value={editUnit}
+                              onChange={(e) => setEditUnit(e.target.value)}
+                              className="h-8"
+                              placeholder="pcs, box…"
+                            />
+                          ) : (r.unit ?? "—")}
+                        </TableCell>
+
+                        <TableCell className="text-right font-mono">
+                          {isEdit ? (
+                            <Input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={editQty}
+                              onChange={(e) => setEditQty(e.target.value)}
+                              className="h-8 text-right"
+                              placeholder="—"
+                            />
+                          ) : (r.planned_quantity != null ? Number(r.planned_quantity).toLocaleString("en-IN") : "—")}
+                        </TableCell>
+
+                        <TableCell className="text-right font-mono font-semibold">
+                          {isEdit ? (
+                            <Input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={editStock}
+                              onChange={(e) => setEditStock(e.target.value)}
+                              className="h-8 text-right"
+                              placeholder="—"
+                            />
+                          ) : (existing != null ? Number(existing).toLocaleString("en-IN") : "—")}
+                        </TableCell>
+
+                        <TableCell className="text-muted-foreground text-xs max-w-xs">
+                          {isEdit ? (
+                            <Input
+                              value={editNotes}
+                              onChange={(e) => setEditNotes(e.target.value)}
+                              className="h-8"
+                              placeholder="Optional"
+                            />
+                          ) : (
+                            <span className="truncate block">{r.notes ?? "—"}</span>
+                          )}
+                        </TableCell>
+
+                        <TableCell className="text-right">
+                          {isEdit ? (
+                            <div className="flex items-center justify-end gap-1">
+                              <Button variant="ghost" size="sm" onClick={saveEdit} disabled={editSaving} title="Save" className="text-green-700 hover:bg-green-100">
+                                <Check className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={editSaving} title="Cancel">
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-end gap-1">
+                              <Button variant="ghost" size="sm" onClick={() => startEdit(r)} title="Edit" disabled={editingId !== null}>
+                                <Edit2 className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={() => remove(r)} title="Remove" disabled={editingId !== null} className="text-destructive hover:bg-destructive/10">
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>
@@ -284,64 +512,53 @@ export default function ProjectBOQ() {
       {boqRows.length > 0 && (
         <div className="text-xs text-muted-foreground">
           <Badge variant="outline" className="mr-2">{boqRows.length}</Badge>
-          BOQ items defined for <span className="font-semibold text-foreground">{projectCode}</span>
+          BOQ items <span className="font-semibold text-foreground">{projectCode}</span> ke liye
         </div>
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{editingRow ? "Edit BOQ Item" : "Add Item to BOQ"}</DialogTitle>
+            <DialogTitle>Naya Item BOQ Mein Add Karo</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
-            {!editingRow && (
-              <div className="space-y-1">
-                <Label className="text-xs">Item</Label>
-                <Input
-                  placeholder="Search items…"
-                  value={itemSearch}
-                  onChange={(e) => setItemSearch(e.target.value)}
-                />
-                <div className="border rounded-md max-h-48 overflow-y-auto">
-                  {filteredItems.map((i) => (
-                    <button
-                      key={i.id}
-                      type="button"
-                      onClick={() => { setFormItemId(i.id); setItemSearch(i.name); }}
-                      className={`w-full text-left px-3 py-1.5 text-sm hover:bg-muted/50 ${formItemId === i.id ? "bg-primary/10" : ""}`}
-                    >
-                      <span className="font-medium">{i.name}</span>
-                      {i.unit && <span className="text-muted-foreground"> · {i.unit}</span>}
-                      {i.category && <span className="text-xs text-muted-foreground block">{i.category}</span>}
-                    </button>
-                  ))}
-                  {filteredItems.length === 0 && (
-                    <p className="text-xs text-muted-foreground px-3 py-2">No items match</p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {editingRow && (
-              <div className="rounded-md bg-muted/30 p-2 text-sm">
-                <div className="font-medium">{editingRow.item_description}</div>
-                <div className="text-xs text-muted-foreground">{editingRow.unit ?? "—"}</div>
-              </div>
-            )}
-
             <div className="space-y-1">
-              <Label className="text-xs">Planned Quantity *</Label>
-              <Input type="number" min={0} step="0.01" value={formQty} onChange={(e) => setFormQty(e.target.value)} placeholder="e.g. 100" />
+              <Label className="text-xs">Item Ka Naam *</Label>
+              <Input
+                value={formItemName}
+                onChange={(e) => setFormItemName(e.target.value)}
+                placeholder="e.g. Wooden flooring, Cat6 cable, Cement"
+                autoFocus
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Unit</Label>
+                <Input
+                  value={formUnit}
+                  onChange={(e) => setFormUnit(e.target.value)}
+                  placeholder="pcs, box…"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Planned Qty</Label>
+                <Input type="number" min={0} step="0.01" value={formQty} onChange={(e) => setFormQty(e.target.value)} placeholder="optional" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Existing Qty</Label>
+                <Input type="number" min={0} step="0.01" value={formStock} onChange={(e) => setFormStock(e.target.value)} placeholder="optional" />
+              </div>
             </div>
 
             <div className="space-y-1">
-              <Label className="text-xs">Notes</Label>
+              <Label className="text-xs">Remarks</Label>
               <Textarea value={formNotes} onChange={(e) => setFormNotes(e.target.value)} rows={2} placeholder="Optional" />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={save} disabled={saving}>{saving ? "Saving…" : editingRow ? "Update" : "Add"}</Button>
+            <Button onClick={saveAdd} disabled={saving}>{saving ? "Save ho raha…" : "Add Karo"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

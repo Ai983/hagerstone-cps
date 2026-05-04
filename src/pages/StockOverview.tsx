@@ -10,14 +10,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Boxes, Search } from "lucide-react";
 
-type ItemMaster = { id: string; name: string; unit: string | null };
-type BoqRow = { project_code: string; item_id: string; planned_quantity: number };
-type StockRow = { id: string; project_code: string | null; item_id: string; current_qty: number; unit: string | null; last_movement_at: string | null; updated_at: string | null };
+type BoqRow = { project_code: string; item_description: string; unit: string | null; planned_quantity: number | null };
+type StockRow = { id: string; project_code: string | null; item_description: string; current_qty: number; unit: string | null; last_movement_at: string | null; updated_at: string | null };
 
 type OverviewRow = {
   project_code: string;
-  item_id: string;
-  item_name: string;
+  item_description: string;
   unit: string | null;
   planned_qty: number | null;
   current_qty: number;
@@ -25,10 +23,11 @@ type OverviewRow = {
   from_boq: boolean;
 };
 
+const norm = (s: string) => s.trim().toLowerCase();
+
 export default function StockOverview() {
   const [stock, setStock] = useState<StockRow[]>([]);
   const [boq, setBoq] = useState<BoqRow[]>([]);
-  const [items, setItems] = useState<ItemMaster[]>([]);
   const [loading, setLoading] = useState(true);
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [extrasOnly, setExtrasOnly] = useState(false);
@@ -39,23 +38,18 @@ export default function StockOverview() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [stockRes, boqRes, itemsRes] = await Promise.all([
+      const [stockRes, boqRes] = await Promise.all([
         supabase
           .from("cps_stock")
-          .select("id,project_code,item_id,current_qty,unit,last_movement_at,updated_at"),
+          .select("id,project_code,item_description,current_qty,unit,last_movement_at,updated_at"),
         supabase
           .from("cps_project_boqs")
-          .select("project_code,item_id,planned_quantity"),
-        supabase
-          .from("cps_items")
-          .select("id,name,unit"),
+          .select("project_code,item_description,unit,planned_quantity"),
       ]);
       if (stockRes.error) throw stockRes.error;
       if (boqRes.error) throw boqRes.error;
-      if (itemsRes.error) throw itemsRes.error;
       setStock((stockRes.data ?? []) as StockRow[]);
       setBoq((boqRes.data ?? []) as BoqRow[]);
-      setItems((itemsRes.data ?? []) as ItemMaster[]);
     } catch (e: any) {
       toast.error(e?.message || "Failed to load stock overview");
     } finally {
@@ -63,43 +57,59 @@ export default function StockOverview() {
     }
   };
 
-  const itemsById = useMemo(() => {
-    const m = new Map<string, ItemMaster>();
-    items.forEach((i) => m.set(i.id, i));
-    return m;
-  }, [items]);
-
   const boqByKey = useMemo(() => {
-    const m = new Map<string, number>();
-    boq.forEach((b) => m.set(`${b.project_code}::${b.item_id}`, Number(b.planned_quantity)));
+    const m = new Map<string, number | null>();
+    boq.forEach((b) => m.set(
+      `${b.project_code}::${norm(b.item_description)}`,
+      b.planned_quantity != null ? Number(b.planned_quantity) : null,
+    ));
     return m;
   }, [boq]);
 
   const rows: OverviewRow[] = useMemo(() => {
     const result: OverviewRow[] = [];
+    const seen = new Set<string>();
+
+    // Stock rows
     stock.forEach((s) => {
       if (!s.project_code) return;
-      const key = `${s.project_code}::${s.item_id}`;
-      const planned = boqByKey.has(key) ? boqByKey.get(key)! : null;
-      const item = itemsById.get(s.item_id);
+      const key = `${s.project_code}::${norm(s.item_description)}`;
+      const isInBoq = boqByKey.has(key);
+      const planned = isInBoq ? boqByKey.get(key) ?? null : null;
       result.push({
         project_code: s.project_code,
-        item_id: s.item_id,
-        item_name: item?.name ?? "—",
-        unit: s.unit || item?.unit || null,
+        item_description: s.item_description,
+        unit: s.unit,
         planned_qty: planned,
         current_qty: Number(s.current_qty),
         last_updated: s.last_movement_at ?? s.updated_at ?? null,
-        from_boq: planned != null,
+        from_boq: isInBoq,
+      });
+      seen.add(key);
+    });
+
+    // BOQ rows that have no matching stock yet (current_qty = 0)
+    boq.forEach((b) => {
+      const key = `${b.project_code}::${norm(b.item_description)}`;
+      if (seen.has(key)) return;
+      result.push({
+        project_code: b.project_code,
+        item_description: b.item_description,
+        unit: b.unit,
+        planned_qty: b.planned_quantity != null ? Number(b.planned_quantity) : null,
+        current_qty: 0,
+        last_updated: null,
+        from_boq: true,
       });
     });
+
     return result.sort((a, b) => {
       const p = a.project_code.localeCompare(b.project_code);
       if (p !== 0) return p;
       if (a.from_boq !== b.from_boq) return a.from_boq ? -1 : 1;
-      return a.item_name.localeCompare(b.item_name);
+      return a.item_description.localeCompare(b.item_description);
     });
-  }, [stock, boqByKey, itemsById]);
+  }, [stock, boq, boqByKey]);
 
   const projects = useMemo(() => {
     return Array.from(new Set(rows.map((r) => r.project_code))).sort();
@@ -110,7 +120,7 @@ export default function StockOverview() {
     return rows.filter((r) => {
       if (projectFilter !== "all" && r.project_code !== projectFilter) return false;
       if (extrasOnly && r.from_boq) return false;
-      if (q && !r.item_name.toLowerCase().includes(q) && !r.project_code.toLowerCase().includes(q)) return false;
+      if (q && !r.item_description.toLowerCase().includes(q) && !r.project_code.toLowerCase().includes(q)) return false;
       return true;
     });
   }, [rows, projectFilter, extrasOnly, search]);
@@ -174,7 +184,7 @@ export default function StockOverview() {
           <CardContent className="py-14 text-center space-y-3">
             <Boxes className="h-10 w-10 text-muted-foreground mx-auto" />
             <p className="text-muted-foreground text-sm">
-              {rows.length === 0 ? "No stock recorded yet on any site" : "No items match the filter"}
+              {rows.length === 0 ? "No stock or BOQ recorded yet" : "No items match the filter"}
             </p>
           </CardContent>
         </Card>
@@ -194,14 +204,14 @@ export default function StockOverview() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((r) => {
+                {filtered.map((r, idx) => {
                   const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
                   return (
-                    <TableRow key={`${r.project_code}::${r.item_id}`} className={!r.from_boq ? "bg-amber-50/50" : undefined}>
+                    <TableRow key={`${r.project_code}::${norm(r.item_description)}::${idx}`} className={!r.from_boq ? "bg-amber-50/50" : undefined}>
                       <TableCell className="font-medium">{r.project_code}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
-                          <span>{r.item_name}</span>
+                          <span>{r.item_description}</span>
                           {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">EXTRA</Badge>}
                         </div>
                       </TableCell>
