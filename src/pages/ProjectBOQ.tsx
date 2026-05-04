@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Plus, Search, Trash2, Edit2, Package, Check, X } from "lucide-react";
+import { Plus, Search, Trash2, Edit2, Package, Check, X, UserCheck } from "lucide-react";
 
 type BoqRow = {
   id: string;
@@ -28,6 +28,8 @@ type BoqRow = {
 };
 
 type StockEntry = { id: string; current_qty: number; unit: string | null };
+type SiteEngineer = { id: string; name: string | null; email: string; role: string };
+type Assignment = { project_code: string; assigned_to_user_id: string; assigned_at: string };
 
 const norm = (s: string) => s.trim().toLowerCase();
 
@@ -58,8 +60,16 @@ export default function ProjectBOQ() {
   const [editNotes, setEditNotes] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
+  // Site-engineer assignment state
+  const [siteEngineers, setSiteEngineers] = useState<SiteEngineer[]>([]);
+  const [assignments, setAssignments] = useState<Map<string, Assignment>>(new Map());
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [assignSelectedUserId, setAssignSelectedUserId] = useState<string>("");
+  const [assignSaving, setAssignSaving] = useState(false);
+
   useEffect(() => {
     void loadProjects();
+    void loadEngineersAndAssignments();
   }, []);
 
   useEffect(() => {
@@ -80,6 +90,69 @@ export default function ProjectBOQ() {
     const unique = Array.from(new Set(all.map((r) => (r.project_code ?? "").trim()).filter(Boolean))).sort();
     setProjects(unique);
   };
+
+  const loadEngineersAndAssignments = async () => {
+    const [engRes, assignRes] = await Promise.all([
+      supabase
+        .from("cps_users")
+        .select("id,name,email,role")
+        .in("role", ["requestor", "site_receiver"])
+        .eq("active", true)
+        .order("name"),
+      supabase.from("cps_project_assignments").select("project_code,assigned_to_user_id,assigned_at"),
+    ]);
+    setSiteEngineers((engRes.data ?? []) as SiteEngineer[]);
+    const m = new Map<string, Assignment>();
+    (assignRes.data ?? []).forEach((a: any) => m.set(a.project_code, a as Assignment));
+    setAssignments(m);
+  };
+
+  const saveAssignment = async () => {
+    if (!user || !projectCode) return;
+    if (!assignSelectedUserId) { toast.error("Site engineer chuno"); return; }
+    setAssignSaving(true);
+    try {
+      const { error } = await supabase
+        .from("cps_project_assignments")
+        .upsert({
+          project_code: projectCode,
+          assigned_to_user_id: assignSelectedUserId,
+          assigned_by: user.id,
+          assigned_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as any, { onConflict: "project_code" });
+      if (error) throw error;
+      toast.success("Assignment update ho gayi");
+      setAssignDialogOpen(false);
+      await loadEngineersAndAssignments();
+    } catch (e: any) {
+      toast.error(e?.message || "Assignment save fail ho gaya");
+    } finally {
+      setAssignSaving(false);
+    }
+  };
+
+  const removeAssignment = async () => {
+    if (!projectCode || !confirm("Is project ki assignment hata dein?")) return;
+    const { error } = await supabase
+      .from("cps_project_assignments")
+      .delete()
+      .eq("project_code", projectCode);
+    if (error) { toast.error(error.message); return; }
+    toast.success("Assignment hata di gayi");
+    await loadEngineersAndAssignments();
+  };
+
+  const engineerById = useMemo(() => {
+    const m = new Map<string, SiteEngineer>();
+    siteEngineers.forEach((e) => m.set(e.id, e));
+    return m;
+  }, [siteEngineers]);
+
+  const currentAssignment = projectCode ? assignments.get(projectCode) : undefined;
+  const currentAssignedEngineer = currentAssignment
+    ? engineerById.get(currentAssignment.assigned_to_user_id)
+    : undefined;
 
   const loadBoq = async (code: string) => {
     setLoading(true);
@@ -350,7 +423,15 @@ export default function ProjectBOQ() {
         <Select value={projectCode} onValueChange={setProjectCode}>
           <SelectTrigger className="w-72"><SelectValue placeholder="Project chuno…" /></SelectTrigger>
           <SelectContent>
-            {projects.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+            {projects.map((p) => {
+              const a = assignments.get(p);
+              const eng = a ? engineerById.get(a.assigned_to_user_id) : undefined;
+              return (
+                <SelectItem key={p} value={p}>
+                  {p}{eng ? ` · ${eng.name ?? eng.email}` : ""}
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
 
@@ -369,6 +450,48 @@ export default function ProjectBOQ() {
           <Plus className="h-4 w-4 mr-1.5" /> Naya Item Add Karo
         </Button>
       </div>
+
+      {/* Site engineer assignment for this project */}
+      {projectCode && (
+        <Card className={currentAssignedEngineer ? "border-emerald-300 bg-emerald-50/30" : "border-amber-300 bg-amber-50/30"}>
+          <CardContent className="p-3 sm:p-4 flex items-start sm:items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-start gap-3 min-w-0 flex-1">
+              <UserCheck className={`h-5 w-5 shrink-0 mt-0.5 ${currentAssignedEngineer ? "text-emerald-700" : "text-amber-700"}`} />
+              <div className="min-w-0">
+                <div className="text-xs text-muted-foreground">Stock Update Karne Wala Site Engineer</div>
+                {currentAssignedEngineer ? (
+                  <div className="font-semibold text-sm">
+                    {currentAssignedEngineer.name ?? currentAssignedEngineer.email}
+                    <span className="text-xs text-muted-foreground font-normal ml-2">({currentAssignedEngineer.email})</span>
+                  </div>
+                ) : (
+                  <div className="text-sm text-amber-800 font-medium">
+                    Abhi tak kisi ko assign nahi kiya — koi bhi site engineer is project ka stock update nahi kar payega
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {currentAssignedEngineer && (
+                <Button variant="ghost" size="sm" onClick={removeAssignment} className="text-destructive hover:bg-destructive/10">
+                  Remove
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant={currentAssignedEngineer ? "outline" : "default"}
+                onClick={() => {
+                  setAssignSelectedUserId(currentAssignment?.assigned_to_user_id ?? "");
+                  setAssignDialogOpen(true);
+                }}
+              >
+                <UserCheck className="h-4 w-4 mr-1.5" />
+                {currentAssignedEngineer ? "Change" : "Assign Karo"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {!projectCode ? (
         <Card>
@@ -559,6 +682,51 @@ export default function ProjectBOQ() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
             <Button onClick={saveAdd} disabled={saving}>{saving ? "Save ho raha…" : "Add Karo"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Assign Site Engineer dialog */}
+      <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Site Engineer Assign Karo</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-xs text-muted-foreground">
+              <span className="font-semibold text-foreground">{projectCode}</span> ka stock kaun update karega? Sirf assigned engineer hi /stock par edit kar sakega — baki sab read-only dekhenge.
+            </p>
+            <div className="space-y-1">
+              <Label className="text-xs">Site Engineer *</Label>
+              <Select value={assignSelectedUserId} onValueChange={setAssignSelectedUserId}>
+                <SelectTrigger><SelectValue placeholder="Select karo…" /></SelectTrigger>
+                <SelectContent>
+                  {siteEngineers.map((e) => {
+                    const otherProjects = Array.from(assignments.values())
+                      .filter((a) => a.assigned_to_user_id === e.id && a.project_code !== projectCode)
+                      .map((a) => a.project_code);
+                    return (
+                      <SelectItem key={e.id} value={e.id}>
+                        <div className="flex flex-col">
+                          <span>{e.name ?? e.email}</span>
+                          <span className="text-[10px] text-muted-foreground">
+                            {e.email} · {e.role}
+                            {otherProjects.length > 0 ? ` · already: ${otherProjects.join(", ")}` : ""}
+                          </span>
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground">
+                Total {siteEngineers.length} site engineers available
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAssignDialogOpen(false)} disabled={assignSaving}>Cancel</Button>
+            <Button onClick={saveAssignment} disabled={assignSaving}>{assignSaving ? "Save ho raha…" : "Assign Karo"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

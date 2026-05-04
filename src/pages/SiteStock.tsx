@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Boxes, Plus, Edit2, Search, Check, X } from "lucide-react";
+import { Boxes, Plus, Edit2, Search, Check, X, Eye, UserCheck } from "lucide-react";
 
 type BoqRow = { id: string; item_description: string; unit: string | null; planned_quantity: number | null; notes: string | null };
 type StockRow = { id: string; item_description: string; current_qty: number; unit: string | null; updated_at: string | null; last_movement_at: string | null };
@@ -29,7 +29,11 @@ type UnifiedRow = {
   from_boq: boolean;
 };
 
+type Assignment = { project_code: string; assigned_to_user_id: string };
+type EngineerLite = { id: string; name: string | null; email: string };
+
 const norm = (s: string) => s.trim().toLowerCase();
+const PROCUREMENT_ROLES = ["procurement_executive", "procurement_head", "it_head", "management"];
 
 export default function SiteStock() {
   const { user } = useAuth();
@@ -39,6 +43,12 @@ export default function SiteStock() {
   const [projectCode, setProjectCode] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
+
+  // Project assignments — who can edit which project
+  const [assignments, setAssignments] = useState<Map<string, Assignment>>(new Map());
+  const [engineers, setEngineers] = useState<Map<string, EngineerLite>>(new Map());
+
+  const isProcurement = !!user && PROCUREMENT_ROLES.includes(user.role);
 
   // Inline-edit state (replaces old update dialog)
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -55,6 +65,7 @@ export default function SiteStock() {
 
   useEffect(() => {
     void loadProjects();
+    void loadAssignments();
   }, []);
 
   useEffect(() => {
@@ -75,6 +86,24 @@ export default function SiteStock() {
     const unique = Array.from(new Set(all.map((r) => (r.project_code ?? "").trim()).filter(Boolean))).sort();
     setProjects(unique);
   };
+
+  const loadAssignments = async () => {
+    const [assignRes, engRes] = await Promise.all([
+      supabase.from("cps_project_assignments").select("project_code,assigned_to_user_id"),
+      supabase.from("cps_users").select("id,name,email").in("role", ["requestor","site_receiver"]),
+    ]);
+    const am = new Map<string, Assignment>();
+    (assignRes.data ?? []).forEach((a: any) => am.set(a.project_code, a as Assignment));
+    setAssignments(am);
+    const em = new Map<string, EngineerLite>();
+    (engRes.data ?? []).forEach((e: any) => em.set(e.id, e as EngineerLite));
+    setEngineers(em);
+  };
+
+  const currentAssignment = projectCode ? assignments.get(projectCode) : undefined;
+  const assignedEngineer = currentAssignment ? engineers.get(currentAssignment.assigned_to_user_id) : undefined;
+  const canEdit = isProcurement
+    || (!!currentAssignment && currentAssignment.assigned_to_user_id === user?.id);
 
   const loadAll = async (code: string) => {
     setLoading(true);
@@ -171,6 +200,7 @@ export default function SiteStock() {
 
   const saveEdit = async (row: UnifiedRow) => {
     if (!user || !projectCode) return;
+    if (!canEdit) { toast.error("Aapko is project ka stock update karne ki permission nahi hai"); return; }
     const qty = parseFloat(editQty);
     if (!Number.isFinite(qty) || qty < 0) { toast.error("Sahi quantity daalo"); return; }
 
@@ -231,6 +261,7 @@ export default function SiteStock() {
 
   const saveExtra = async () => {
     if (!user || !projectCode) return;
+    if (!canEdit) { toast.error("Aapko is project mein item add karne ki permission nahi hai"); return; }
     const name = extraName.trim();
     if (!name) { toast.error("Item ka naam daalo"); return; }
     const qty = parseFloat(extraQty);
@@ -323,10 +354,39 @@ export default function SiteStock() {
           />
         </div>
 
-        <Button onClick={() => setAddExtraOpen(true)} disabled={!projectCode} variant="outline" className="w-full sm:w-auto">
+        <Button onClick={() => setAddExtraOpen(true)} disabled={!projectCode || !canEdit} variant="outline" className="w-full sm:w-auto">
           <Plus className="h-4 w-4 mr-1.5" /> Add Extra Item
         </Button>
       </div>
+
+      {projectCode && !canEdit && (
+        <Card className="border-amber-300 bg-amber-50">
+          <CardContent className="p-3 sm:p-4 flex items-start gap-3">
+            <Eye className="h-5 w-5 shrink-0 mt-0.5 text-amber-700" />
+            <div className="flex-1 text-sm">
+              <div className="font-semibold text-amber-900">View Only</div>
+              <div className="text-xs text-amber-800/90 mt-0.5">
+                {assignedEngineer
+                  ? <>Yeh project <span className="font-semibold">{assignedEngineer.name ?? assignedEngineer.email}</span> ko assigned hai. Sirf wahi stock update kar sakte hain.</>
+                  : "Is project ko abhi tak kisi bhi site engineer ko assign nahi kiya gaya. Procurement team se assign karne ko kaho."}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {projectCode && canEdit && assignedEngineer && (
+        <Card className="border-emerald-300 bg-emerald-50/40">
+          <CardContent className="p-2 sm:p-3 flex items-center gap-2 text-xs sm:text-sm">
+            <UserCheck className="h-4 w-4 shrink-0 text-emerald-700" />
+            <span className="text-emerald-900">
+              {assignedEngineer.id === user?.id
+                ? <>Yeh aapko assigned hai — stock update kar sakte ho.</>
+                : <>Procurement role: <span className="font-semibold">{assignedEngineer.name ?? assignedEngineer.email}</span> ko assigned, par aap edit kar sakte ho.</>}
+            </span>
+          </CardContent>
+        </Card>
+      )}
 
       {projectCode && (
         <div className="grid grid-cols-3 gap-2 sm:gap-3">
@@ -371,7 +431,7 @@ export default function SiteStock() {
                         </div>
                         <div className="text-[11px] text-muted-foreground">{r.unit ?? "—"} · {fmtDate(r.last_updated)}</div>
                       </div>
-                      {!isEdit && (
+                      {!isEdit && canEdit && (
                         <Button variant="outline" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} className="shrink-0 h-9 px-3">
                           <Edit2 className="h-4 w-4 mr-1" /> Update
                         </Button>
@@ -524,10 +584,12 @@ export default function SiteStock() {
                                   <X className="h-3.5 w-3.5" />
                                 </Button>
                               </div>
-                            ) : (
+                            ) : canEdit ? (
                               <Button variant="ghost" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} title="Update Qty">
                                 <Edit2 className="h-3.5 w-3.5" />
                               </Button>
+                            ) : (
+                              <span className="text-[10px] text-muted-foreground italic">View only</span>
                             )}
                           </TableCell>
                         </TableRow>
