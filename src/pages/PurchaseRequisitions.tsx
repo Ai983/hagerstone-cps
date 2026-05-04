@@ -704,9 +704,9 @@ export default function PurchaseRequisitions() {
   const [itemsLoading, setItemsLoading] = useState(true);
 
   const isRequestor = user?.role === 'requestor' || user?.role === 'site_receiver';
-  // Hinglish is the default for every role — toggle in the header lets anyone switch to English.
-  const [lang, setLang] = useState<'en' | 'hi'>('hi');
-  const t = (key: string) => lang === 'hi' ? (hindi[key] ?? key) : key;
+  // Hinglish-only — language toggle removed per founder request.
+  const lang: 'hi' = 'hi';
+  const t = (key: string) => hindi[key] ?? key;
 
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [projectSelMode, setProjectSelMode] = useState<'select' | 'text'>('select');
@@ -1617,9 +1617,6 @@ export default function PurchaseRequisitions() {
           <p className="text-muted-foreground text-sm mt-1">{t("Step 1 of procurement — raise a material request")}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => setLang(l => l === 'en' ? 'hi' : 'en')}>
-            {lang === 'en' ? 'Hinglish' : 'English'}
-          </Button>
           <Button onClick={() => openWizard()} className="h-11 sm:h-9">
             <Plus className="h-4 w-4 mr-2" />
             {t("New PR")}
@@ -1681,23 +1678,25 @@ export default function PurchaseRequisitions() {
         </Card>
       )}
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-        {[
-          { label: lang === 'hi' ? "Saari Requests" : "Total PRs", count: statusCounts.all, color: "text-blue-700", bg: "bg-blue-50" },
-          { label: lang === 'hi' ? "Review Mein Hai" : "Under Review", count: statusCounts.review, color: "text-amber-700", bg: "bg-amber-50" },
-          { label: lang === 'hi' ? "RFQ Ban Gaya" : "RFQ Created", count: statusCounts.rfq_created, color: "text-violet-700", bg: "bg-violet-50" },
-          { label: lang === 'hi' ? "PO Ban Gaya" : "PO Issued", count: statusCounts.po_issued, color: "text-emerald-700", bg: "bg-emerald-50" },
-          { label: lang === 'hi' ? "Cancel" : "Cancelled", count: statusCounts.cancelled, color: "text-red-700", bg: "bg-red-50" },
-        ].map((k) => (
-          <Card key={k.label} className="shadow-sm">
-            <CardContent className={`p-4 ${k.bg}`}>
-              <div className="text-xs text-muted-foreground mb-1">{k.label}</div>
-              <div className={`text-2xl font-bold ${k.color}`}>{loading ? "—" : k.count}</div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {/* KPI cards moved to /dashboard for site engineers — procurement still gets them below the tabs */}
+      {!isRequestor && (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          {[
+            { label: "Saari Requests", count: statusCounts.all, color: "text-blue-700", bg: "bg-blue-50" },
+            { label: "Review Mein Hai", count: statusCounts.review, color: "text-amber-700", bg: "bg-amber-50" },
+            { label: "RFQ Ban Gaya", count: statusCounts.rfq_created, color: "text-violet-700", bg: "bg-violet-50" },
+            { label: "PO Ban Gaya", count: statusCounts.po_issued, color: "text-emerald-700", bg: "bg-emerald-50" },
+            { label: "Cancel", count: statusCounts.cancelled, color: "text-red-700", bg: "bg-red-50" },
+          ].map((k) => (
+            <Card key={k.label} className="shadow-sm">
+              <CardContent className={`p-4 ${k.bg}`}>
+                <div className="text-xs text-muted-foreground mb-1">{k.label}</div>
+                <div className={`text-2xl font-bold ${k.color}`}>{loading ? "—" : k.count}</div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {/* Status Tabs — hidden for requestor who sees the Kanban card view instead */}
       {!isRequestor && (

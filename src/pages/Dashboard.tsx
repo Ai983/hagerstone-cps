@@ -62,13 +62,17 @@ export default function Dashboard() {
   const [legacyQuoteCount, setLegacyQuoteCount] = useState(0);
   const [incompleteVendorCount, setIncompleteVendorCount] = useState(0);
 
+  // Site-engineer simplified-view counts
+  const [myPoIssued, setMyPoIssued] = useState(0);
+  const [myCancelled, setMyCancelled] = useState(0);
+
   // Low-stock widget for site users
   type LowStockItem = { id: string; project_site: string; current_qty: number; min_threshold: number | null; unit: string | null; item_name: string };
   const [lowStockItems, setLowStockItems] = useState<LowStockItem[]>([]);
 
   const hideValues = user?.role === "requestor" || user?.role === "site_receiver";
-  const [lang, setLang] = useState<'en' | 'hi'>('hi');
-  const t = (en: string, hi: string) => lang === 'hi' ? hi : en;
+  const lang: 'hi' = 'hi';
+  const t = (en: string, hi: string) => hi;
 
   useEffect(() => {
     fetchAll();
@@ -95,6 +99,24 @@ export default function Dashboard() {
       setActivePOs(poActiveRes.count ?? 0);
       setPendingGRNs(grnRes.count ?? 0);
       setTotalSuppliers(supplierRes.count ?? 0);
+
+      // Site-engineer-only stats: their own PO-issued and cancelled PRs
+      if (isEmployee && user?.id) {
+        const [myPoRes, myCancelRes] = await Promise.all([
+          supabase
+            .from("cps_purchase_requisitions")
+            .select("id", { count: "exact", head: true })
+            .eq("requested_by", user.id)
+            .in("status", ["po_issued", "delivered"]),
+          supabase
+            .from("cps_purchase_requisitions")
+            .select("id", { count: "exact", head: true })
+            .eq("requested_by", user.id)
+            .eq("status", "cancelled"),
+        ]);
+        setMyPoIssued(myPoRes.count ?? 0);
+        setMyCancelled(myCancelRes.count ?? 0);
+      }
 
       if (canViewPrices) {
         const { data: poValueData } = await supabase.from("cps_purchase_orders").select("grand_total").not("status", "in", '("cancelled","superseded")');
@@ -358,9 +380,6 @@ export default function Dashboard() {
           <p className="text-muted-foreground text-sm mt-1">{dateStr}</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button size="sm" variant="outline" onClick={() => setLang(l => l === 'en' ? 'hi' : 'en')}>
-            {lang === 'en' ? 'Hinglish' : 'English'}
-          </Button>
           {quickActions.map((a) => (
             <Button key={a.label} variant="outline" size="sm" onClick={() => navigate(a.path)}>
               <a.icon className="h-4 w-4 mr-2" />
@@ -373,17 +392,23 @@ export default function Dashboard() {
       {/* Employee simplified view */}
       {hideValues && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Card className="shadow-sm">
-              <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground mb-1">Meri Requests</div>
-                <div className="text-3xl font-bold text-foreground">{loading ? <Skeleton className="h-8 w-16" /> : totalPRs}</div>
+          <div className="grid grid-cols-3 gap-2 sm:gap-3">
+            <Card className="shadow-sm bg-blue-50">
+              <CardContent className="p-3 sm:p-4">
+                <div className="text-[10px] sm:text-xs text-blue-900/70 mb-1 leading-tight">Saari Requests</div>
+                <div className="text-2xl sm:text-3xl font-bold text-blue-700">{loading ? <Skeleton className="h-7 w-12" /> : totalPRs}</div>
               </CardContent>
             </Card>
-            <Card className="shadow-sm">
-              <CardContent className="p-4">
-                <div className="text-xs text-muted-foreground mb-1">Baki Delivery</div>
-                <div className="text-3xl font-bold text-foreground">{loading ? <Skeleton className="h-8 w-16" /> : pendingGRNs}</div>
+            <Card className="shadow-sm bg-emerald-50">
+              <CardContent className="p-3 sm:p-4">
+                <div className="text-[10px] sm:text-xs text-emerald-900/70 mb-1 leading-tight">PO Ban Gaya</div>
+                <div className="text-2xl sm:text-3xl font-bold text-emerald-700">{loading ? <Skeleton className="h-7 w-12" /> : myPoIssued}</div>
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm bg-red-50">
+              <CardContent className="p-3 sm:p-4">
+                <div className="text-[10px] sm:text-xs text-red-900/70 mb-1 leading-tight">Cancel kardi procurement team ne</div>
+                <div className="text-2xl sm:text-3xl font-bold text-red-700">{loading ? <Skeleton className="h-7 w-12" /> : myCancelled}</div>
               </CardContent>
             </Card>
           </div>
