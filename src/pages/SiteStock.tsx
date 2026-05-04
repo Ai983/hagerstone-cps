@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Boxes, Plus, Edit2, Search } from "lucide-react";
+import { Boxes, Plus, Edit2, Search, Check, X } from "lucide-react";
 
 type BoqRow = { id: string; item_description: string; unit: string | null; planned_quantity: number | null; notes: string | null };
 type StockRow = { id: string; item_description: string; current_qty: number; unit: string | null; updated_at: string | null; last_movement_at: string | null };
@@ -40,17 +40,18 @@ export default function SiteStock() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
 
-  const [updateOpen, setUpdateOpen] = useState(false);
-  const [updateRow, setUpdateRow] = useState<UnifiedRow | null>(null);
-  const [updateQty, setUpdateQty] = useState("");
-  const [updateNotes, setUpdateNotes] = useState("");
-  const [saving, setSaving] = useState(false);
+  // Inline-edit state (replaces old update dialog)
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editQty, setEditQty] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
 
   const [addExtraOpen, setAddExtraOpen] = useState(false);
   const [extraName, setExtraName] = useState("");
   const [extraUnit, setExtraUnit] = useState("");
   const [extraQty, setExtraQty] = useState("");
   const [extraNotes, setExtraNotes] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     void loadProjects();
@@ -59,6 +60,7 @@ export default function SiteStock() {
   useEffect(() => {
     if (projectCode) void loadAll(projectCode);
     else { setBoq([]); setStock([]); }
+    setEditingKey(null);
   }, [projectCode]);
 
   const loadProjects = async () => {
@@ -92,7 +94,7 @@ export default function SiteStock() {
       setBoq((boqRes.data ?? []) as BoqRow[]);
       setStock((stockRes.data ?? []) as StockRow[]);
     } catch (e: any) {
-      toast.error(e?.message || "Failed to load stock");
+      toast.error(e?.message || "Stock load fail ho gaya");
     } finally {
       setLoading(false);
     }
@@ -155,32 +157,37 @@ export default function SiteStock() {
     return { total, boqCount, extras };
   }, [unified]);
 
-  const openUpdate = (row: UnifiedRow) => {
-    setUpdateRow(row);
-    setUpdateQty(String(row.current_qty));
-    setUpdateNotes("");
-    setUpdateOpen(true);
+  const startEdit = (row: UnifiedRow) => {
+    setEditingKey(row.key);
+    setEditQty(String(row.current_qty));
+    setEditNotes("");
   };
 
-  const saveUpdate = async () => {
-    if (!user || !updateRow || !projectCode) return;
-    const qty = parseFloat(updateQty);
-    if (!Number.isFinite(qty) || qty < 0) { toast.error("Enter a valid quantity"); return; }
+  const cancelEdit = () => {
+    setEditingKey(null);
+    setEditQty("");
+    setEditNotes("");
+  };
 
-    setSaving(true);
+  const saveEdit = async (row: UnifiedRow) => {
+    if (!user || !projectCode) return;
+    const qty = parseFloat(editQty);
+    if (!Number.isFinite(qty) || qty < 0) { toast.error("Sahi quantity daalo"); return; }
+
+    setEditSaving(true);
     try {
-      const before = updateRow.current_qty;
+      const before = row.current_qty;
       const diff = qty - before;
 
-      let stockId = updateRow.stock_id;
+      let stockId = row.stock_id;
       if (!stockId) {
         const { data: inserted, error: insErr } = await supabase
           .from("cps_stock")
           .insert({
             project_code: projectCode,
             item_id: null,
-            item_description: updateRow.item_description,
-            unit: updateRow.unit,
+            item_description: row.item_description,
+            unit: row.unit,
             current_qty: qty,
             last_movement_at: new Date().toISOString(),
           } as any)
@@ -203,33 +210,34 @@ export default function SiteStock() {
           movement_type: diff >= 0 ? "in" : "out",
           quantity: Math.abs(diff),
           reference_type: "manual_update",
-          notes: updateNotes.trim() || null,
+          notes: editNotes.trim() || null,
           logged_by: user.id,
           logged_by_name: user.name ?? user.email ?? null,
           balance_after: qty,
         } as any);
       }
 
-      toast.success("Stock updated");
-      setUpdateOpen(false);
+      toast.success("Stock update ho gaya");
+      setEditingKey(null);
+      setEditQty("");
+      setEditNotes("");
       await loadAll(projectCode);
     } catch (e: any) {
-      toast.error(e?.message || "Update failed");
+      toast.error(e?.message || "Update fail ho gaya");
     } finally {
-      setSaving(false);
+      setEditSaving(false);
     }
   };
 
   const saveExtra = async () => {
     if (!user || !projectCode) return;
     const name = extraName.trim();
-    if (!name) { toast.error("Item name daalo"); return; }
+    if (!name) { toast.error("Item ka naam daalo"); return; }
     const qty = parseFloat(extraQty);
     if (!Number.isFinite(qty) || qty < 0) { toast.error("Sahi quantity daalo"); return; }
 
-    // Prevent duplicate of an existing BOQ or stock entry (case-insensitive).
     if (unified.some((u) => u.key === norm(name))) {
-      toast.error("Yeh item to already list mein hai — Update use karo");
+      toast.error("Yeh item already list mein hai — Update use karo");
       return;
     }
 
@@ -259,14 +267,14 @@ export default function SiteStock() {
           movement_type: "in",
           quantity: qty,
           reference_type: "extra_item",
-          notes: extraNotes.trim() || "Extra item (not in BOQ)",
+          notes: extraNotes.trim() || "Extra item (BOQ mein nahi hai)",
           logged_by: user.id,
           logged_by_name: user.name ?? user.email ?? null,
           balance_after: qty,
         } as any);
       }
 
-      toast.success("Extra item added to stock");
+      toast.success("Extra item add ho gaya");
       setAddExtraOpen(false);
       setExtraName("");
       setExtraUnit("");
@@ -274,7 +282,7 @@ export default function SiteStock() {
       setExtraNotes("");
       await loadAll(projectCode);
     } catch (e: any) {
-      toast.error(e?.message || "Failed to add item");
+      toast.error(e?.message || "Add fail ho gaya");
     } finally {
       setSaving(false);
     }
@@ -292,13 +300,13 @@ export default function SiteStock() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Site Stock</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Pick a project to see its BOQ items and update the quantities available on site. Add extra items if you find anything not listed in the BOQ.
+          Project chuno, BOQ items dikhenge — pencil click karke seedha row mein quantity update karo. BOQ mein nahi hai to "Add Extra Item" se add kar do.
         </p>
       </div>
 
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 flex-wrap">
         <Select value={projectCode} onValueChange={setProjectCode}>
-          <SelectTrigger className="w-full sm:w-72"><SelectValue placeholder="Select a project…" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-72"><SelectValue placeholder="Project chuno…" /></SelectTrigger>
           <SelectContent>
             {projects.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
           </SelectContent>
@@ -307,7 +315,7 @@ export default function SiteStock() {
         <div className="relative w-full sm:flex-1 sm:min-w-[220px] sm:max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search items…"
+            placeholder="Items search karo…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
@@ -323,7 +331,7 @@ export default function SiteStock() {
       {projectCode && (
         <div className="grid grid-cols-3 gap-2 sm:gap-3">
           <Card><CardContent className="p-3 sm:p-4"><div className="text-[10px] sm:text-xs text-muted-foreground">Total Items</div><div className="text-xl sm:text-2xl font-bold">{stats.total}</div></CardContent></Card>
-          <Card><CardContent className="p-3 sm:p-4"><div className="text-[10px] sm:text-xs text-muted-foreground">From BOQ</div><div className="text-xl sm:text-2xl font-bold">{stats.boqCount}</div></CardContent></Card>
+          <Card><CardContent className="p-3 sm:p-4"><div className="text-[10px] sm:text-xs text-muted-foreground">BOQ Se</div><div className="text-xl sm:text-2xl font-bold">{stats.boqCount}</div></CardContent></Card>
           <Card><CardContent className="p-3 sm:p-4"><div className="text-[10px] sm:text-xs text-muted-foreground text-amber-700">Extras</div><div className="text-xl sm:text-2xl font-bold text-amber-700">{stats.extras}</div></CardContent></Card>
         </div>
       )}
@@ -332,7 +340,7 @@ export default function SiteStock() {
         <Card>
           <CardContent className="py-14 text-center space-y-3">
             <Boxes className="h-10 w-10 text-muted-foreground mx-auto" />
-            <p className="text-muted-foreground text-sm">Select a project above to see its stock</p>
+            <p className="text-muted-foreground text-sm">Stock dekhne ke liye project chuno</p>
           </CardContent>
         </Card>
       ) : (
@@ -344,14 +352,15 @@ export default function SiteStock() {
           ) : filtered.length === 0 ? (
             <Card><CardContent className="py-8 text-center text-muted-foreground text-sm">
               {unified.length === 0
-                ? "No BOQ yet for this project — ask procurement to set it up, or add items as extras."
-                : "No items match your search"}
+                ? "Is project ke liye abhi koi BOQ nahi hai — procurement se kaho ya extra item add karo."
+                : "Search se kuch nahi mila"}
             </CardContent></Card>
           ) : (
             filtered.map((r, idx) => {
+              const isEdit = editingKey === r.key;
               const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
               return (
-                <Card key={r.key} className={!r.from_boq ? "border-amber-300 bg-amber-50/50" : undefined}>
+                <Card key={r.key} className={isEdit ? "border-primary/40 bg-primary/5" : (!r.from_boq ? "border-amber-300 bg-amber-50/50" : undefined)}>
                   <CardContent className="p-3 space-y-1.5">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
@@ -362,9 +371,20 @@ export default function SiteStock() {
                         </div>
                         <div className="text-[11px] text-muted-foreground">{r.unit ?? "—"} · {fmtDate(r.last_updated)}</div>
                       </div>
-                      <Button variant="outline" size="sm" onClick={() => openUpdate(r)} className="shrink-0 h-8">
-                        <Edit2 className="h-3.5 w-3.5 mr-1" /> Update
-                      </Button>
+                      {isEdit ? (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button variant="ghost" size="sm" onClick={() => saveEdit(r)} disabled={editSaving} className="h-8 text-green-700 hover:bg-green-100" title="Save">
+                            <Check className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={editSaving} className="h-8" title="Cancel">
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button variant="outline" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} className="shrink-0 h-8">
+                          <Edit2 className="h-3.5 w-3.5 mr-1" /> Update
+                        </Button>
+                      )}
                     </div>
                     <div className="grid grid-cols-3 gap-1 text-xs">
                       <div>
@@ -373,7 +393,19 @@ export default function SiteStock() {
                       </div>
                       <div>
                         <div className="text-[10px] text-muted-foreground">Current</div>
-                        <div className="font-mono font-semibold">{Number(r.current_qty).toLocaleString("en-IN")}</div>
+                        {isEdit ? (
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={editQty}
+                            onChange={(e) => setEditQty(e.target.value)}
+                            className="h-7 text-xs font-mono px-1.5"
+                            autoFocus
+                          />
+                        ) : (
+                          <div className="font-mono font-semibold">{Number(r.current_qty).toLocaleString("en-IN")}</div>
+                        )}
                       </div>
                       <div>
                         <div className="text-[10px] text-muted-foreground">Diff</div>
@@ -382,6 +414,14 @@ export default function SiteStock() {
                         </div>
                       </div>
                     </div>
+                    {isEdit && (
+                      <Input
+                        value={editNotes}
+                        onChange={(e) => setEditNotes(e.target.value)}
+                        className="h-7 text-xs"
+                        placeholder="Reason / note (optional)"
+                      />
+                    )}
                   </CardContent>
                 </Card>
               );
@@ -399,10 +439,10 @@ export default function SiteStock() {
                   <TableHead>Item Ka Naam</TableHead>
                   <TableHead className="w-24">Unit</TableHead>
                   <TableHead className="w-28 text-right">Planned</TableHead>
-                  <TableHead className="w-28 text-right">Current</TableHead>
+                  <TableHead className="w-32 text-right">Current</TableHead>
                   <TableHead className="w-24 text-right">Diff</TableHead>
                   <TableHead className="w-32">Last Updated</TableHead>
-                  <TableHead className="w-24 text-right">Action</TableHead>
+                  <TableHead className="w-28 text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -422,37 +462,78 @@ export default function SiteStock() {
                   </TableRow>
                 ) : (
                   filtered.map((r, idx) => {
+                    const isEdit = editingKey === r.key;
                     const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
                     return (
-                      <TableRow key={r.key} className={!r.from_boq ? "bg-amber-50/50" : undefined}>
-                        <TableCell className="text-muted-foreground font-mono text-xs">{idx + 1}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{r.item_description}</span>
-                            {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">EXTRA</Badge>}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">{r.unit ?? "—"}</TableCell>
-                        <TableCell className="text-right font-mono">
-                          {r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}
-                        </TableCell>
-                        <TableCell className="text-right font-mono font-semibold">
-                          {Number(r.current_qty).toLocaleString("en-IN")}
-                        </TableCell>
-                        <TableCell className="text-right font-mono">
-                          {diff == null ? "—" : (
-                            <span className={diff < 0 ? "text-red-700" : diff > 0 ? "text-green-700" : "text-muted-foreground"}>
-                              {diff > 0 ? "+" : ""}{Number(diff).toLocaleString("en-IN")}
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs">{fmtDate(r.last_updated)}</TableCell>
-                        <TableCell className="text-right">
-                          <Button variant="ghost" size="sm" onClick={() => openUpdate(r)} title="Update Qty">
-                            <Edit2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
+                      <React.Fragment key={r.key}>
+                        <TableRow className={isEdit ? "bg-primary/5" : (!r.from_boq ? "bg-amber-50/50" : undefined)}>
+                          <TableCell className="text-muted-foreground font-mono text-xs">{idx + 1}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{r.item_description}</span>
+                              {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">EXTRA</Badge>}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">{r.unit ?? "—"}</TableCell>
+                          <TableCell className="text-right font-mono">
+                            {r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}
+                          </TableCell>
+                          <TableCell className="text-right font-mono font-semibold">
+                            {isEdit ? (
+                              <Input
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                value={editQty}
+                                onChange={(e) => setEditQty(e.target.value)}
+                                className="h-8 text-right"
+                                autoFocus
+                              />
+                            ) : (
+                              Number(r.current_qty).toLocaleString("en-IN")
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right font-mono">
+                            {diff == null ? "—" : (
+                              <span className={diff < 0 ? "text-red-700" : diff > 0 ? "text-green-700" : "text-muted-foreground"}>
+                                {diff > 0 ? "+" : ""}{Number(diff).toLocaleString("en-IN")}
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-muted-foreground text-xs">{fmtDate(r.last_updated)}</TableCell>
+                          <TableCell className="text-right">
+                            {isEdit ? (
+                              <div className="flex items-center justify-end gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => saveEdit(r)} disabled={editSaving} title="Save" className="text-green-700 hover:bg-green-100">
+                                  <Check className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={editSaving} title="Cancel">
+                                  <X className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            ) : (
+                              <Button variant="ghost" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} title="Update Qty">
+                                <Edit2 className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                        {isEdit && (
+                          <TableRow className="bg-primary/5">
+                            <TableCell colSpan={8} className="py-2">
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs text-muted-foreground shrink-0">Reason / note:</Label>
+                                <Input
+                                  value={editNotes}
+                                  onChange={(e) => setEditNotes(e.target.value)}
+                                  className="h-8"
+                                  placeholder="Optional — kyun update kiya, kahan use hua, etc."
+                                />
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
                     );
                   })
                 )}
@@ -463,46 +544,15 @@ export default function SiteStock() {
         </>
       )}
 
-      <Dialog open={updateOpen} onOpenChange={setUpdateOpen}>
-        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
-          <DialogHeader><DialogTitle>Update Stock Qty</DialogTitle></DialogHeader>
-          {updateRow && (
-            <div className="space-y-3 py-2">
-              <div className="rounded-md bg-muted/30 p-2 text-sm">
-                <div className="font-medium">{updateRow.item_description}</div>
-                <div className="text-xs text-muted-foreground">{updateRow.unit ?? "—"}</div>
-                {updateRow.planned_qty != null && (
-                  <div className="text-xs text-muted-foreground mt-1">
-                    Planned: <span className="font-semibold">{Number(updateRow.planned_qty).toLocaleString("en-IN")}</span>
-                  </div>
-                )}
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Current Qty on Site *</Label>
-                <Input type="number" min={0} step="0.01" value={updateQty} onChange={(e) => setUpdateQty(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Notes</Label>
-                <Textarea value={updateNotes} onChange={(e) => setUpdateNotes(e.target.value)} rows={2} placeholder="Reason / context (optional)" />
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setUpdateOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={saveUpdate} disabled={saving}>{saving ? "Saving…" : "Update"}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={addExtraOpen} onOpenChange={setAddExtraOpen}>
         <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
           <DialogHeader><DialogTitle>Add Extra Item</DialogTitle></DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-xs text-muted-foreground">
-              This item is not in the project BOQ. It will show up as <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300 mx-1">EXTRA</Badge> in the stock list.
+              Yeh item project BOQ mein nahi hai. Stock list mein <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300 mx-1">EXTRA</Badge> tag ke saath dikhega.
             </p>
             <div className="space-y-1">
-              <Label className="text-xs">Item Name *</Label>
+              <Label className="text-xs">Item Ka Naam *</Label>
               <Input
                 value={extraName}
                 onChange={(e) => setExtraName(e.target.value)}
@@ -522,12 +572,12 @@ export default function SiteStock() {
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Notes</Label>
-              <Textarea value={extraNotes} onChange={(e) => setExtraNotes(e.target.value)} rows={2} placeholder="Why was this added?" />
+              <Textarea value={extraNotes} onChange={(e) => setExtraNotes(e.target.value)} rows={2} placeholder="Kyun add kiya?" />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddExtraOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={saveExtra} disabled={saving}>{saving ? "Saving…" : "Add"}</Button>
+            <Button onClick={saveExtra} disabled={saving}>{saving ? "Save ho raha…" : "Add Karo"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
