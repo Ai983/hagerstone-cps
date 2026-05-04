@@ -154,19 +154,43 @@ export default function ApprovePoPage() {
 
     setSubmitting(true);
     try {
-      /* mark token used */
+      /* 1. mark this founder's token as used */
       const { error: tokUpdErr } = await supabase
         .from("cps_po_approval_tokens")
         .update({ used_at: new Date().toISOString(), response: choice, reason: reason.trim() || null })
         .eq("id", tokenRow.id);
       if (tokUpdErr) throw tokUpdErr;
 
-      /* update PO founder_approval_status — status field has a DB constraint so we don't change it here */
+      /* 2. re-fetch all tokens for this PO to compute aggregate status.
+         Rule: any rejection → rejected (sticky). Otherwise any approval → approved.
+         Otherwise pending. So the first rejection blocks the PO; the first approval moves it forward. */
+      const { data: allTokens } = await supabase
+        .from("cps_po_approval_tokens")
+        .select("response,reason,used_at,founder_name")
+        .eq("po_id", tokenRow.po_id);
+
+      const responses = (allTokens ?? []).map((t: any) => t.response as string | null);
+      let finalStatus: "approved" | "rejected" | "pending" = "pending";
+      let finalReason: string | null = null;
+
+      if (responses.includes("rejected")) {
+        finalStatus = "rejected";
+        // surface the rejection reason at the PO level — pick the most recent rejection
+        const rejected = (allTokens ?? [])
+          .filter((t: any) => t.response === "rejected")
+          .sort((a: any, b: any) => new Date(b.used_at ?? 0).getTime() - new Date(a.used_at ?? 0).getTime())[0];
+        finalReason = (rejected as any)?.reason ?? null;
+      } else if (responses.includes("approved")) {
+        finalStatus = "approved";
+        finalReason = null;
+      }
+
+      /* 3. update PO founder_approval_status with the aggregate decision */
       await supabase
         .from("cps_purchase_orders")
         .update({
-          founder_approval_status: choice,
-          founder_approval_reason: reason.trim() || null,
+          founder_approval_status: finalStatus,
+          founder_approval_reason: finalReason,
         })
         .eq("id", tokenRow.po_id);
 
