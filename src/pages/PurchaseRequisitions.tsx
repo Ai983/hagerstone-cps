@@ -1798,16 +1798,13 @@ export default function PurchaseRequisitions() {
                           {pr.project_site} · {pr.items_count} items · {lang === 'hi' ? 'Chahiye' : 'Required'}: {formatRequiredByDate(pr.required_by)}
                         </p>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Button variant="ghost" size="sm" onClick={() => openDetail(pr)} title={lang === 'hi' ? "Details" : "Details"}>
-                          {lang === 'hi' ? "Details" : "View"}
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="Print">
-                          <Printer className="h-3.5 w-3.5" />
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="Details" className="h-9">
+                          Details
                         </Button>
                         {(pr.status === "pending" || pr.status === "pending_design" || pr.status === "duplicate_flagged") && pr.requested_by === user?.id && (
-                          <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
-                            <X className="h-3.5 w-3.5" />
+                          <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Cancel PR" className="h-9 text-destructive hover:bg-destructive/10 border-destructive/30">
+                            <X className="h-4 w-4" />
                           </Button>
                         )}
                         {isProcurementUser && pr.status === "duplicate_flagged" && (
@@ -2942,18 +2939,35 @@ export default function PurchaseRequisitions() {
 
       {/* Document View Dialog */}
       <Dialog open={docOpen} onOpenChange={(v) => setDocOpen(v)}>
-        <DialogContent className="w-[calc(100vw-1rem)] max-w-4xl p-0">
-          <div className="p-8 print:p-4" id="pr-document">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-4xl p-0 max-h-[90vh] overflow-y-auto">
+          <div className="p-3 sm:p-8 print:p-4" id="pr-document">
             {docPr && (
-              <div className="space-y-6">
-                <div className="text-center border-b-2 border-foreground pb-4">
-                  <h1 className="text-lg font-bold tracking-wide">HAGERSTONE INTERNATIONAL (P) LTD</h1>
-                  <h2 className="text-sm font-semibold text-muted-foreground mt-1">
+              <div className="space-y-4 sm:space-y-6">
+                <div className="text-center border-b-2 border-foreground pb-3 sm:pb-4">
+                  <h1 className="text-base sm:text-lg font-bold tracking-wide">HAGERSTONE INTERNATIONAL (P) LTD</h1>
+                  <h2 className="text-xs sm:text-sm font-semibold text-muted-foreground mt-1">
                     Material Issued at Site / Purchase Requisition
                   </h2>
                 </div>
 
-                <div className="grid grid-cols-3 gap-4 text-sm">
+                {/* Mobile header — stacked rows */}
+                <div className="space-y-1.5 text-sm sm:hidden print:hidden">
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground shrink-0">Project:</span>
+                    <span className="font-medium text-right">{docPr.project_site}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground shrink-0">Date:</span>
+                    <span className="font-medium">{formatIndianDate(docPr.created_at)}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground shrink-0">Serial No:</span>
+                    <span className="font-mono font-medium">{docPr.pr_number}</span>
+                  </div>
+                </div>
+
+                {/* Desktop / print header — 3-column grid */}
+                <div className="hidden sm:grid sm:grid-cols-3 gap-4 text-sm print:grid">
                   <div>
                     <span className="text-muted-foreground">Project:</span>{" "}
                     <span className="font-medium border-b border-foreground/30 pb-0.5 inline-block min-w-[120px]">
@@ -2981,7 +2995,88 @@ export default function PurchaseRequisitions() {
                     ))}
                   </div>
                 ) : (
-                  <Table className="border border-foreground/20">
+                  <>
+                  {/* Mobile — card list */}
+                  <div className="space-y-2 sm:hidden print:hidden">
+                    {docLines.map((li, i) => {
+                      const specsText = li.specs ?? "";
+                      const imagesMatch = specsText.match(/Images:\s*([^|]+)/i);
+                      const imageUrls = imagesMatch
+                        ? imagesMatch[1].split(",").map((u: string) => u.trim()).filter(Boolean)
+                        : [];
+                      const cleanSpecs = specsText.replace(/\|?\s*Images:\s*[^|]+/i, "").replace(/^\s*\|\s*/, "").trim();
+                      const codeColour = (li.preferred_brands ?? []).join(", ");
+                      return (
+                        <div key={li.id} className="border rounded-md p-3 bg-card">
+                          <div className="flex items-start justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] font-mono text-muted-foreground bg-muted/50 rounded px-1.5 py-0.5">#{i + 1}</span>
+                              <span className="font-semibold text-sm">{li.description}</span>
+                            </div>
+                            <div className="text-sm font-mono text-right shrink-0">
+                              <span className="font-bold">{li.quantity ?? "—"}</span>{" "}
+                              <span className="text-muted-foreground text-xs">{li.unit ?? ""}</span>
+                            </div>
+                          </div>
+                          {codeColour && (
+                            <div className="text-xs mt-1">
+                              <span className="text-muted-foreground">Code / Colour: </span>
+                              <span>{codeColour}</span>
+                            </div>
+                          )}
+                          {cleanSpecs && (
+                            <div className="text-xs mt-1">
+                              <span className="text-muted-foreground">Required For: </span>
+                              <span>{cleanSpecs}</span>
+                            </div>
+                          )}
+                          {imageUrls.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {imageUrls.map((url, idx) => {
+                                const lower = url.toLowerCase();
+                                const isPdf = lower.endsWith(".pdf");
+                                const isDoc = /\.(xls|xlsx|doc|docx)$/i.test(lower);
+                                if (isPdf || isDoc) {
+                                  return (
+                                    <a
+                                      key={idx}
+                                      href={url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="h-16 w-16 rounded border bg-white flex flex-col items-center justify-center gap-0.5 p-1 no-underline"
+                                    >
+                                      <span className="text-xl">{isPdf ? "📄" : "📎"}</span>
+                                      <span className="text-[8px] text-center text-primary">
+                                        {isPdf ? "PDF" : "Doc"} {idx + 1}
+                                      </span>
+                                    </a>
+                                  );
+                                }
+                                return (
+                                  <a
+                                    key={idx}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block h-16 w-16"
+                                  >
+                                    <img
+                                      src={url}
+                                      alt={`Ref ${idx + 1}`}
+                                      className="h-16 w-16 object-cover rounded border"
+                                    />
+                                  </a>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Desktop / print — formal table */}
+                  <Table className="hidden sm:table border border-foreground/20 print:table">
                     <TableHeader>
                       <TableRow className="bg-muted/50">
                         <TableHead className="border border-foreground/20 text-center font-semibold text-foreground w-12">Sr.No</TableHead>
@@ -2994,13 +3089,11 @@ export default function PurchaseRequisitions() {
                     </TableHeader>
                     <TableBody>
                       {docLines.map((li, i) => {
-                        // Parse specs field — images are stored as "Images: url1,url2,..." inside specs
                         const specsText = li.specs ?? "";
                         const imagesMatch = specsText.match(/Images:\s*([^|]+)/i);
                         const imageUrls = imagesMatch
                           ? imagesMatch[1].split(",").map((u: string) => u.trim()).filter(Boolean)
                           : [];
-                        // Remove the "Images: ..." part from the display text so it doesn't show raw URLs
                         const cleanSpecs = specsText.replace(/\|?\s*Images:\s*[^|]+/i, "").replace(/^\s*\|\s*/, "").trim();
                         return (
                           <React.Fragment key={li.id}>
@@ -3059,9 +3152,25 @@ export default function PurchaseRequisitions() {
                       })}
                     </TableBody>
                   </Table>
+                  </>
                 )}
 
-                <div className="grid grid-cols-2 gap-8 pt-8 text-sm">
+                {/* Mobile signature footer */}
+                <div className="space-y-2 pt-3 border-t text-sm sm:hidden print:hidden">
+                  <div>
+                    <span className="text-muted-foreground">Raised By: </span>
+                    <span className="font-medium">
+                      {docPr.requested_by ? user?.name ?? docPr.requested_by : "—"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Approved By: </span>
+                    <span className="text-muted-foreground italic">_______________</span>
+                  </div>
+                </div>
+
+                {/* Desktop / print signature footer */}
+                <div className="hidden sm:grid sm:grid-cols-2 gap-8 pt-8 text-sm print:grid">
                   <div>
                     <span className="text-muted-foreground">Raised By:</span>{" "}
                     <span className="font-medium border-b border-foreground/30 pb-0.5 inline-block min-w-[160px]">
@@ -3076,8 +3185,8 @@ export default function PurchaseRequisitions() {
                   </div>
                 </div>
 
-                <div className="flex justify-end pt-4 print:hidden">
-                  <Button variant="outline" size="sm" onClick={() => window.print()}>
+                <div className="flex justify-end pt-3 print:hidden">
+                  <Button variant="outline" size="sm" onClick={() => window.print()} className="h-9">
                     <Printer className="h-4 w-4 mr-2" /> Print
                   </Button>
                 </div>
