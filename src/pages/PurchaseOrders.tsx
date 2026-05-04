@@ -963,11 +963,12 @@ export default function PurchaseOrders() {
           /* upload PDF to Supabase Storage */
           const poPdfUrl = await uploadPoPdf(supabase, poId, _poNumber, pdfBlob);
 
-          /* insert approval tokens — only Bhaskar */
+          /* insert approval tokens — both founders, every PO regardless of amount */
           const { data: insertedTokens, error: tokErr } = await supabase
             .from("cps_po_approval_tokens")
             .insert([
               { po_id: poId, po_number: _poNumber, founder_name: "Bhaskar" },
+              { po_id: poId, po_number: _poNumber, founder_name: "Dhruv" },
             ])
             .select("token,founder_name");
           if (tokErr || !insertedTokens) throw tokErr;
@@ -977,16 +978,17 @@ export default function PurchaseOrders() {
             link: `${origin}/approve-po?token=${t.token}`,
           }));
 
-          /* fetch webhook URL + founder number from config */
+          /* fetch webhook URL + both founders' numbers from config */
           const { data: cfgRows } = await supabase
             .from("cps_config")
             .select("key,value")
-            .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar"]);
+            .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar", "founder_whatsapp_dhruv"]);
           const cfgMap: Record<string, string> = {};
           (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
           const webhookUrl = cfgMap["webhook_po_founder_approval"];
           if (!webhookUrl) return;
           const bhaskarWA = cfgMap["founder_whatsapp_bhaskar"] || "919953001048";
+          const dhruvWA = cfgMap["founder_whatsapp_dhruv"] || "919910820078";
 
           /* mark PO as pending */
           await supabase
@@ -1011,6 +1013,8 @@ export default function PurchaseOrders() {
               po_pdf_url: poPdfUrl,
               bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
               bhaskar_whatsapp: bhaskarWA,
+              dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
+              dhruv_whatsapp: dhruvWA,
             }),
           });
         } catch (_) {
@@ -1150,44 +1154,44 @@ export default function PurchaseOrders() {
     try {
       const poId = viewPo.id;
       const poNumber = viewPo.po_number;
-
-      /* check for existing active (unused + not expired) token for Bhaskar */
-      const { data: existingTokens } = await supabase
-        .from("cps_po_approval_tokens")
-        .select("id,token,expires_at,used_at")
-        .eq("po_id", poId)
-        .eq("founder_name", "Bhaskar")
-        .is("used_at", null);
-
-      let approvalToken: string;
       const now = new Date();
-      const activeToken = (existingTokens ?? []).find((t: any) => new Date(t.expires_at) > now);
 
-      if (activeToken) {
-        /* reuse the existing valid token */
-        approvalToken = (activeToken as any).token;
-      } else {
-        /* delete expired/stale tokens and create a fresh one */
+      // Reuse a still-valid token if present, otherwise create a fresh one — per founder.
+      const ensureToken = async (founderName: "Bhaskar" | "Dhruv"): Promise<string> => {
+        const { data: existing } = await supabase
+          .from("cps_po_approval_tokens")
+          .select("id,token,expires_at,used_at")
+          .eq("po_id", poId)
+          .eq("founder_name", founderName)
+          .is("used_at", null);
+        const active = (existing ?? []).find((t: any) => new Date(t.expires_at) > now);
+        if (active) return (active as any).token;
+        // Drop stale unused tokens for this founder, then mint a new one
         await supabase
           .from("cps_po_approval_tokens")
           .delete()
           .eq("po_id", poId)
+          .eq("founder_name", founderName)
           .is("used_at", null);
-
         const { data: newTok, error: tokErr } = await supabase
           .from("cps_po_approval_tokens")
-          .insert([{ po_id: poId, po_number: poNumber, founder_name: "Bhaskar" }])
+          .insert([{ po_id: poId, po_number: poNumber, founder_name: founderName }])
           .select("token")
           .single();
-        if (tokErr || !newTok) throw new Error("Failed to create approval token");
-        approvalToken = (newTok as any).token;
-      }
+        if (tokErr || !newTok) throw new Error(`Failed to create approval token for ${founderName}`);
+        return (newTok as any).token;
+      };
+
+      const [bhaskarToken, dhruvToken] = await Promise.all([
+        ensureToken("Bhaskar"),
+        ensureToken("Dhruv"),
+      ]);
 
       /* fetch webhook + whatsapp config + portal base URL */
       const { data: cfgRows } = await supabase
         .from("cps_config")
         .select("key,value")
-        .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar", "portal_base_url"]);
+        .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar", "founder_whatsapp_dhruv", "portal_base_url"]);
       const cfgMap: Record<string, string> = {};
       (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
 
@@ -1195,8 +1199,10 @@ export default function PurchaseOrders() {
       if (!webhookUrl) throw new Error("webhook_po_founder_approval not configured in cps_config");
 
       const bhaskarWA = cfgMap["founder_whatsapp_bhaskar"] || "919953001048";
+      const dhruvWA = cfgMap["founder_whatsapp_dhruv"] || "919910820078";
       const portalBase = cfgMap["portal_base_url"] || window.location.origin;
-      const bhaskarLink = `${portalBase}/approve-po?token=${approvalToken}`;
+      const bhaskarLink = `${portalBase}/approve-po?token=${bhaskarToken}`;
+      const dhruvLink = `${portalBase}/approve-po?token=${dhruvToken}`;
       const supplierName = viewSupplier?.name ?? "";
 
       /* fire webhook */
@@ -1216,6 +1222,8 @@ export default function PurchaseOrders() {
           po_pdf_url: (viewPo as any).po_pdf_url || null,
           bhaskar_approval_link: bhaskarLink,
           bhaskar_whatsapp: bhaskarWA,
+          dhruv_approval_link: dhruvLink,
+          dhruv_whatsapp: dhruvWA,
         }),
       });
 
@@ -1227,7 +1235,7 @@ export default function PurchaseOrders() {
         .update({ founder_approval_status: "pending" })
         .eq("id", poId);
 
-      toast.success("Approval message resent to Bhaskar Sir");
+      toast.success("Approval message resent to Bhaskar Sir + Dhruv Sir");
 
       /* refresh token display */
       const { data: freshTokens } = await supabase
@@ -3005,12 +3013,12 @@ export default function PurchaseOrders() {
 
                 {/* Approval section */}
                 <div className="border-t border-border/60 pt-4 space-y-4">
-                  {/* Founder feedback — individual cards per founder */}
-                  {viewPoTokens.filter((t) => t.founder_name !== "Dhruv").length > 0 && (
+                  {/* Founder feedback — individual cards per founder (Bhaskar + Dhruv) */}
+                  {viewPoTokens.length > 0 && (
                     <div className="space-y-2">
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Founder Responses</p>
                       <div className="grid grid-cols-1 gap-2">
-                        {viewPoTokens.filter((t) => t.founder_name !== "Dhruv").map((tok) => {
+                        {viewPoTokens.map((tok) => {
                           const responded = !!tok.used_at;
                           const approved = tok.response === "approved";
                           const rejected = tok.response === "rejected";
@@ -3028,7 +3036,7 @@ export default function PurchaseOrders() {
                                 <span className={`text-sm font-semibold ${
                                   approved ? "text-green-800" : rejected ? "text-red-800" : "text-amber-800"
                                 }`}>
-                                  {tok.founder_name === "Bhaskar" ? "Bhaskar Sir" : tok.founder_name}
+                                  {tok.founder_name === "Bhaskar" ? "Bhaskar Sir" : tok.founder_name === "Dhruv" ? "Dhruv Sir" : tok.founder_name}
                                 </span>
                                 <span className={`ml-auto text-xs font-medium ${
                                   approved ? "text-green-700" : rejected ? "text-red-700" : "text-amber-700"
