@@ -1715,8 +1715,8 @@ export default function PurchaseRequisitions() {
       )}
 
       {/* Filters (search + priority only — status moved to tabs above) */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[240px]">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:gap-3">
+        <div className="relative w-full sm:flex-1 sm:min-w-[240px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search PR number, site, code..."
@@ -1726,7 +1726,7 @@ export default function PurchaseRequisitions() {
           />
         </div>
         <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-          <SelectTrigger className="w-40">
+          <SelectTrigger className="w-full sm:w-40">
             <SelectValue placeholder="All Priority" />
           </SelectTrigger>
           <SelectContent>
@@ -1737,12 +1737,12 @@ export default function PurchaseRequisitions() {
             <SelectItem value="low">↓ Low</SelectItem>
           </SelectContent>
         </Select>
-        <div className="flex items-center gap-2">
-          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" title="From date" />
-          <span className="text-xs text-muted-foreground">to</span>
-          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" title="To date" />
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="flex-1 sm:flex-none sm:w-36" title="From date" />
+          <span className="text-xs text-muted-foreground shrink-0">to</span>
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="flex-1 sm:flex-none sm:w-36" title="To date" />
           {(dateFrom || dateTo) && (
-            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs px-2">Clear</Button>
+            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs px-2 shrink-0">Clear</Button>
           )}
         </div>
       </div>
