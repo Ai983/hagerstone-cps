@@ -361,7 +361,7 @@ export default function SiteStock() {
               const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
               return (
                 <Card key={r.key} className={isEdit ? "border-primary/40 bg-primary/5" : (!r.from_boq ? "border-amber-300 bg-amber-50/50" : undefined)}>
-                  <CardContent className="p-3 space-y-1.5">
+                  <CardContent className="p-3 space-y-2">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -371,56 +371,69 @@ export default function SiteStock() {
                         </div>
                         <div className="text-[11px] text-muted-foreground">{r.unit ?? "—"} · {fmtDate(r.last_updated)}</div>
                       </div>
-                      {isEdit ? (
-                        <div className="flex items-center gap-1 shrink-0">
-                          <Button variant="ghost" size="sm" onClick={() => saveEdit(r)} disabled={editSaving} className="h-8 text-green-700 hover:bg-green-100" title="Save">
-                            <Check className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={cancelEdit} disabled={editSaving} className="h-8" title="Cancel">
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      ) : (
-                        <Button variant="outline" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} className="shrink-0 h-8">
-                          <Edit2 className="h-3.5 w-3.5 mr-1" /> Update
+                      {!isEdit && (
+                        <Button variant="outline" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} className="shrink-0 h-9 px-3">
+                          <Edit2 className="h-4 w-4 mr-1" /> Update
                         </Button>
                       )}
                     </div>
-                    <div className="grid grid-cols-3 gap-1 text-xs">
-                      <div>
-                        <div className="text-[10px] text-muted-foreground">Planned</div>
-                        <div className="font-mono">{r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}</div>
-                      </div>
-                      <div>
-                        <div className="text-[10px] text-muted-foreground">Current</div>
-                        {isEdit ? (
-                          <Input
-                            type="number"
-                            min={0}
-                            step="0.01"
-                            value={editQty}
-                            onChange={(e) => setEditQty(e.target.value)}
-                            className="h-7 text-xs font-mono px-1.5"
-                            autoFocus
-                          />
-                        ) : (
+
+                    {!isEdit ? (
+                      <div className="grid grid-cols-3 gap-1 text-xs">
+                        <div>
+                          <div className="text-[10px] text-muted-foreground">Planned</div>
+                          <div className="font-mono">{r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-muted-foreground">Current</div>
                           <div className="font-mono font-semibold">{Number(r.current_qty).toLocaleString("en-IN")}</div>
-                        )}
-                      </div>
-                      <div>
-                        <div className="text-[10px] text-muted-foreground">Diff</div>
-                        <div className={`font-mono ${diff == null ? "" : diff < 0 ? "text-red-700" : diff > 0 ? "text-green-700" : "text-muted-foreground"}`}>
-                          {diff == null ? "—" : `${diff > 0 ? "+" : ""}${Number(diff).toLocaleString("en-IN")}`}
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-muted-foreground">Diff</div>
+                          <div className={`font-mono ${diff == null ? "" : diff < 0 ? "text-red-700" : diff > 0 ? "text-green-700" : "text-muted-foreground"}`}>
+                            {diff == null ? "—" : `${diff > 0 ? "+" : ""}${Number(diff).toLocaleString("en-IN")}`}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    {isEdit && (
-                      <Input
-                        value={editNotes}
-                        onChange={(e) => setEditNotes(e.target.value)}
-                        className="h-7 text-xs"
-                        placeholder="Reason / note (optional)"
-                      />
+                    ) : (
+                      <div className="space-y-2 pt-1">
+                        <div className="flex items-center gap-2">
+                          <div className="shrink-0">
+                            <div className="text-[10px] text-muted-foreground">Planned</div>
+                            <div className="font-mono text-sm">{r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}</div>
+                          </div>
+                          <div className="flex-1">
+                            <Label className="text-[10px] text-muted-foreground">New Current Qty *</Label>
+                            <Input
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              step="0.01"
+                              value={editQty}
+                              onChange={(e) => setEditQty(e.target.value)}
+                              className="h-11 text-base font-mono"
+                              autoFocus
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">Reason / note</Label>
+                          <Input
+                            value={editNotes}
+                            onChange={(e) => setEditNotes(e.target.value)}
+                            className="h-10 text-sm"
+                            placeholder="Optional"
+                          />
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                          <Button variant="outline" onClick={cancelEdit} disabled={editSaving} className="flex-1 h-11">
+                            <X className="h-4 w-4 mr-1" /> Cancel
+                          </Button>
+                          <Button onClick={() => saveEdit(r)} disabled={editSaving} className="flex-1 h-11">
+                            <Check className="h-4 w-4 mr-1" /> {editSaving ? "Saving…" : "Save"}
+                          </Button>
+                        </div>
+                      </div>
                     )}
                   </CardContent>
                 </Card>
