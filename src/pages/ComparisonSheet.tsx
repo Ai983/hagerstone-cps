@@ -61,7 +61,18 @@ type ComparisonSheetRow = {
 };
 
 type RfqRow = { id: string; rfq_number: string; title: string | null; pr_id: string };
-type PrLineItem = { id: string; pr_id: string; description: string; quantity: number; unit: string | null };
+type PrLineItem = { id: string; pr_id: string; description: string; quantity: number; unit: string | null; item_id?: string | null };
+
+// Historical PO purchase for a given line item — shown in the comparison sheet
+// so procurement remembers the last rate/date/supplier they bought this material at.
+type LastPurchase = {
+  rate: number;
+  unit: string | null;
+  po_number: string;
+  po_date: string;        // ISO date of the PO
+  supplier_name: string | null;
+  match_type: 'item_id' | 'description';
+};
 
 // Market-rate benchmark — one per PR line item, populated by the
 // market-rate-search edge function and persisted to cps_market_benchmarks.
@@ -249,6 +260,7 @@ export default function ComparisonSheetPage() {
   const [rfq, setRfq] = useState<RfqRow | null>(null);
   const [existingPo, setExistingPo] = useState<{ id: string; po_number: string } | null>(null);
   const [prLineItems, setPrLineItems] = useState<PrLineItem[]>([]);
+  const [lastPurchases, setLastPurchases] = useState<Record<string, LastPurchase>>({});
   const [projectSite, setProjectSite] = useState<string | null>(null);
   const [marketBenchmarks, setMarketBenchmarks] = useState<Record<string, MarketBenchmark>>({});
   const [marketLoading, setMarketLoading] = useState(false);
@@ -372,12 +384,17 @@ export default function ComparisonSheetPage() {
 
       const { data: prRows, error: prErr } = await supabase
         .from("cps_pr_line_items")
-        .select("id,pr_id,description,quantity,unit,sort_order")
+        .select("id,pr_id,description,quantity,unit,sort_order,item_id")
         .eq("pr_id", prId)
         .order("sort_order", { ascending: true });
       if (prErr) throw prErr;
       const localPrLineItems = (prRows ?? []) as PrLineItem[];
       setPrLineItems(localPrLineItems);
+
+      // Fire-and-forget: enrich each PR line item with the most recent historical
+      // PO rate so procurement sees "you bought this for ₹X on Y" while reviewing
+      // quotes. Doesn't block the rest of the load — populates as soon as ready.
+      void loadLastPurchases(localPrLineItems);
 
       // Pull project_site so the market-rate search can geo-target nearby suppliers
       if (prId) {
@@ -836,6 +853,75 @@ export default function ComparisonSheetPage() {
       toast.error(e?.message ?? "Override request fail ho gayi");
     } finally {
       setOverrideRequesting(false);
+    }
+  };
+
+  // For each PR line item, find the most recent matching PO line item from an
+  // approved-or-better PO in the last 12 months. Match preference:
+  //   1. By item_id (if both PR row and a PO row link to the same cps_items entry)
+  //   2. By case-insensitive normalized description
+  // The result populates the "Last Purchased" column so procurement can sanity-check
+  // new quote rates against historical PO rates without leaving the comparison sheet.
+  const loadLastPurchases = async (plis: PrLineItem[]) => {
+    if (!plis.length) return;
+    try {
+      const POSITIVE_PO_STATUSES = ["approved", "sent", "acknowledged", "dispatched", "delivered", "closed"];
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+      const { data: poLines, error } = await supabase
+        .from("cps_po_line_items")
+        .select("id,item_id,description,unit,rate,cps_purchase_orders!inner(id,po_number,created_at,status,supplier_id,cps_suppliers(name))")
+        .in("cps_purchase_orders.status", POSITIVE_PO_STATUSES)
+        .gte("cps_purchase_orders.created_at", oneYearAgo.toISOString());
+      if (error) throw error;
+
+      type RawPoLine = {
+        id: string;
+        item_id: string | null;
+        description: string | null;
+        unit: string | null;
+        rate: number | null;
+        cps_purchase_orders: {
+          po_number: string;
+          created_at: string;
+          supplier_id: string | null;
+          cps_suppliers: { name: string } | null;
+        } | null;
+      };
+      const rows = (poLines ?? []) as unknown as RawPoLine[];
+
+      const normalizeName = (s: string | null | undefined) =>
+        (s ?? "").replace(/[^a-z0-9]+/gi, " ").trim().toLowerCase();
+
+      const result: Record<string, LastPurchase> = {};
+      plis.forEach((pli) => {
+        const candidates = rows.filter((r) => {
+          if (pli.item_id && r.item_id) return r.item_id === pli.item_id;
+          return normalizeName(r.description) === normalizeName(pli.description);
+        });
+        if (!candidates.length) return;
+        candidates.sort((a, b) => {
+          const ad = a.cps_purchase_orders?.created_at ?? "";
+          const bd = b.cps_purchase_orders?.created_at ?? "";
+          return bd.localeCompare(ad);
+        });
+        const top = candidates[0];
+        if (top.rate == null || !top.cps_purchase_orders) return;
+        result[pli.id] = {
+          rate: Number(top.rate),
+          unit: top.unit,
+          po_number: top.cps_purchase_orders.po_number,
+          po_date: top.cps_purchase_orders.created_at,
+          supplier_name: top.cps_purchase_orders.cps_suppliers?.name ?? null,
+          match_type: pli.item_id && top.item_id ? "item_id" : "description",
+        };
+      });
+      setLastPurchases(result);
+    } catch (e) {
+      // Non-fatal — the comparison sheet still works without the historical column
+      // eslint-disable-next-line no-console
+      console.error("loadLastPurchases failed:", e);
     }
   };
 
@@ -1359,7 +1445,7 @@ export default function ComparisonSheetPage() {
 
     // ===== Unified comparison table =====
     rows.push(["COMPARISON TABLE"]);
-    rows.push(["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Market 1 (Lowest)", "Market 2"]);
+    rows.push(["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Last Purchased", "Last Purchased Date", "Last Purchased Supplier", "Market 1 (Lowest)", "Market 2"]);
 
     prLineItems.forEach((pli) => {
       const cheapest = cheapestPerRow[pli.id];
@@ -1389,31 +1475,38 @@ export default function ComparisonSheetPage() {
         const inferredTag = info.source === "inferred" ? "≈ " : "";
         return `${cheapestTag}${inferredTag}Rs. ${info.rate.toLocaleString("en-IN")}`;
       });
+      const lp = lastPurchases[pli.id];
+      const lpRate = lp ? `Rs. ${Number(lp.rate).toLocaleString("en-IN")}${lp.unit ? "/" + lp.unit : ""}` : "—";
+      const lpDate = lp ? `${new Date(lp.po_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })} (${lp.po_number})` : "—";
+      const lpSupplier = lp?.supplier_name ?? "—";
       rows.push([
         `${pli.description}${pli.unit ? ` (${pli.unit})` : ""}`,
         String(pli.quantity ?? ""),
         ...cells,
+        lpRate,
+        lpDate,
+        lpSupplier,
         market1Label,
         market2Label,
       ]);
     });
 
-    rows.push(["Subtotal (excl GST)", "", ...supplierTotals.map((t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—"), "", ""]);
-    rows.push(["GST", "", ...supplierTotals.map((t) => t.gst > 0 ? fmtINR(t.gst) : "—"), "", ""]);
-    rows.push(["Freight / Extras", "", ...supplierTotals.map((t) => (t.freight + t.extraSum) > 0 ? fmtINR(t.freight + t.extraSum) : "—"), "", ""]);
+    rows.push(["Subtotal (excl GST)", "", ...supplierTotals.map((t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—"), "", "", "", "", ""]);
+    rows.push(["GST", "", ...supplierTotals.map((t) => t.gst > 0 ? fmtINR(t.gst) : "—"), "", "", "", "", ""]);
+    rows.push(["Freight / Extras", "", ...supplierTotals.map((t) => (t.freight + t.extraSum) > 0 ? fmtINR(t.freight + t.extraSum) : "—"), "", "", "", "", ""]);
     rows.push([
       "LANDED TOTAL", "",
       ...supplierTotals.map((t) => {
         if (t.landedTotal <= 0) return "—";
         return `${t.sup.id === winnerSupplierId ? "[WIN] " : ""}${fmtINR(t.landedTotal)}`;
       }),
-      "", "",
+      "", "", "", "", "",
     ]);
-    rows.push(["Payment Terms", "", ...supplierTotals.map((t) => t.paymentTerms ?? "—"), "", ""]);
-    rows.push(["Delivery", "", ...supplierTotals.map((t) => t.deliveryTerms ?? "—"), "", ""]);
-    rows.push(["Warranty", "", ...supplierTotals.map((t) => t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—"), "", ""]);
-    rows.push(["Validity", "", ...supplierTotals.map((t) => t.validityDays != null ? `${t.validityDays} days` : "—"), "", ""]);
-    rows.push(["Compliance", "", ...supplierTotals.map((t) => t.compliance ?? "—"), "", ""]);
+    rows.push(["Payment Terms", "", ...supplierTotals.map((t) => t.paymentTerms ?? "—"), "", "", "", "", ""]);
+    rows.push(["Delivery", "", ...supplierTotals.map((t) => t.deliveryTerms ?? "—"), "", "", "", "", ""]);
+    rows.push(["Warranty", "", ...supplierTotals.map((t) => t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—"), "", "", "", "", ""]);
+    rows.push(["Validity", "", ...supplierTotals.map((t) => t.validityDays != null ? `${t.validityDays} days` : "—"), "", "", "", "", ""]);
+    rows.push(["Compliance", "", ...supplierTotals.map((t) => t.compliance ?? "—"), "", "", "", "", ""]);
     rows.push([]);
 
     if (aiVerdict) {
@@ -1524,8 +1617,8 @@ export default function ComparisonSheetPage() {
     doc.text("Comparison Table", 12, y);
     y += 4;
 
-    type CellMeta = { kind: "item" | "subtotal" | "gst" | "freight" | "landed" | "term"; isCheapest?: boolean; isWinner?: boolean; isMarketAbove?: boolean; isInferred?: boolean };
-    const tableHead = [["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Market 1 (Lowest)", "Market 2"]];
+    type CellMeta = { kind: "item" | "subtotal" | "gst" | "freight" | "landed" | "term"; isCheapest?: boolean; isWinner?: boolean; isMarketAbove?: boolean; isInferred?: boolean; isLastPurchased?: boolean };
+    const tableHead = [["Item", "Qty", ...supplierTotals.map((t) => t.sup.name), "Last Purchased", "Last Date / Supplier", "Market 1 (Lowest)", "Market 2"]];
     const tableBody: string[][] = [];
     const rowMeta: CellMeta[][] = [];
 
@@ -1575,12 +1668,23 @@ export default function ComparisonSheetPage() {
           cellsMeta.push({ kind: "item", isCheapest, isInferred: info.source === "inferred" });
         }
       });
+      // Last Purchased — 2 cells (rate; date+supplier)
+      const lp = lastPurchases[pli.id];
+      const lpRateLabel = lp ? `Rs.${Number(lp.rate).toLocaleString("en-IN")}${lp.unit ? "/" + lp.unit : ""}` : "—";
+      const lpDateSupplierLabel = lp
+        ? `${new Date(lp.po_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}${lp.supplier_name ? "\n" + lp.supplier_name : ""}\n${lp.po_number}`
+        : "—";
+      cellsMeta.push({ kind: "item", isLastPurchased: true });
+      cellsMeta.push({ kind: "item", isLastPurchased: true });
+      // Market columns
       cellsMeta.push({ kind: "item", isMarketAbove: isAbove });
       cellsMeta.push({ kind: "item" });
       tableBody.push([
         `${pli.description}${pli.unit ? ` (${pli.unit})` : ""}`,
         String(pli.quantity ?? ""),
         ...cellsText,
+        lpRateLabel,
+        lpDateSupplierLabel,
         market1Label,
         market2Label,
       ]);
@@ -1593,9 +1697,12 @@ export default function ComparisonSheetPage() {
         meta.push({ kind, isWinner: kind === "landed" && t.sup.id === winnerSupplierId });
         return values(t);
       });
+      // 2 cells for Last Purchased (rate, date/supplier) + 2 cells for Market 1/2
+      meta.push({ kind, isLastPurchased: true });
+      meta.push({ kind, isLastPurchased: true });
       meta.push({ kind });
       meta.push({ kind });
-      tableBody.push([label, "", ...cells, "", ""]);
+      tableBody.push([label, "", ...cells, "", "", "", ""]);
       rowMeta.push(meta);
     };
 
@@ -1639,9 +1746,19 @@ export default function ComparisonSheetPage() {
           cellData.cell.styles.textColor = [150, 90, 0];
           cellData.cell.styles.fontStyle = "bold";
         }
-        // Market columns header tint (Market 1 and Market 2 — 2nd-to-last and last columns)
-        const market1Idx = supplierTotals.length + 2;
-        const market2Idx = supplierTotals.length + 3;
+        // Last Purchased columns (purple tint, always highlighted) — 2 cells right after suppliers
+        const lpRateIdx       = supplierTotals.length + 2;
+        const lpDateIdx       = supplierTotals.length + 3;
+        if (cellData.column.index === lpRateIdx || cellData.column.index === lpDateIdx) {
+          cellData.cell.styles.fillColor = [243, 232, 255];
+          cellData.cell.styles.textColor = [88, 28, 135];
+          if (meta.kind === "item" && meta.isLastPurchased) {
+            cellData.cell.styles.fontStyle = "bold";
+          }
+        }
+        // Market columns header tint (Market 1 and Market 2 — last 2 columns now)
+        const market1Idx = supplierTotals.length + 4;
+        const market2Idx = supplierTotals.length + 5;
         if (meta.kind === "item" && (cellData.column.index === market1Idx || cellData.column.index === market2Idx) && !meta.isMarketAbove) {
           cellData.cell.styles.fillColor = [232, 240, 252];
         }
@@ -2836,6 +2953,10 @@ Rules:
                           </div>
                         </TableHead>
                       ))}
+                      <TableHead className="min-w-[160px] bg-purple-100 text-purple-900 font-semibold border-x-2 border-purple-300">
+                        <div className="flex items-center gap-1">📜 Last Purchased</div>
+                        <div className="text-[10px] font-normal text-purple-700 mt-0.5">From history</div>
+                      </TableHead>
                       <TableHead className="min-w-[140px] bg-blue-50/50">Market 1 (Lowest)</TableHead>
                       <TableHead className="min-w-[140px] bg-blue-50/50">Market 2</TableHead>
                     </TableRow>
@@ -2879,6 +3000,38 @@ Rules:
                               </TableCell>
                             );
                           })}
+                          {(() => {
+                            const lp = lastPurchases[pli.id];
+                            return (
+                              <TableCell className="text-sm align-top bg-purple-50 border-x-2 border-purple-300 min-w-[160px]">
+                                {lp ? (
+                                  <div className="space-y-1">
+                                    <div className="text-right">
+                                      <div className="font-mono text-sm font-bold text-purple-900">
+                                        ₹{Number(lp.rate).toLocaleString("en-IN")}
+                                        {lp.unit ? <span className="font-normal text-[10px] text-purple-700">/{lp.unit}</span> : ""}
+                                      </div>
+                                    </div>
+                                    <div className="text-[10px] leading-tight text-purple-800/90 space-y-0.5">
+                                      <div className="font-medium">
+                                        {new Date(lp.po_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                                      </div>
+                                      {lp.supplier_name && (
+                                        <div className="truncate max-w-[160px]" title={lp.supplier_name}>
+                                          {lp.supplier_name}
+                                        </div>
+                                      )}
+                                      <div className="font-mono text-[9px] text-purple-600">
+                                        {lp.po_number}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-[11px] italic text-muted-foreground">No prior PO</span>
+                                )}
+                              </TableCell>
+                            );
+                          })()}
                           {(() => {
                             const topSources = (bench?.market_suppliers ?? [])
                               .filter((s) => Number(s.rate_numeric ?? 0) > 0)
@@ -2957,6 +3110,7 @@ Rules:
                       {supplierTotals.map((t) => (
                         <TableCell key={t.sup.id} className="text-right text-sm font-mono">{t.subtotal > 0 ? `₹${t.subtotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>
                       ))}
+                      <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
@@ -2965,6 +3119,7 @@ Rules:
                       {supplierTotals.map((t) => (
                         <TableCell key={t.sup.id} className="text-right text-sm font-mono">{t.gst > 0 ? `₹${t.gst.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>
                       ))}
+                      <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
@@ -2974,6 +3129,7 @@ Rules:
                         const v = t.freight + t.extraSum;
                         return <TableCell key={t.sup.id} className="text-right text-sm font-mono">{v > 0 ? `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>;
                       })}
+                      <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
@@ -2989,6 +3145,7 @@ Rules:
                           ) : "—"}
                         </TableCell>
                       ))}
+                      <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
@@ -2999,6 +3156,7 @@ Rules:
                       {supplierTotals.map((t) => (
                         <TableCell key={t.sup.id} className="text-xs whitespace-pre-wrap break-words">{t.paymentTerms ?? "—"}</TableCell>
                       ))}
+                      <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
@@ -3007,6 +3165,7 @@ Rules:
                       {supplierTotals.map((t) => (
                         <TableCell key={t.sup.id} className="text-xs">{t.deliveryTerms ?? "—"}</TableCell>
                       ))}
+                      <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
@@ -3015,6 +3174,7 @@ Rules:
                       {supplierTotals.map((t) => (
                         <TableCell key={t.sup.id} className="text-xs">{t.warrantyMonths != null ? `${t.warrantyMonths} months` : "—"}</TableCell>
                       ))}
+                      <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
@@ -3023,6 +3183,7 @@ Rules:
                       {supplierTotals.map((t) => (
                         <TableCell key={t.sup.id} className="text-xs">{t.validityDays != null ? `${t.validityDays} days` : "—"}</TableCell>
                       ))}
+                      <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
@@ -3033,6 +3194,7 @@ Rules:
                           <Badge className={`text-[10px] border ${complianceBadgeCls(t.compliance)}`}>{t.compliance ?? "—"}</Badge>
                         </TableCell>
                       ))}
+                      <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
