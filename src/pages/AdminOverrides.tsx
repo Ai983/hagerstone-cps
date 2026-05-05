@@ -374,6 +374,16 @@ export default function AdminOverrides() {
                         <TableCell className="text-xs max-w-[320px] whitespace-pre-wrap">
                           {r.min_quotes_override_reason && <div><span className="text-muted-foreground">Procurement:</span> {r.min_quotes_override_reason}</div>}
                           {r.min_quotes_override_admin_note && <div className="mt-1"><span className="text-muted-foreground">IT team note:</span> {r.min_quotes_override_admin_note}</div>}
+                          {r.min_quotes_override_attachment_url && (
+                            <a
+                              href={r.min_quotes_override_attachment_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-1 inline-flex items-center gap-1 text-primary underline hover:text-primary/80"
+                            >
+                              📎 View attachment
+                            </a>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
