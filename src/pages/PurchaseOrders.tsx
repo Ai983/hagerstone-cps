@@ -6,7 +6,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
-import logoUrl from "@/assets/Companylogo.png";
+import logoUrl from "@/assets/optimisedlogo.png";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

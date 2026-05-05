@@ -219,7 +219,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
 
   if (data.logoBase64) {
     try {
-      doc.addImage(data.logoBase64, "PNG", W - MR - LOGO_W, y, LOGO_W, LOGO_H);
+      doc.addImage(data.logoBase64, "JPEG", W - MR - LOGO_W, y, LOGO_W, LOGO_H, "logo", "FAST");
     } catch (_) { /* logo optional */ }
   }
 
@@ -662,7 +662,11 @@ export function buildPoPdf(data: PoPdfData): Blob {
 
   /* Use arraybuffer → Blob — reliable across all jsPDF versions */
   const buf = doc.output("arraybuffer");
-  return new Blob([buf], { type: "application/pdf" });
+  const pdfBlob = new Blob([buf], { type: "application/pdf" });
+  
+  console.log(`PDF size: ${(pdfBlob.size / 1024).toFixed(1)} KB`);
+  
+  return pdfBlob;
 }
 
 /* ─────────────────────────────── upload to Supabase Storage ── */

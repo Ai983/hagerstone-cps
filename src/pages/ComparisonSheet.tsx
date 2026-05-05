@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
-import logoUrl from "@/assets/Companylogo.png";
+import logoUrl from "@/assets/optimisedlogo.png";
 
 import { AlertTriangle, Sparkles, Download, FileText, CheckCircle2 } from "lucide-react";
 import jsPDF from "jspdf";
