@@ -1371,6 +1371,7 @@ export default function PurchaseOrders() {
       } else {
         // Revise: supersede original, clone as new version
         const newVersion = (viewPo.version ?? 1) + 1;
+        const newPoNumber = viewPo.po_number + `-R${newVersion - 1}`; // e.g. HI-PO-2026-0035-R1
 
         // Mark original as superseded
         const { error: supErr } = await supabase
@@ -1379,16 +1380,16 @@ export default function PurchaseOrders() {
           .eq("id", viewPo.id);
         if (supErr) throw supErr;
 
-        // Clone PO header
+        // Clone PO header — start in pending_approval so the founder workflow kicks in
         const { data: newPoData, error: cloneErr } = await supabase
           .from("cps_purchase_orders")
           .insert([{
-            po_number: viewPo.po_number + `-R${newVersion - 1}`, // e.g. HI-PO-2026-0035-R1
+            po_number: newPoNumber,
             rfq_id: viewPo.rfq_id,
             pr_id: viewPo.pr_id,
             supplier_id: viewPo.supplier_id,
             comparison_sheet_id: viewPo.comparison_sheet_id,
-            status: "draft",
+            status: "pending_approval",
             version: newVersion,
             project_code: viewPo.project_code,
             ship_to_address: viewPo.ship_to_address,
@@ -1447,12 +1448,152 @@ export default function PurchaseOrders() {
           logged_at: now,
         }]);
 
-        toast.success(`PO revised — v${newVersion} created in Draft. Edit line items and send for approval.`);
+        toast.success(`PO revised — v${newVersion} created. Founders ko approval ke liye bheja ja raha hai.`);
         setReviseCancelOpen(false);
         setReviseCancelReason("");
         await fetchPoRows();
         // Open the new revision PO
         await openView(newPoId);
+
+        /* ── fire-and-forget: PDF + approval tokens + n8n webhook for the revision ── */
+        const _supplierId = viewPo.supplier_id;
+        const _lineItems = viewPoLineItems;
+        const _viewPo = viewPo;
+        const _supplier = viewSupplier;
+        (async () => {
+          try {
+            /* fetch portal_base_url from config */
+            const { data: baseUrlRow } = await supabase
+              .from("cps_config")
+              .select("value")
+              .eq("key", "portal_base_url")
+              .maybeSingle();
+            const origin = (baseUrlRow as any)?.value || window.location.origin;
+
+            /* supplier details for PDF */
+            let supplierName = _supplier?.name ?? "";
+            let supplierGstin: string | null = _supplier?.gstin ?? null;
+            let supplierPhone: string | null = _supplier?.phone ?? null;
+            if (!supplierName && _supplierId) {
+              const { data: sup } = await supabase
+                .from("cps_suppliers")
+                .select("name,gstin,phone")
+                .eq("id", _supplierId)
+                .maybeSingle();
+              supplierName = (sup as any)?.name ?? "";
+              supplierGstin = (sup as any)?.gstin ?? null;
+              supplierPhone = (sup as any)?.phone ?? null;
+            }
+
+            /* fetch logo as base64 */
+            let _logoBase64: string | null = null;
+            try {
+              const logoResp = await fetch(logoUrl);
+              const logoBlob = await logoResp.blob();
+              _logoBase64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                  const result = reader.result as string;
+                  resolve(result.split(",")[1] ?? result);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(logoBlob);
+              });
+            } catch (_) { /* logo optional */ }
+
+            /* build revision PDF */
+            const pdfBlob = buildPoPdf({
+              poNumber: newPoNumber,
+              prNumber: null,
+              supplierName,
+              supplierGstin,
+              supplierPhone,
+              paymentTerms: _viewPo.payment_terms || null,
+              deliveryDate: _viewPo.delivery_date || null,
+              shipToAddress: _viewPo.ship_to_address || null,
+              projectCode: _viewPo.project_code || null,
+              projectName: _viewPo.project_code || null,
+              subTotal: Number(_viewPo.total_value ?? 0),
+              gstAmount: Number(_viewPo.gst_amount ?? 0),
+              grandTotal: Number(_viewPo.grand_total ?? 0),
+              logoBase64: _logoBase64,
+              hagerstoneGstin: _viewPo.hagerstone_gstin ?? "09AAECH3768B1ZM",
+              createdByName: user.name ?? user.email ?? null,
+              bankAccountHolderName: _viewPo.bank_account_holder_name || null,
+              bankName: _viewPo.bank_name || null,
+              bankIfsc: _viewPo.bank_ifsc || null,
+              bankAccountNumber: _viewPo.bank_account_number || null,
+              lineItems: _lineItems.map((li) => ({
+                description: li.description ?? "",
+                brand: li.brand,
+                quantity: Number(li.quantity ?? 0),
+                unit: li.unit,
+                rate: Number(li.rate ?? 0),
+                gst_percent: Number(li.gst_percent ?? 0),
+                gst_amount: li.gst_amount,
+                total_value: Number(li.total_value ?? 0),
+                hsn_code: li.hsn_code,
+              })),
+            });
+
+            const poPdfUrl = await uploadPoPdf(supabase, newPoId, newPoNumber, pdfBlob);
+
+            /* insert approval tokens — both founders */
+            const { data: insertedTokens, error: tokErr } = await supabase
+              .from("cps_po_approval_tokens")
+              .insert([
+                { po_id: newPoId, po_number: newPoNumber, founder_name: "Bhaskar" },
+                { po_id: newPoId, po_number: newPoNumber, founder_name: "Dhruv" },
+              ])
+              .select("token,founder_name");
+            if (tokErr || !insertedTokens) throw tokErr;
+
+            const approvalLinks = (insertedTokens as Array<{ token: string; founder_name: string }>).map((t) => ({
+              founder_name: t.founder_name,
+              link: `${origin}/approve-po?token=${t.token}`,
+            }));
+
+            const { data: cfgRows } = await supabase
+              .from("cps_config")
+              .select("key,value")
+              .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar", "founder_whatsapp_dhruv"]);
+            const cfgMap: Record<string, string> = {};
+            (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
+            const webhookUrl = cfgMap["webhook_po_founder_approval"];
+            if (!webhookUrl) return;
+            const bhaskarWA = cfgMap["founder_whatsapp_bhaskar"] || "919953001048";
+            const dhruvWA = cfgMap["founder_whatsapp_dhruv"] || "919910820078";
+
+            await supabase
+              .from("cps_purchase_orders")
+              .update({ founder_approval_status: "pending" })
+              .eq("id", newPoId);
+
+            await fetch(webhookUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                event: "po_revised",
+                po_id: newPoId,
+                po_number: newPoNumber,
+                supplier_name: supplierName,
+                grand_total: Number(_viewPo.grand_total ?? 0),
+                gst_amount: Number(_viewPo.gst_amount ?? 0),
+                total_value: Number(_viewPo.total_value ?? 0),
+                payment_terms: _viewPo.payment_terms || null,
+                delivery_date: _viewPo.delivery_date || null,
+                po_pdf_url: poPdfUrl,
+                bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
+                bhaskar_whatsapp: bhaskarWA,
+                dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
+                dhruv_whatsapp: dhruvWA,
+                revision_reason: trimmedReason,
+              }),
+            });
+          } catch (_) {
+            /* non-blocking — silently ignore */
+          }
+        })();
       }
     } catch (e: any) {
       toast.error(e?.message || "Failed to process revision");
