@@ -1257,6 +1257,11 @@ export default function PurchaseOrders() {
       const dhruvLink = `${portalBase}/approve-po?token=${dhruvToken}`;
       const supplierName = viewSupplier?.name ?? "";
 
+      /* Regenerate PDF so the founders see the latest content (project name, supplier
+         address, version banner, etc.) — even on POs created before the unified PDF
+         flow shipped. uploadPoPdf upserts at the same path, so the URL stays stable. */
+      const refreshedPdfUrl = await regeneratePoPdfAndUpload(poId, poNumber);
+
       /* fire webhook */
       const resp = await fetch(webhookUrl, {
         method: "POST",
@@ -1271,7 +1276,7 @@ export default function PurchaseOrders() {
           total_value: viewPo.total_value,
           payment_terms: viewPo.payment_terms || null,
           delivery_date: viewPo.delivery_date || null,
-          po_pdf_url: (viewPo as any).po_pdf_url || null,
+          po_pdf_url: refreshedPdfUrl ?? (viewPo as any).po_pdf_url ?? null,
           bhaskar_approval_link: bhaskarLink,
           bhaskar_whatsapp: bhaskarWA,
           dhruv_approval_link: dhruvLink,
