@@ -238,6 +238,8 @@ export default function ComparisonSheetPage() {
   const [approvedQuoteCount, setApprovedQuoteCount] = useState<number>(0);
   const [overrideStatus, setOverrideStatus] = useState<"none" | "requested" | "allowed" | "denied">("none");
   const [overrideReason, setOverrideReason] = useState<string>("");
+  const [overrideAttachmentFile, setOverrideAttachmentFile] = useState<File | null>(null);
+  const [overrideAttachmentUrl, setOverrideAttachmentUrl] = useState<string | null>(null);
   const [overrideRequestOpen, setOverrideRequestOpen] = useState(false);
   const [overrideRequesting, setOverrideRequesting] = useState(false);
   const [overrideRequestedAt, setOverrideRequestedAt] = useState<string | null>(null);
@@ -343,7 +345,7 @@ export default function ComparisonSheetPage() {
     try {
       const { data: rfqRow, error: rfqErr } = await supabase
         .from("cps_rfqs")
-        .select("id,rfq_number,title,pr_id,min_quotes_override_status,min_quotes_override_reason,min_quotes_override_requested_at,min_quotes_override_allowed_by,min_quotes_override_allowed_at,min_quotes_override_admin_note")
+        .select("id,rfq_number,title,pr_id,min_quotes_override_status,min_quotes_override_reason,min_quotes_override_requested_at,min_quotes_override_allowed_by,min_quotes_override_allowed_at,min_quotes_override_admin_note,min_quotes_override_attachment_url")
         .eq("id", rfqId)
         .single();
       if (rfqErr) throw rfqErr;
@@ -358,6 +360,7 @@ export default function ComparisonSheetPage() {
       setOverrideRequestedAt((rfqRow as any).min_quotes_override_requested_at ?? null);
       setOverrideAllowedAt((rfqRow as any).min_quotes_override_allowed_at ?? null);
       setOverrideAdminNote((rfqRow as any).min_quotes_override_admin_note ?? null);
+      setOverrideAttachmentUrl((rfqRow as any).min_quotes_override_attachment_url ?? null);
       const allowedById = (rfqRow as any).min_quotes_override_allowed_by as string | null;
       if (allowedById) {
         const { data: allowedUser } = await supabase
@@ -780,13 +783,34 @@ export default function ComparisonSheetPage() {
     }
     setOverrideRequesting(true);
     try {
+      // Upload the attachment first (optional). Stored under cps-quotes/override-attachments/.
+      let attachmentUrl: string | null = null;
+      if (overrideAttachmentFile) {
+        const safeName = overrideAttachmentFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const path = `override-attachments/${rfqId}/${Date.now()}_${safeName}`;
+        const { error: upErr } = await supabase.storage
+          .from("cps-quotes")
+          .upload(path, overrideAttachmentFile, {
+            contentType: overrideAttachmentFile.type || "image/jpeg",
+            upsert: false,
+          });
+        if (upErr) {
+          toast.error("Attachment upload fail: " + upErr.message);
+          setOverrideRequesting(false);
+          return;
+        }
+        const { data: pub } = supabase.storage.from("cps-quotes").getPublicUrl(path);
+        attachmentUrl = pub.publicUrl ?? null;
+      }
+
       const nowIso = new Date().toISOString();
       const { error } = await supabase.from("cps_rfqs").update({
         min_quotes_override_status: "requested",
         min_quotes_override_reason: reason,
         min_quotes_override_requested_by: user.id,
         min_quotes_override_requested_at: nowIso,
-      }).eq("id", rfqId);
+        min_quotes_override_attachment_url: attachmentUrl,
+      } as any).eq("id", rfqId);
       if (error) throw error;
 
       await supabase.from("cps_audit_log").insert({
@@ -797,13 +821,15 @@ export default function ComparisonSheetPage() {
         entity_type: "cps_rfqs",
         entity_id: rfqId,
         entity_number: rfq.rfq_number,
-        description: `Override requested for ${rfq.rfq_number}: ${reason}`,
+        description: `Override requested for ${rfq.rfq_number}: ${reason}${attachmentUrl ? " [with attachment]" : ""}`,
         severity: "info",
         logged_at: nowIso,
       });
 
       setOverrideStatus("requested");
       setOverrideRequestedAt(nowIso);
+      setOverrideAttachmentUrl(attachmentUrl);
+      setOverrideAttachmentFile(null);
       setOverrideRequestOpen(false);
       toast.success("Request submit ho gayi. IT team ko bata do.");
     } catch (e: any) {
@@ -2362,6 +2388,11 @@ Rules:
                 <div className="font-semibold mb-0.5">⏳ Override request submit ho gayi</div>
                 <div>IT team se approval ka wait karo.{overrideRequestedAt ? ` (Submitted: ${formatDateTime(overrideRequestedAt)})` : ""}</div>
                 {overrideReason && <div className="mt-1 text-yellow-800/80">Reason: {overrideReason}</div>}
+                {overrideAttachmentUrl && (
+                  <a href={overrideAttachmentUrl} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-yellow-900 underline hover:text-yellow-700">
+                    📎 View attachment
+                  </a>
+                )}
               </div>
             )}
             {overrideStatus === "allowed" && (
@@ -2397,7 +2428,7 @@ Rules:
         </Card>
 
         {/* Override request dialog */}
-        <Dialog open={overrideRequestOpen} onOpenChange={(o) => { if (!overrideRequesting) setOverrideRequestOpen(o); }}>
+        <Dialog open={overrideRequestOpen} onOpenChange={(o) => { if (!overrideRequesting) { setOverrideRequestOpen(o); if (!o) setOverrideAttachmentFile(null); } }}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Request Override from IT Team</DialogTitle>
@@ -2405,18 +2436,45 @@ Rules:
                 Sir se approval lene ke baad, IT team ko ye request bhejo. Reason mein likho ki 3 vendors kyun nahi mil rahe.
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-2 py-2">
-              <Label htmlFor="override-reason" className="text-xs">Reason</Label>
-              <Textarea
-                id="override-reason"
-                rows={4}
-                value={overrideReason}
-                onChange={(e) => setOverrideReason(e.target.value)}
-                placeholder="Example: Sirf Vendor X ke paas ye material hai. Baaki 4 vendors ko approach kiya, response nahi mila."
-              />
+            <div className="space-y-3 py-2">
+              <div className="space-y-2">
+                <Label htmlFor="override-reason" className="text-xs">Reason</Label>
+                <Textarea
+                  id="override-reason"
+                  rows={4}
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  placeholder="Example: Sirf Vendor X ke paas ye material hai. Baaki 4 vendors ko approach kiya, response nahi mila."
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="override-attachment" className="text-xs">
+                  Attachment (optional) — WhatsApp screenshot, vendor email, etc.
+                </Label>
+                <input
+                  id="override-attachment"
+                  type="file"
+                  accept="image/*,application/pdf"
+                  onChange={(e) => setOverrideAttachmentFile(e.target.files?.[0] ?? null)}
+                  className="block w-full text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border file:border-input file:bg-background file:text-sm file:font-medium hover:file:bg-muted"
+                />
+                {overrideAttachmentFile && (
+                  <div className="flex items-center justify-between rounded border border-border bg-muted/30 px-2 py-1.5 text-xs">
+                    <span className="truncate max-w-[260px]">📎 {overrideAttachmentFile.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setOverrideAttachmentFile(null)}
+                      className="text-destructive hover:underline ml-2 shrink-0"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setOverrideRequestOpen(false)} disabled={overrideRequesting}>Cancel</Button>
+              <Button variant="outline" onClick={() => { setOverrideRequestOpen(false); setOverrideAttachmentFile(null); }} disabled={overrideRequesting}>Cancel</Button>
               <Button onClick={submitOverrideRequest} disabled={overrideRequesting || !overrideReason.trim()}>
                 {overrideRequesting ? "Submit ho rahi hai…" : "Submit Request"}
               </Button>

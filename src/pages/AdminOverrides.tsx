@@ -41,6 +41,7 @@ type OverrideRow = {
   min_quotes_override_allowed_by: string | null;
   min_quotes_override_allowed_at: string | null;
   min_quotes_override_admin_note: string | null;
+  min_quotes_override_attachment_url: string | null;
   requestor_name: string | null;
   decided_by_name: string | null;
   approved_count: number;
@@ -86,7 +87,7 @@ export default function AdminOverrides() {
       const { data: rfqs, error: rfqErr } = await supabase
         .from("cps_rfqs")
         .select(
-          "id,rfq_number,title,pr_id,min_quotes_override_status,min_quotes_override_reason,min_quotes_override_requested_by,min_quotes_override_requested_at,min_quotes_override_allowed_by,min_quotes_override_allowed_at,min_quotes_override_admin_note"
+          "id,rfq_number,title,pr_id,min_quotes_override_status,min_quotes_override_reason,min_quotes_override_requested_by,min_quotes_override_requested_at,min_quotes_override_allowed_by,min_quotes_override_allowed_at,min_quotes_override_admin_note,min_quotes_override_attachment_url"
         )
         .in("min_quotes_override_status", ["requested", "allowed", "denied"])
         .order("min_quotes_override_requested_at", { ascending: false });
@@ -152,6 +153,7 @@ export default function AdminOverrides() {
         min_quotes_override_allowed_by: r.min_quotes_override_allowed_by,
         min_quotes_override_allowed_at: r.min_quotes_override_allowed_at,
         min_quotes_override_admin_note: r.min_quotes_override_admin_note,
+        min_quotes_override_attachment_url: (r as any).min_quotes_override_attachment_url ?? null,
         requestor_name: r.min_quotes_override_requested_by ? userById[r.min_quotes_override_requested_by] ?? null : null,
         decided_by_name: r.min_quotes_override_allowed_by ? userById[r.min_quotes_override_allowed_by] ?? null : null,
         approved_count: approvedByRfq[r.id] ?? 0,
@@ -298,7 +300,19 @@ export default function AdminOverrides() {
                             {r.approved_count}/3
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-xs max-w-[280px] whitespace-pre-wrap">{r.min_quotes_override_reason ?? "—"}</TableCell>
+                        <TableCell className="text-xs max-w-[280px] whitespace-pre-wrap">
+                          <div>{r.min_quotes_override_reason ?? "—"}</div>
+                          {r.min_quotes_override_attachment_url && (
+                            <a
+                              href={r.min_quotes_override_attachment_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-1 inline-flex items-center gap-1 text-primary underline hover:text-primary/80"
+                            >
+                              📎 View attachment
+                            </a>
+                          )}
+                        </TableCell>
                         <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(r.min_quotes_override_requested_at)}</TableCell>
                         <TableCell className="text-right">
                           <div className="inline-flex gap-1">
@@ -388,6 +402,24 @@ export default function AdminOverrides() {
             <div className="text-xs bg-muted/50 border rounded p-2">
               <div className="text-muted-foreground mb-0.5">Procurement reason:</div>
               <div className="whitespace-pre-wrap">{decideRow.min_quotes_override_reason}</div>
+            </div>
+          )}
+          {decideRow?.min_quotes_override_attachment_url && (
+            <div className="text-xs bg-muted/50 border rounded p-2 space-y-2">
+              <div className="text-muted-foreground">Attachment:</div>
+              {/\.(pdf)$/i.test(decideRow.min_quotes_override_attachment_url) ? (
+                <a href={decideRow.min_quotes_override_attachment_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary underline">
+                  📄 Open PDF
+                </a>
+              ) : (
+                <a href={decideRow.min_quotes_override_attachment_url} target="_blank" rel="noopener noreferrer" className="block">
+                  <img
+                    src={decideRow.min_quotes_override_attachment_url}
+                    alt="Override attachment"
+                    className="max-h-64 w-auto rounded border"
+                  />
+                </a>
+              )}
             </div>
           )}
           <div className="space-y-2 py-1">
