@@ -2322,34 +2322,48 @@ Rules:
             shipToAddress = (poRes.data as any).ship_to_address ?? null;
           }
 
-          /* insert approval tokens first — this MUST succeed before webhook */
-          const { data: insertedTokens, error: tokErr } = await supabase
-            .from("cps_po_approval_tokens")
-            .insert([
-              { po_id: poId, po_number: poNumber, founder_name: "Bhaskar" },
-            ])
-            .select("token,founder_name");
-          if (tokErr || !insertedTokens) {
-            toast.error("Failed to create approval tokens");
+          /* insert approval tokens for BOTH founders — parallel single-row inserts
+             (matches the resend flow's known-good pattern; avoids any AFTER-INSERT
+             trigger / RETURNING quirks with multi-row inserts). MUST succeed before
+             the webhook fires. */
+          const insertOneToken = async (founderName: "Bhaskar" | "Dhruv"): Promise<string> => {
+            const { data, error } = await supabase
+              .from("cps_po_approval_tokens")
+              .insert([{ po_id: poId, po_number: poNumber, founder_name: founderName }])
+              .select("token")
+              .single();
+            if (error || !data) throw new Error(`Failed to mint ${founderName} approval token: ${error?.message ?? "no data"}`);
+            return (data as any).token as string;
+          };
+          let bhaskarToken: string;
+          let dhruvToken: string;
+          try {
+            [bhaskarToken, dhruvToken] = await Promise.all([
+              insertOneToken("Bhaskar"),
+              insertOneToken("Dhruv"),
+            ]);
+          } catch (e: any) {
+            toast.error(e?.message ?? "Failed to create approval tokens");
             return;
           }
 
-          const approvalLinks = (insertedTokens as Array<{ token: string; founder_name: string }>).map((t) => ({
-            founder_name: t.founder_name,
-            link: `${origin}/approve-po?token=${t.token}`,
-          }));
+          const bhaskarLink = `${origin}/approve-po?token=${bhaskarToken}`;
+          const dhruvLink   = `${origin}/approve-po?token=${dhruvToken}`;
 
-          /* fetch webhook URL */
-          const { data: cfgRow } = await supabase
+          /* fetch webhook URL + both founders' WhatsApp numbers */
+          const { data: cfgRows } = await supabase
             .from("cps_config")
-            .select("value")
-            .eq("key", "webhook_po_founder_approval")
-            .maybeSingle();
-          const webhookUrl = (cfgRow as { value: string } | null)?.value;
+            .select("key,value")
+            .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar", "founder_whatsapp_dhruv"]);
+          const cfgMap: Record<string, string> = {};
+          (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
+          const webhookUrl = cfgMap["webhook_po_founder_approval"];
           if (!webhookUrl) {
             toast.error("Founder approval webhook not configured");
             return;
           }
+          const bhaskarWA = cfgMap["founder_whatsapp_bhaskar"] || "919953001048";
+          const dhruvWA   = cfgMap["founder_whatsapp_dhruv"]   || "919910820078";
 
           /* use totals already computed at PO creation — guaranteed non-zero */
           const subTotal   = poSubTotal;
@@ -2416,7 +2430,9 @@ Rules:
             .update({ founder_approval_status: "pending" })
             .eq("id", poId);
 
-          /* fire webhook — financial values now always present */
+          /* fire webhook — financial values now always present, and BOTH founders
+             receive their own approval links (the n8n workflow sends them
+             separately, see CPS — Build 5 — Founder PO Approval JSON). */
           await fetch(webhookUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2432,8 +2448,10 @@ Rules:
               gst_amount: gstTotal,
               grand_total: grandTotal,
               po_pdf_url: poPdfUrl ?? "",
-              bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
-              bhaskar_whatsapp: "919953001048",
+              bhaskar_approval_link: bhaskarLink,
+              bhaskar_whatsapp: bhaskarWA,
+              dhruv_approval_link: dhruvLink,
+              dhruv_whatsapp: dhruvWA,
             }),
           });
         } catch {
