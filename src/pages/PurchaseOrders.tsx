@@ -241,6 +241,113 @@ type CreateLine = {
   total_value: number;
 };
 
+/**
+ * Build a PO PDF blob from current DB state. Single source of truth for
+ * what the PO looks like — used by both the Download PDF button (for
+ * procurement) and the founder-approval webhook (for Bhaskar/Dhruv) so
+ * both audiences see byte-for-byte the same document.
+ */
+const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
+  const { data: po, error: poErr } = await supabase
+    .from("cps_purchase_orders")
+    .select("po_number,pr_id,supplier_id,created_at,created_by,ship_to_address,payment_terms,delivery_date,project_code,total_value,gst_amount,grand_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,version,revision_reason")
+    .eq("id", poId)
+    .single();
+  if (poErr || !po) throw new Error("PO not found: " + (poErr?.message ?? ""));
+
+  const [supplierRes, prRes, linesRes, creatorRes] = await Promise.all([
+    (po as any).supplier_id
+      ? supabase.from("cps_suppliers").select("name,gstin,state,address_text,phone,email").eq("id", (po as any).supplier_id).maybeSingle()
+      : Promise.resolve({ data: null } as any),
+    (po as any).pr_id
+      ? supabase.from("cps_purchase_requisitions").select("pr_number,project_code,project_site").eq("id", (po as any).pr_id).maybeSingle()
+      : Promise.resolve({ data: null } as any),
+    supabase.from("cps_po_line_items").select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code,sort_order").eq("po_id", poId).order("sort_order"),
+    (po as any).created_by
+      ? supabase.from("cps_users").select("name,email").eq("id", (po as any).created_by).maybeSingle()
+      : Promise.resolve({ data: null } as any),
+  ]);
+
+  const supplier: any = (supplierRes as any).data ?? {};
+  const pr: any = (prRes as any).data ?? {};
+  const lines: any[] = (linesRes as any).data ?? [];
+  const creator: any = (creatorRes as any).data ?? {};
+
+  // Logo (optional; if it fails to load the PDF still renders without it)
+  let logoBase64: string | null = null;
+  try {
+    const logoResp = await fetch(logoUrl);
+    const logoBlob = await logoResp.blob();
+    logoBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        resolve(result.split(",")[1] ?? result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(logoBlob);
+    });
+  } catch (_) { /* logo optional */ }
+
+  return buildPoPdf({
+    poNumber: (po as any).po_number,
+    prNumber: pr.pr_number ?? null,
+    poDate: (po as any).created_at,
+    supplierName: supplier.name ?? "",
+    supplierGstin: supplier.gstin ?? null,
+    supplierState: supplier.state ?? null,
+    supplierAddress: supplier.address_text ?? null,
+    supplierPhone: supplier.phone ?? null,
+    supplierEmail: supplier.email ?? null,
+    shipToAddress: (po as any).ship_to_address ?? pr.project_site ?? null,
+    inspAt: pr.project_site ?? null,
+    paymentTerms: (po as any).payment_terms,
+    deliveryDate: (po as any).delivery_date,
+    projectCode: (po as any).project_code ?? pr.project_code ?? null,
+    projectName: pr.project_code ?? (po as any).project_code ?? null,
+    subTotal: Number((po as any).total_value ?? 0),
+    gstAmount: Number((po as any).gst_amount ?? 0),
+    grandTotal: Number((po as any).grand_total ?? 0),
+    logoBase64,
+    hagerstoneGstin: (po as any).hagerstone_gstin ?? "09AAECH3768B1ZM",
+    createdByName: creator.name ?? creator.email ?? null,
+    bankAccountHolderName: (po as any).bank_account_holder_name,
+    bankName: (po as any).bank_name,
+    bankIfsc: (po as any).bank_ifsc,
+    bankAccountNumber: (po as any).bank_account_number,
+    version: (po as any).version,
+    revisionReason: (po as any).revision_reason,
+    lineItems: lines.map((li) => ({
+      description: li.description ?? "",
+      quantity: Number(li.quantity ?? 0),
+      unit: li.unit,
+      rate: Number(li.rate ?? 0),
+      gst_percent: Number(li.gst_percent ?? 0),
+      gst_amount: li.gst_amount,
+      total_value: Number(li.total_value ?? 0),
+      hsn_code: li.hsn_code,
+    })),
+  });
+};
+
+/**
+ * Build the PDF, upload to storage, and update cps_purchase_orders.po_pdf_url.
+ * Returns the public URL (or null on failure — caller decides how to surface).
+ */
+const regeneratePoPdfAndUpload = async (poId: string, poNumber: string): Promise<string | null> => {
+  try {
+    const pdfBlob = await buildPoPdfFromDb(poId);
+    const url = await uploadPoPdf(supabase, poId, poNumber, pdfBlob);
+    await supabase.from("cps_purchase_orders").update({ po_pdf_url: url }).eq("id", poId);
+    return url;
+  } catch (e) {
+    // Non-blocking: edits / creation already succeeded; PDF freshness is best-effort
+    // eslint-disable-next-line no-console
+    console.error("PO PDF regeneration failed:", e);
+    return null;
+  }
+};
+
 export default function PurchaseOrders() {
   const { user, canApprove, canCreateRFQ, canViewPrices, isProcurementHead } = useAuth();
   const navigate = useNavigate();
@@ -894,74 +1001,19 @@ export default function PurchaseOrders() {
             .maybeSingle();
           const origin = (baseUrlRow as any)?.value || window.location.origin;
 
-          /* get supplier details for PDF */
+          /* generate PDF identical to Download PDF, and upload it */
+          const poPdfUrl = await regeneratePoPdfAndUpload(poId, _poNumber);
+
+          /* supplier name for the webhook payload */
           let supplierName = "";
-          let supplierGstin: string | null = null;
-          let supplierPhone: string | null = null;
           if (_supplierId) {
             const { data: sup } = await supabase
               .from("cps_suppliers")
-              .select("name,gstin,phone")
+              .select("name")
               .eq("id", _supplierId)
               .maybeSingle();
             supplierName = (sup as any)?.name ?? "";
-            supplierGstin = (sup as any)?.gstin ?? null;
-            supplierPhone = (sup as any)?.phone ?? null;
           }
-
-          /* fetch logo as base64 */
-          let _logoBase64: string | null = null;
-          try {
-            const logoResp = await fetch(logoUrl);
-            const logoBlob = await logoResp.blob();
-            _logoBase64 = await new Promise<string>((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onloadend = () => {
-                const result = reader.result as string;
-                resolve(result.split(",")[1] ?? result);
-              };
-              reader.onerror = reject;
-              reader.readAsDataURL(logoBlob);
-            });
-          } catch (_) { /* logo optional */ }
-
-          /* generate PDF */
-          const pdfBlob = buildPoPdf({
-            poNumber: _poNumber,
-            prNumber: createPrNumber || null,
-            supplierName,
-            supplierGstin,
-            supplierPhone,
-            paymentTerms: _paymentTerms || null,
-            deliveryDate: _deliveryDate || null,
-            shipToAddress: _shipTo || null,
-            projectCode: prProjectCode || null,
-            projectName: prProjectCode || null,
-            subTotal: _subTotal,
-            gstAmount: _gstTotal,
-            grandTotal: _grandTotal,
-            logoBase64: _logoBase64,
-            hagerstoneGstin: createHagerstoneGstin,
-            createdByName: user.name ?? user.email ?? null,
-            bankAccountHolderName: createBankHolderName.trim() || null,
-            bankName: createBankName.trim() || null,
-            bankIfsc: createBankIfsc.trim().toUpperCase() || null,
-            bankAccountNumber: createBankAccountNumber.trim() || null,
-            lineItems: _lineItemsForPdf.map((li) => ({
-              description: li.description,
-              brand: li.brand,
-              quantity: li.quantity,
-              unit: li.unit,
-              rate: li.rate,
-              gst_percent: li.gst_percent,
-              gst_amount: li.gst_amount,
-              total_value: li.total_value,
-              hsn_code: li.hsn_code,
-            })),
-          });
-
-          /* upload PDF to Supabase Storage */
-          const poPdfUrl = await uploadPoPdf(supabase, poId, _poNumber, pdfBlob);
 
           /* insert approval tokens — both founders, every PO regardless of amount */
           const { data: insertedTokens, error: tokErr } = await supabase
@@ -1456,10 +1508,7 @@ export default function PurchaseOrders() {
         await openView(newPoId);
 
         /* ── fire-and-forget: PDF + approval tokens + n8n webhook for the revision ── */
-        const _supplierId = viewPo.supplier_id;
-        const _lineItems = viewPoLineItems;
         const _viewPo = viewPo;
-        const _supplier = viewSupplier;
         (async () => {
           try {
             /* fetch portal_base_url from config */
@@ -1470,73 +1519,19 @@ export default function PurchaseOrders() {
               .maybeSingle();
             const origin = (baseUrlRow as any)?.value || window.location.origin;
 
-            /* supplier details for PDF */
-            let supplierName = _supplier?.name ?? "";
-            let supplierGstin: string | null = _supplier?.gstin ?? null;
-            let supplierPhone: string | null = _supplier?.phone ?? null;
-            if (!supplierName && _supplierId) {
+            /* generate PDF identical to Download PDF, and upload it */
+            const poPdfUrl = await regeneratePoPdfAndUpload(newPoId, newPoNumber);
+
+            /* supplier name for webhook payload */
+            let supplierName = viewSupplier?.name ?? "";
+            if (!supplierName && _viewPo.supplier_id) {
               const { data: sup } = await supabase
                 .from("cps_suppliers")
-                .select("name,gstin,phone")
-                .eq("id", _supplierId)
+                .select("name")
+                .eq("id", _viewPo.supplier_id)
                 .maybeSingle();
               supplierName = (sup as any)?.name ?? "";
-              supplierGstin = (sup as any)?.gstin ?? null;
-              supplierPhone = (sup as any)?.phone ?? null;
             }
-
-            /* fetch logo as base64 */
-            let _logoBase64: string | null = null;
-            try {
-              const logoResp = await fetch(logoUrl);
-              const logoBlob = await logoResp.blob();
-              _logoBase64 = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                  const result = reader.result as string;
-                  resolve(result.split(",")[1] ?? result);
-                };
-                reader.onerror = reject;
-                reader.readAsDataURL(logoBlob);
-              });
-            } catch (_) { /* logo optional */ }
-
-            /* build revision PDF */
-            const pdfBlob = buildPoPdf({
-              poNumber: newPoNumber,
-              prNumber: null,
-              supplierName,
-              supplierGstin,
-              supplierPhone,
-              paymentTerms: _viewPo.payment_terms || null,
-              deliveryDate: _viewPo.delivery_date || null,
-              shipToAddress: _viewPo.ship_to_address || null,
-              projectCode: _viewPo.project_code || null,
-              projectName: _viewPo.project_code || null,
-              subTotal: Number(_viewPo.total_value ?? 0),
-              gstAmount: Number(_viewPo.gst_amount ?? 0),
-              grandTotal: Number(_viewPo.grand_total ?? 0),
-              logoBase64: _logoBase64,
-              hagerstoneGstin: _viewPo.hagerstone_gstin ?? "09AAECH3768B1ZM",
-              createdByName: user.name ?? user.email ?? null,
-              bankAccountHolderName: _viewPo.bank_account_holder_name || null,
-              bankName: _viewPo.bank_name || null,
-              bankIfsc: _viewPo.bank_ifsc || null,
-              bankAccountNumber: _viewPo.bank_account_number || null,
-              lineItems: _lineItems.map((li) => ({
-                description: li.description ?? "",
-                brand: li.brand,
-                quantity: Number(li.quantity ?? 0),
-                unit: li.unit,
-                rate: Number(li.rate ?? 0),
-                gst_percent: Number(li.gst_percent ?? 0),
-                gst_amount: li.gst_amount,
-                total_value: Number(li.total_value ?? 0),
-                hsn_code: li.hsn_code,
-              })),
-            });
-
-            const poPdfUrl = await uploadPoPdf(supabase, newPoId, newPoNumber, pdfBlob);
 
             /* insert approval tokens — both founders */
             const { data: insertedTokens, error: tokErr } = await supabase
@@ -1603,67 +1598,11 @@ export default function PurchaseOrders() {
   };
 
   const downloadPDF = async () => {
-    if (!viewPo || !viewSupplier) return;
+    if (!viewPo) return;
     try {
-      const subTotal = Number(viewPo.total_value ?? 0);
-      const gstAmount = Number(viewPo.gst_amount ?? 0);
-      const grandTotal = Number(viewPo.grand_total ?? (subTotal + gstAmount));
-
-      // Fetch logo as base64
-      let logoBase64: string | null = null;
-      try {
-        const logoResp = await fetch(logoUrl);
-        const logoBlob = await logoResp.blob();
-        logoBase64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const result = reader.result as string;
-            resolve(result.split(",")[1] ?? result);
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(logoBlob);
-        });
-      } catch (_) { /* logo optional */ }
-
-      const blob = buildPoPdf({
-        poNumber: viewPo.po_number,
-        prNumber: viewPr?.pr_number ?? null,
-        poDate: viewPo.created_at,
-        supplierName: viewSupplier.name ?? "",
-        supplierGstin: viewSupplier.gstin,
-        supplierState: viewSupplier.state,
-        supplierAddress: viewSupplier.address_text,
-        supplierPhone: viewSupplier.phone,
-        supplierEmail: viewSupplier.email,
-        shipToAddress: viewPo.ship_to_address ?? viewPr?.project_site ?? null,
-        inspAt: viewPr?.project_site ?? null,
-        paymentTerms: viewPo.payment_terms,
-        deliveryDate: viewPo.delivery_date,
-        projectCode: viewPo.project_code ?? viewPr?.project_code ?? null,
-        projectName: viewPr?.project_code ?? viewPo.project_code ?? null,
-        subTotal,
-        gstAmount,
-        grandTotal,
-        logoBase64,
-        hagerstoneGstin: viewPo.hagerstone_gstin ?? "09AAECH3768B1ZM",
-        createdByName: viewPoCreatorName,
-        bankAccountHolderName: viewPo.bank_account_holder_name,
-        bankName: viewPo.bank_name,
-        bankIfsc: viewPo.bank_ifsc,
-        bankAccountNumber: viewPo.bank_account_number,
-        version: viewPo.version,
-        revisionReason: viewPo.revision_reason,
-        lineItems: viewPoLineItems.map((li) => ({
-          description: li.description ?? "",
-          quantity: Number(li.quantity ?? 0),
-          unit: li.unit,
-          rate: Number(li.rate ?? 0),
-          gst_percent: Number(li.gst_percent ?? 0),
-          gst_amount: li.gst_amount,
-          total_value: Number(li.total_value ?? 0),
-          hsn_code: li.hsn_code,
-        })),
-      });
+      // Same source-of-truth helper used by the founder webhook flow,
+      // so the downloaded PDF == what founders receive.
+      const blob = await buildPoPdfFromDb(viewPo.id);
 
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -1968,6 +1907,13 @@ export default function PurchaseOrders() {
           email: editSupplierEmail.trim() || null,
         }).eq("id", viewPo.supplier_id);
         if (supErr) toast.warning("PO saved but supplier details update failed");
+      }
+
+      // Keep the stored PO PDF (used by founder approval messages and the
+      // download button) in sync with whatever was just edited.
+      const refreshedUrl = await regeneratePoPdfAndUpload(viewPo.id, viewPo.po_number);
+      if (!refreshedUrl) {
+        toast.warning("PO save ho gaya, par PDF regenerate karne mein issue aaya. Founders ko bhejne se pehle dobara try karo.");
       }
 
       toast.success("PO updated successfully");
