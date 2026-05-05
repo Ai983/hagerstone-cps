@@ -1015,20 +1015,29 @@ export default function PurchaseOrders() {
             supplierName = (sup as any)?.name ?? "";
           }
 
-          /* insert approval tokens — both founders, every PO regardless of amount */
-          const { data: insertedTokens, error: tokErr } = await supabase
-            .from("cps_po_approval_tokens")
-            .insert([
-              { po_id: poId, po_number: _poNumber, founder_name: "Bhaskar" },
-              { po_id: poId, po_number: _poNumber, founder_name: "Dhruv" },
-            ])
-            .select("token,founder_name");
-          if (tokErr || !insertedTokens) throw tokErr;
+          /* Insert approval tokens for BOTH founders. Use two single-row inserts in
+             parallel rather than one multi-row insert — this matches the resend
+             flow's pattern (which is the known-good path) and side-steps any
+             trigger / RETURNING quirks that could leave dhruv_approval_link blank
+             in the webhook payload. Each insert returns the freshly-minted token
+             as a plain string; we then build the URLs directly without any
+             .find() indirection. */
+          const insertOneToken = async (founderName: "Bhaskar" | "Dhruv"): Promise<string> => {
+            const { data, error } = await supabase
+              .from("cps_po_approval_tokens")
+              .insert([{ po_id: poId, po_number: _poNumber, founder_name: founderName }])
+              .select("token")
+              .single();
+            if (error || !data) throw new Error(`Failed to mint ${founderName} approval token: ${error?.message ?? "no data"}`);
+            return (data as any).token as string;
+          };
+          const [bhaskarToken, dhruvToken] = await Promise.all([
+            insertOneToken("Bhaskar"),
+            insertOneToken("Dhruv"),
+          ]);
 
-          const approvalLinks = (insertedTokens as Array<{ token: string; founder_name: string }>).map((t) => ({
-            founder_name: t.founder_name,
-            link: `${origin}/approve-po?token=${t.token}`,
-          }));
+          const bhaskarLink = `${origin}/approve-po?token=${bhaskarToken}`;
+          const dhruvLink   = `${origin}/approve-po?token=${dhruvToken}`;
 
           /* fetch webhook URL + both founders' numbers from config */
           const { data: cfgRows } = await supabase
@@ -1048,7 +1057,7 @@ export default function PurchaseOrders() {
             .update({ founder_approval_status: "pending" })
             .eq("id", poId);
 
-          /* POST to n8n */
+          /* POST to n8n — use direct string variables, no lookup, no fallback to "" */
           await fetch(webhookUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1063,9 +1072,9 @@ export default function PurchaseOrders() {
               payment_terms: _paymentTerms || null,
               delivery_date: _deliveryDate || null,
               po_pdf_url: poPdfUrl,
-              bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
+              bhaskar_approval_link: bhaskarLink,
               bhaskar_whatsapp: bhaskarWA,
-              dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
+              dhruv_approval_link: dhruvLink,
               dhruv_whatsapp: dhruvWA,
             }),
           });
@@ -1538,20 +1547,25 @@ export default function PurchaseOrders() {
               supplierName = (sup as any)?.name ?? "";
             }
 
-            /* insert approval tokens — both founders */
-            const { data: insertedTokens, error: tokErr } = await supabase
-              .from("cps_po_approval_tokens")
-              .insert([
-                { po_id: newPoId, po_number: newPoNumber, founder_name: "Bhaskar" },
-                { po_id: newPoId, po_number: newPoNumber, founder_name: "Dhruv" },
-              ])
-              .select("token,founder_name");
-            if (tokErr || !insertedTokens) throw tokErr;
+            /* Insert approval tokens for BOTH founders. Two single-row inserts in
+               parallel (matches the resend flow's known-good pattern, side-steps
+               any AFTER-INSERT trigger / RETURNING quirks of multi-row inserts). */
+            const insertOneRevisionToken = async (founderName: "Bhaskar" | "Dhruv"): Promise<string> => {
+              const { data, error } = await supabase
+                .from("cps_po_approval_tokens")
+                .insert([{ po_id: newPoId, po_number: newPoNumber, founder_name: founderName }])
+                .select("token")
+                .single();
+              if (error || !data) throw new Error(`Failed to mint ${founderName} approval token: ${error?.message ?? "no data"}`);
+              return (data as any).token as string;
+            };
+            const [bhaskarRevToken, dhruvRevToken] = await Promise.all([
+              insertOneRevisionToken("Bhaskar"),
+              insertOneRevisionToken("Dhruv"),
+            ]);
 
-            const approvalLinks = (insertedTokens as Array<{ token: string; founder_name: string }>).map((t) => ({
-              founder_name: t.founder_name,
-              link: `${origin}/approve-po?token=${t.token}`,
-            }));
+            const bhaskarRevLink = `${origin}/approve-po?token=${bhaskarRevToken}`;
+            const dhruvRevLink   = `${origin}/approve-po?token=${dhruvRevToken}`;
 
             const { data: cfgRows } = await supabase
               .from("cps_config")
@@ -1583,9 +1597,9 @@ export default function PurchaseOrders() {
                 payment_terms: _viewPo.payment_terms || null,
                 delivery_date: _viewPo.delivery_date || null,
                 po_pdf_url: poPdfUrl,
-                bhaskar_approval_link: approvalLinks.find((l) => l.founder_name === "Bhaskar")?.link ?? "",
+                bhaskar_approval_link: bhaskarRevLink,
                 bhaskar_whatsapp: bhaskarWA,
-                dhruv_approval_link: approvalLinks.find((l) => l.founder_name === "Dhruv")?.link ?? "",
+                dhruv_approval_link: dhruvRevLink,
                 dhruv_whatsapp: dhruvWA,
                 revision_reason: trimmedReason,
               }),
