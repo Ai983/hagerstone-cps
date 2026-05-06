@@ -294,6 +294,7 @@ export default function Quotes() {
   const [aiResult, setAiResult] = useState<any>(null);
   const [editedItems, setEditedItems] = useState<any[]>([]);
   const [extraCharges, setExtraCharges] = useState<Array<{ id: string; name: string; amount: string; taxable: boolean }>>([]);
+  const [advancePayments, setAdvancePayments] = useState<Array<{ id: string; amount: string; method: string; date: string; paid_to_name: string; reference_number: string; notes: string }>>([]);
   const [editedPaymentTerms, setEditedPaymentTerms] = useState("");
   const [editedDeliveryTerms, setEditedDeliveryTerms] = useState("");
   const [editedFreightTerms, setEditedFreightTerms] = useState("");
@@ -538,6 +539,7 @@ export default function Quotes() {
     setAiResult(null);
     setEditedItems([]);
     setExtraCharges([]);
+    setAdvancePayments([]);
     setEditedPaymentTerms("");
     setEditedDeliveryTerms("");
     setEditedFreightTerms("");
@@ -614,6 +616,19 @@ export default function Quotes() {
           name: String(c.name ?? ""),
           amount: String(c.amount ?? ""),
           taxable: !!c.taxable,
+        })));
+      }
+      // Restore advance payments if previously saved
+      const prevAdvances = (qRow.ai_parsed_data as any)?.advance_payments;
+      if (Array.isArray(prevAdvances)) {
+        setAdvancePayments(prevAdvances.map((a: any, i: number) => ({
+          id: String(i),
+          amount: String(a.amount ?? ""),
+          method: String(a.method ?? "cash"),
+          date: String(a.date ?? ""),
+          paid_to_name: String(a.paid_to_name ?? ""),
+          reference_number: String(a.reference_number ?? ""),
+          notes: String(a.notes ?? ""),
         })));
       }
       // Show cached AI result if available; otherwise synthesise from existing line items
@@ -984,6 +999,18 @@ Rules:
       const extraTotal = cleanCharges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
       const totalLanded = itemsLanded + extraTotal;
 
+      // Clean advance payments — keep only entries with a positive amount
+      const cleanAdvances = advancePayments
+        .filter((a) => parseFloat(a.amount) > 0)
+        .map((a) => ({
+          amount: parseFloat(a.amount) || 0,
+          method: (a.method || "cash").trim(),
+          date: (a.date || "").trim(),
+          paid_to_name: (a.paid_to_name || "").trim(),
+          reference_number: (a.reference_number || "").trim(),
+          notes: (a.notes || "").trim(),
+        }));
+
       const hasRates = editedItems.some((item: any) => parseFloat(item.rate) > 0);
       const hasPaymentTerms = (editedPaymentTerms ?? "").trim().length > 0;
       const hasDeliveryTerms = (editedDeliveryTerms ?? "").trim().length > 0;
@@ -991,7 +1018,7 @@ Rules:
       const complianceStatus = hasRates && hasPaymentTerms && hasDeliveryTerms && hasGST ? "compliant" : "pending";
 
       const { error: quoteErr } = await supabase.from("cps_quotes").update({
-        ai_parsed_data: { ...aiResult, extra_charges: cleanCharges },
+        ai_parsed_data: { ...aiResult, extra_charges: cleanCharges, advance_payments: cleanAdvances },
         missing_fields: aiResult.missing_fields || [],
         ai_parse_confidence: aiResult.confidence,
         ai_summary: aiResult.notes,
@@ -2387,6 +2414,118 @@ Rules:
                                     const amt = parseFloat(c.amount) || 0;
                                     return s + amt * (c.taxable ? 1.18 : 1);
                                   }, 0).toFixed(2)}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Advance Paid (cash / bank advances given to vendor before PO) */}
+                      <div className="space-y-3 border-t border-border/60 pt-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Advance Paid</div>
+                            <div className="text-[10px] text-muted-foreground mt-0.5">e.g. Token advance to consultants, labour contractors, transporters before PO is raised. Reduces Balance Payable on PO.</div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => setAdvancePayments((prev) => [...prev, { id: String(Date.now()), amount: "", method: "cash", date: new Date().toISOString().slice(0,10), paid_to_name: "", reference_number: "", notes: "" }])}
+                          >
+                            <Plus className="h-3 w-3 mr-1" /> Add Advance
+                          </Button>
+                        </div>
+
+                        {advancePayments.length === 0 ? (
+                          <p className="text-xs text-muted-foreground italic">No advance recorded</p>
+                        ) : (
+                          <div className="space-y-2">
+                            {advancePayments.map((adv) => (
+                              <Card key={adv.id} className="p-2.5 border-border/60">
+                                <div className="grid grid-cols-12 gap-2">
+                                  <div className="col-span-3 space-y-0.5">
+                                    <Label className="text-[10px] text-muted-foreground">Amount ₹ *</Label>
+                                    <Input
+                                      className="h-7 text-xs"
+                                      type="number"
+                                      placeholder="0"
+                                      value={adv.amount}
+                                      onChange={(e) => setAdvancePayments((prev) => prev.map((a) => a.id === adv.id ? { ...a, amount: e.target.value } : a))}
+                                    />
+                                  </div>
+                                  <div className="col-span-3 space-y-0.5">
+                                    <Label className="text-[10px] text-muted-foreground">Method</Label>
+                                    <select
+                                      className="h-7 text-xs w-full border rounded-md px-2 bg-background"
+                                      value={adv.method}
+                                      onChange={(e) => setAdvancePayments((prev) => prev.map((a) => a.id === adv.id ? { ...a, method: e.target.value } : a))}
+                                    >
+                                      <option value="cash">Cash</option>
+                                      <option value="bank">Bank Transfer</option>
+                                      <option value="upi">UPI</option>
+                                      <option value="cheque">Cheque</option>
+                                      <option value="other">Other</option>
+                                    </select>
+                                  </div>
+                                  <div className="col-span-3 space-y-0.5">
+                                    <Label className="text-[10px] text-muted-foreground">Date</Label>
+                                    <Input
+                                      className="h-7 text-xs"
+                                      type="date"
+                                      value={adv.date}
+                                      onChange={(e) => setAdvancePayments((prev) => prev.map((a) => a.id === adv.id ? { ...a, date: e.target.value } : a))}
+                                    />
+                                  </div>
+                                  <div className="col-span-3 space-y-0.5">
+                                    <Label className="text-[10px] text-muted-foreground">Paid To</Label>
+                                    <Input
+                                      className="h-7 text-xs"
+                                      placeholder="Same as supplier if blank"
+                                      value={adv.paid_to_name}
+                                      onChange={(e) => setAdvancePayments((prev) => prev.map((a) => a.id === adv.id ? { ...a, paid_to_name: e.target.value } : a))}
+                                    />
+                                  </div>
+                                  <div className="col-span-5 space-y-0.5">
+                                    <Label className="text-[10px] text-muted-foreground">Reference / Txn No</Label>
+                                    <Input
+                                      className="h-7 text-xs"
+                                      placeholder="UTR / cheque no / receipt"
+                                      value={adv.reference_number}
+                                      onChange={(e) => setAdvancePayments((prev) => prev.map((a) => a.id === adv.id ? { ...a, reference_number: e.target.value } : a))}
+                                    />
+                                  </div>
+                                  <div className="col-span-6 space-y-0.5">
+                                    <Label className="text-[10px] text-muted-foreground">Notes</Label>
+                                    <Input
+                                      className="h-7 text-xs"
+                                      placeholder="Optional"
+                                      value={adv.notes}
+                                      onChange={(e) => setAdvancePayments((prev) => prev.map((a) => a.id === adv.id ? { ...a, notes: e.target.value } : a))}
+                                    />
+                                  </div>
+                                  <div className="col-span-1 flex items-end justify-end pb-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => setAdvancePayments((prev) => prev.filter((a) => a.id !== adv.id))}
+                                      className="text-muted-foreground hover:text-destructive transition-colors"
+                                      title="Remove"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </Card>
+                            ))}
+
+                            {/* Subtotal */}
+                            {advancePayments.some((a) => parseFloat(a.amount) > 0) && (
+                              <div className="flex justify-between items-center pt-1 text-xs">
+                                <span className="text-muted-foreground">Total Advance Paid</span>
+                                <span className="font-semibold text-emerald-700">
+                                  ₹{advancePayments.reduce((s, a) => s + (parseFloat(a.amount) || 0), 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                 </span>
                               </div>
                             )}

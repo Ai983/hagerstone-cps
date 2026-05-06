@@ -43,6 +43,17 @@ export interface PoPdfData {
   gstAmount: number;
   grandTotal: number;
 
+  /* advance paid (multiple entries; total is subtracted from grandTotal to give balance payable) */
+  advancePayments?: Array<{
+    amount: number;
+    method?: string | null;
+    date?: string | null;
+    paid_to_name?: string | null;
+    reference_number?: string | null;
+    notes?: string | null;
+  }> | null;
+  advancePaidTotal?: number | null;
+
   lineItems: PoPdfLineItem[];
 
   /* supplier bank account (filled by procurement head before approval) */
@@ -567,6 +578,17 @@ export function buildPoPdf(data: PoPdfData): Blob {
   }
   drawTotalRow("Grand Total", fmtPlain(data.grandTotal), true);
 
+  // Advance Paid + Balance Payable (only when there is a positive advance)
+  const advancesArr = (data.advancePayments ?? []).filter((a) => Number(a?.amount) > 0);
+  const advanceTotal = data.advancePaidTotal != null
+    ? Number(data.advancePaidTotal) || 0
+    : advancesArr.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const balancePayable = (Number(data.grandTotal) || 0) - advanceTotal;
+  if (advanceTotal > 0) {
+    drawTotalRow("Less: Advance Paid", "(" + fmtPlain(advanceTotal) + ")");
+    drawTotalRow("Balance Payable", fmtPlain(balancePayable), true);
+  }
+
   y = Math.max(y, ty) + 3;
 
   /* ── 6. Amount in words ── */
@@ -577,11 +599,52 @@ export function buildPoPdf(data: PoPdfData): Blob {
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7);
-  doc.text("Total Order Value (In Words)", ML, y);
+  doc.text(advanceTotal > 0 ? "Balance Payable (In Words)" : "Total Order Value (In Words)", ML, y);
   y += 4;
   doc.setFont("helvetica", "normal");
-  doc.text("Rupees : " + amountInWords(data.grandTotal), ML, y);
+  doc.text("Rupees : " + amountInWords(advanceTotal > 0 ? balancePayable : data.grandTotal), ML, y);
   y += 6;
+
+  /* Advance breakdown table — shown only when an advance was recorded */
+  if (advancesArr.length > 0) {
+    doc.setLineWidth(0.3);
+    doc.setDrawColor(180);
+    doc.line(ML, y, W - MR, y);
+    y += 4;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(20, 20, 20);
+    doc.text("Advance Paid Breakdown", ML, y);
+    y += 2;
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: ML, right: MR },
+      head: [[
+        { content: "Date", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+        { content: "Method", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+        { content: "Paid To", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+        { content: "Reference", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+        { content: "Notes", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+        { content: "Amount", styles: { fontStyle: "bold", fillColor: [245, 245, 245], halign: "right" } },
+      ]],
+      body: advancesArr.map((a) => [
+        { content: fmtDate(a.date ?? null) },
+        { content: String(a.method ?? "—") },
+        { content: String(a.paid_to_name || data.supplierName || "—") },
+        { content: String(a.reference_number ?? "—") },
+        { content: String(a.notes ?? "—") },
+        { content: fmtPlain(Number(a.amount) || 0), styles: { halign: "right" } },
+      ]),
+      foot: [[
+        { content: "Total Advance Paid", colSpan: 5, styles: { fontStyle: "bold", halign: "right", fillColor: [245, 245, 245] } },
+        { content: fmtPlain(advanceTotal), styles: { fontStyle: "bold", halign: "right", fillColor: [245, 245, 245] } },
+      ]],
+      styles: { fontSize: 7, cellPadding: 1.5, lineColor: [180, 180, 180], lineWidth: 0.2, overflow: "linebreak" },
+    });
+    y = (doc as any).lastAutoTable.finalY + 3;
+  }
 
   /* ── 6b. Supplier Bank Account Details ── */
   const hasBank = Boolean(

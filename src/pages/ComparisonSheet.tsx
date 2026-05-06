@@ -2232,6 +2232,21 @@ Rules:
       const poGstTotal   = poLineItemsToInsert.reduce((s, li) => s + li.gst_amount, 0);
       const poGrandTotal = poSubTotal + poGstTotal;
 
+      // Inherit advance payments recorded during quote review
+      const advanceRows = Array.isArray((quoteFull as any)?.ai_parsed_data?.advance_payments)
+        ? (quoteFull as any).ai_parsed_data.advance_payments
+            .filter((a: any) => Number(a?.amount) > 0)
+            .map((a: any) => ({
+              amount: Number(a.amount) || 0,
+              method: String(a.method ?? "cash"),
+              date: String(a.date ?? ""),
+              paid_to_name: String(a.paid_to_name ?? ""),
+              reference_number: String(a.reference_number ?? ""),
+              notes: String(a.notes ?? ""),
+            }))
+        : [];
+      const advanceTotal = advanceRows.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0);
+
       const { data: poInserted, error: poInsertErr } = await supabase.from("cps_purchase_orders").insert([
         {
           po_number: poNumber,
@@ -2250,6 +2265,8 @@ Rules:
           total_value: poSubTotal,
           gst_amount:  poGstTotal,
           grand_total: poGrandTotal,
+          advance_payments: advanceRows,
+          advance_paid_total: advanceTotal,
           bank_account_holder_name: bankHolderName.trim() || null,
           bank_name: bankName.trim() || null,
           bank_ifsc: bankIfsc.trim().toUpperCase() || null,
@@ -2422,6 +2439,8 @@ Rules:
               bankName: bankName.trim() || null,
               bankIfsc: bankIfsc.trim().toUpperCase() || null,
               bankAccountNumber: bankAccountNumber.trim() || null,
+              advancePayments: advanceRows,
+              advancePaidTotal: advanceTotal,
               lineItems: calcLineItems,
             });
             poPdfUrl = await uploadPoPdf(supabase, poId, poNumber, pdfBlob);
