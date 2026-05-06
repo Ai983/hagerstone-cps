@@ -64,6 +64,8 @@ type PoRow = {
   total_value: number | null;
   gst_amount: number | null;
   grand_total: number | null;
+  advance_payments?: Array<{ amount: number; method?: string | null; date?: string | null; paid_to_name?: string | null; reference_number?: string | null; notes?: string | null }> | null;
+  advance_paid_total?: number | null;
   approved_by: string | null;
   approved_at: string | null;
   sent_at: string | null;
@@ -1140,7 +1142,7 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
         )
         .eq("id", poId)
         .single();
