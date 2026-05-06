@@ -350,6 +350,7 @@ export default function AdminOverrides() {
                     <TableRow>
                       <TableHead>RFQ / PR</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Requested By</TableHead>
                       <TableHead>Decided By</TableHead>
                       <TableHead>Decided At</TableHead>
                       <TableHead>Reason / Note</TableHead>
@@ -369,6 +370,7 @@ export default function AdminOverrides() {
                             <Badge className="bg-red-100 text-red-800 border-red-300 border text-xs">✗ Denied</Badge>
                           )}
                         </TableCell>
+                        <TableCell className="text-xs">{r.requestor_name ?? "—"}</TableCell>
                         <TableCell className="text-xs">{r.decided_by_name ?? "—"}</TableCell>
                         <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(r.min_quotes_override_allowed_at)}</TableCell>
                         <TableCell className="text-xs max-w-[320px] whitespace-pre-wrap">
