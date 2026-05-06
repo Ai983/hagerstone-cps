@@ -24,7 +24,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
-import { Plus, Search, Loader2, Trash2 } from "lucide-react";
+import { Plus, Search, Loader2, Trash2, ChevronRight, ChevronDown } from "lucide-react";
 import { formatWhatsApp } from "@/lib/utils";
 
 type RfqStatus = "draft" | "sent" | "reminder_1" | "reminder_2" | "closed" | "comparison_ready" | "cancelled";
@@ -163,6 +163,25 @@ export default function RFQs() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(0);
+
+  // Quick preview expand (matches Requisitions page pattern)
+  const [expandedRfqId, setExpandedRfqId] = useState<string | null>(null);
+  const [expandedItems, setExpandedItems] = useState<Array<{ item_description: string; quantity: number | null; unit: string | null; specs: string | null }>>([]);
+  const [expandLoading, setExpandLoading] = useState(false);
+
+  const toggleExpand = async (rfqId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (expandedRfqId === rfqId) { setExpandedRfqId(null); return; }
+    setExpandedRfqId(rfqId);
+    setExpandLoading(true);
+    const { data } = await supabase
+      .from("cps_rfq_line_items_for_dispatch")
+      .select("item_description, quantity, unit, specs")
+      .eq("rfq_id", rfqId)
+      .order("sort_order", { ascending: true });
+    setExpandedItems((data ?? []) as Array<{ item_description: string; quantity: number | null; unit: string | null; specs: string | null }>);
+    setExpandLoading(false);
+  };
   const PAGE_SIZE = 25;
 
   const [submittedPRs, setSubmittedPRs] = useState<Array<PurchaseRequisition & { itemsCount: number }>>([]);
@@ -1036,15 +1055,21 @@ export default function RFQs() {
                   const overrideAllowed = r.min_quotes_override_status === "allowed";
                   const canCompare = r.status === "comparison_ready" || overrideAllowed;
                   return (
-                    <TableRow key={r.id} className="hover:bg-muted/30">
+                    <React.Fragment key={r.id}>
+                    <TableRow className="hover:bg-muted/30">
                       <TableCell className="font-mono text-primary">
-                        <div className="flex flex-col gap-1">
-                          <span>{r.rfq_number}</span>
-                          {r.target_category && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded leading-none w-fit ${
-                              r.target_category === "General" ? "bg-amber-100 text-amber-700" : "bg-primary/10 text-primary"
-                            }`}>{r.target_category}</span>
-                          )}
+                        <div className="flex items-start gap-1">
+                          <button onClick={(e) => toggleExpand(r.id, e)} className="h-5 w-5 mt-0.5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
+                            {expandedRfqId === r.id ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                          </button>
+                          <div className="flex flex-col gap-1">
+                            <span>{r.rfq_number}</span>
+                            {r.target_category && (
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded leading-none w-fit ${
+                                r.target_category === "General" ? "bg-amber-100 text-amber-700" : "bg-primary/10 text-primary"
+                              }`}>{r.target_category}</span>
+                            )}
+                          </div>
                         </div>
                       </TableCell>
                       <TableCell>
@@ -1130,6 +1155,31 @@ export default function RFQs() {
                         )}
                       </TableCell>
                     </TableRow>
+                    {/* Expanded preview row */}
+                    {expandedRfqId === r.id && (
+                      <TableRow className="bg-muted/20">
+                        <TableCell colSpan={9} className="py-2 px-6">
+                          {expandLoading ? (
+                            <div className="flex items-center gap-2 py-2"><Skeleton className="h-4 w-48" /><Skeleton className="h-4 w-32" /></div>
+                          ) : expandedItems.length === 0 ? (
+                            <p className="text-xs text-muted-foreground py-2">No line items</p>
+                          ) : (
+                            <div className="space-y-1">
+                              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Line Items</p>
+                              {expandedItems.map((item, idx) => (
+                                <div key={idx} className="flex items-center gap-4 text-xs py-1 border-b border-border/30 last:border-0">
+                                  <span className="text-muted-foreground w-5 shrink-0">{idx + 1}.</span>
+                                  <span className="flex-1 font-medium">{item.item_description}</span>
+                                  <span className="text-muted-foreground shrink-0">{item.quantity ?? "—"} {item.unit ?? ""}</span>
+                                  {item.specs && <span className="text-muted-foreground/70 truncate max-w-[200px]" title={item.specs}>{item.specs}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    </React.Fragment>
                   );
                 })
               )}
