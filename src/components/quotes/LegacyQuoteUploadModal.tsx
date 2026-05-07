@@ -183,7 +183,8 @@ Rules:
   If the quote already shows only the net amount, derive rate from
   amount / quantity and put list_rate = rate, discount_pct = 0, special_discount_pct = 0.
 - total is line amount including GST (rate × quantity × (1 + gst_percent/100)).
-- hsn_code is the HSN/SAC code printed against the item (8-digit string or empty).`,
+- hsn_code is the HSN/SAC code printed against the item (8-digit string or empty).
+- CRITICAL JSON RULE: Indian quotes use inch marks (") in item names like 1" CPVC Pipe, 3/4" Elbow, 4" PVC Pipe. In your JSON output you MUST escape them as \" (e.g. "1\" CPVC Pipe") OR replace with 'in' (e.g. "1in CPVC Pipe"). Never output a bare " inside a JSON string value.`,
             },
           ],
         },
@@ -202,7 +203,14 @@ Rules:
   }
   const raw = data?.content?.[0]?.text;
   if (!raw) throw new Error("Empty response from Claude — try again or fill manually");
-  return JSON.parse(raw.replace(/```json|```/g, "").trim()) as ExtractedData;
+  const clean = raw.replace(/```json|```/g, "").trim();
+  try {
+    return JSON.parse(clean) as ExtractedData;
+  } catch {
+    // Repair unescaped inch marks: e.g. 1" CPVC → 1in CPVC
+    const repaired = clean.replace(/(\d)\s*"(\s*[A-Za-z(])/g, '$1in$2');
+    return JSON.parse(repaired) as ExtractedData;
+  }
 };
 
 // ─── Props ────────────────────────────────────────────────────────────────────
