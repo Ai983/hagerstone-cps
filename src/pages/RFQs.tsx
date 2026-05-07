@@ -164,6 +164,13 @@ export default function RFQs() {
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(0);
 
+  // Cancel RFQ dialog state — captures a structured reason for audit.
+  type CancelRfqTarget = { id: string; rfq_number: string };
+  const [cancelRfqTarget, setCancelRfqTarget] = useState<CancelRfqTarget | null>(null);
+  const [cancelRfqReasonCategory, setCancelRfqReasonCategory] = useState<string>("");
+  const [cancelRfqReasonNotes, setCancelRfqReasonNotes] = useState<string>("");
+  const [cancelRfqSaving, setCancelRfqSaving] = useState(false);
+
   // Quick preview expand (matches Requisitions page pattern)
   const [expandedRfqId, setExpandedRfqId] = useState<string | null>(null);
   const [expandedItems, setExpandedItems] = useState<Array<{ item_description: string; quantity: number | null; unit: string | null; specs: string | null }>>([]);
@@ -376,6 +383,60 @@ export default function RFQs() {
 
     setSuppliers((data ?? []) as Supplier[]);
     setSuppliersLoading(false);
+  };
+
+  const openCancelRfq = (rfq: { id: string; rfq_number: string }) => {
+    setCancelRfqTarget({ id: rfq.id, rfq_number: rfq.rfq_number });
+    setCancelRfqReasonCategory("");
+    setCancelRfqReasonNotes("");
+  };
+
+  const executeCancelRfq = async () => {
+    if (!cancelRfqTarget || !user) return;
+    if (!cancelRfqReasonCategory) {
+      toast.error("Please select a cancellation reason");
+      return;
+    }
+    if (cancelRfqReasonCategory === "Other" && !cancelRfqReasonNotes.trim()) {
+      toast.error("Please enter notes when reason is 'Other'");
+      return;
+    }
+    setCancelRfqSaving(true);
+    try {
+      const now = new Date().toISOString();
+      const { error } = await supabase.from("cps_rfqs").update({
+        status: "cancelled",
+        cancellation_reason_category: cancelRfqReasonCategory,
+        cancellation_reason_notes: cancelRfqReasonNotes.trim() || null,
+        cancelled_by: user.id,
+        cancelled_at: now,
+      } as any).eq("id", cancelRfqTarget.id);
+      if (error) throw error;
+
+      const reasonSuffix = cancelRfqReasonNotes.trim()
+        ? ` — ${cancelRfqReasonCategory}: ${cancelRfqReasonNotes.trim()}`
+        : ` — ${cancelRfqReasonCategory}`;
+      await supabase.from("cps_audit_log").insert([{
+        action_type: "RFQ_CANCELLED",
+        entity_type: "cps_rfqs",
+        entity_id: cancelRfqTarget.id,
+        entity_number: cancelRfqTarget.rfq_number,
+        user_id: user.id,
+        user_name: user.name ?? user.email ?? "",
+        user_role: user.role,
+        description: `RFQ cancelled by procurement` + reasonSuffix,
+        severity: "warning",
+        logged_at: now,
+      }] as any);
+
+      toast.success(`${cancelRfqTarget.rfq_number} cancelled`);
+      setCancelRfqTarget(null);
+      await fetchRFQs();
+    } catch (e: any) {
+      toast.error(e?.message ?? "Failed to cancel RFQ");
+    } finally {
+      setCancelRfqSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -1112,47 +1173,63 @@ export default function RFQs() {
                       </TableCell>
                       <TableCell className="text-muted-foreground">{formatIndianDateTime(r.created_at)}</TableCell>
                       <TableCell className="text-right">
-                        {r.status === "draft" && total === 0 ? (
-                          <Button size="sm" onClick={() => openReview(r)}>
-                            Review &amp; Send
-                          </Button>
-                        ) : r.status === "draft" && total > 0 ? (
+                        <div className="flex items-start justify-end gap-2">
                           <div className="flex flex-col items-end gap-1">
-                            <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
-                              View Quotes ({total}) →
-                            </Button>
-                            <Button variant="ghost" size="sm" className="text-xs h-6" onClick={() => openReview(r)}>
-                              Send to suppliers
-                            </Button>
-                          </div>
-                        ) : canCompare ? (
-                          <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
-                            Compare →
-                          </Button>
-                        ) : r.status === "comparison_ready" ? (
-                          <span className="text-xs text-amber-600">Awaiting Reviews ({approved}/3 approved)</span>
-                        ) : ["closed", "negotiating", "approved"].includes(r.status) ? (
-                          <Button variant="ghost" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
-                            View Comparison
-                          </Button>
-                        ) : ["sent", "reminder_1", "reminder_2"].includes(r.status) ? (
-                          <div className="flex flex-col items-end gap-1">
-                            {approved >= 1 ? (
+                            {r.status === "draft" && total === 0 ? (
+                              <Button size="sm" onClick={() => openReview(r)}>
+                                Review &amp; Send
+                              </Button>
+                            ) : r.status === "draft" && total > 0 ? (
+                              <>
+                                <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
+                                  View Quotes ({total}) →
+                                </Button>
+                                <Button variant="ghost" size="sm" className="text-xs h-6" onClick={() => openReview(r)}>
+                                  Send to suppliers
+                                </Button>
+                              </>
+                            ) : canCompare ? (
                               <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
-                                Comparison Khol →
+                                Compare →
                               </Button>
+                            ) : r.status === "comparison_ready" ? (
+                              <span className="text-xs text-amber-600">Awaiting Reviews ({approved}/3 approved)</span>
+                            ) : ["closed", "negotiating", "approved"].includes(r.status) ? (
+                              <Button variant="ghost" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
+                                View Comparison
+                              </Button>
+                            ) : ["sent", "reminder_1", "reminder_2"].includes(r.status) ? (
+                              <>
+                                {approved >= 1 ? (
+                                  <Button variant="outline" size="sm" onClick={() => navigate(`/comparison/${r.id}`)}>
+                                    Comparison Khol →
+                                  </Button>
+                                ) : (
+                                  <Button variant="outline" size="sm" onClick={() => openReview(r)}>
+                                    View Dispatch
+                                  </Button>
+                                )}
+                                <span className="text-[10px] text-muted-foreground">
+                                  {approved}/3 approved · {total} received
+                                </span>
+                              </>
                             ) : (
-                              <Button variant="outline" size="sm" onClick={() => openReview(r)}>
-                                View Dispatch
-                              </Button>
+                              <span className="text-muted-foreground">—</span>
                             )}
-                            <span className="text-[10px] text-muted-foreground">
-                              {approved}/3 approved · {total} received
-                            </span>
                           </div>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
+                          {/* Cancel RFQ — hidden once it's already cancelled / closed / approved */}
+                          {!["cancelled", "closed", "approved"].includes(r.status) && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                              title="Cancel RFQ"
+                              onClick={() => openCancelRfq(r)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                     {/* Expanded preview row */}
@@ -1797,6 +1874,66 @@ export default function RFQs() {
               )}
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cancel RFQ dialog — required structured reason for audit trail */}
+      <Dialog open={!!cancelRfqTarget} onOpenChange={(o) => {
+        if (!o && !cancelRfqSaving) {
+          setCancelRfqTarget(null);
+          setCancelRfqReasonCategory("");
+          setCancelRfqReasonNotes("");
+        }
+      }}>
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel {cancelRfqTarget?.rfq_number}?</DialogTitle>
+            <DialogDescription>
+              Cancellation is permanent and recorded in the audit log. Pick a reason.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Reason <span className="text-destructive">*</span></Label>
+              <Select value={cancelRfqReasonCategory} onValueChange={setCancelRfqReasonCategory}>
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder="Select a reason" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Duplicate">Duplicate</SelectItem>
+                  <SelectItem value="No longer needed">No longer needed</SelectItem>
+                  <SelectItem value="Wrong project">Wrong project</SelectItem>
+                  <SelectItem value="Mistake in items/qty">Mistake in items/qty</SelectItem>
+                  <SelectItem value="Budget rejected">Budget rejected</SelectItem>
+                  <SelectItem value="Other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">
+                Notes {cancelRfqReasonCategory === "Other" && <span className="text-destructive">*</span>}
+                {cancelRfqReasonCategory !== "Other" && <span className="text-muted-foreground"> (optional)</span>}
+              </Label>
+              <Textarea
+                rows={3}
+                value={cancelRfqReasonNotes}
+                onChange={(e) => setCancelRfqReasonNotes(e.target.value)}
+                placeholder={cancelRfqReasonCategory === "Other" ? "Required — explain the reason" : "Any extra context"}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelRfqTarget(null)} disabled={cancelRfqSaving}>
+              Back
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={executeCancelRfq}
+              disabled={cancelRfqSaving || !cancelRfqReasonCategory || (cancelRfqReasonCategory === "Other" && !cancelRfqReasonNotes.trim())}
+            >
+              {cancelRfqSaving ? "Cancelling…" : "Cancel RFQ"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

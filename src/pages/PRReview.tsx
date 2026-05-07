@@ -435,6 +435,17 @@ export default function PRReview() {
     const visibleCount = lineItems.filter((li) => !li._deleted).length;
     if (visibleCount === 0) { toast.error("PR must have at least one line item"); return; }
 
+    // Brand / Make is mandatory on every visible line — procurement needs to
+    // fix the spec before suppliers receive the RFQ.
+    const missingBrand = lineItems
+      .map((li, idx) => ({ li, idx }))
+      .filter(({ li }) => !li._deleted && !li.brand_make.trim());
+    if (missingBrand.length > 0) {
+      const rows = missingBrand.map(({ idx }) => `#${idx + 1}`).join(", ");
+      toast.error(`Brand / Make is required for line ${rows} before creating an RFQ`);
+      return;
+    }
+
     setCreatingRfq(true);
     try {
       // 1. Save any pending line item edits first
@@ -681,7 +692,7 @@ export default function PRReview() {
                           <TableHead className="w-24">Unit *</TableHead>
                           <TableHead className="min-w-[140px]">Specs / Requirements</TableHead>
                           <TableHead className="w-32">Preferred Brands</TableHead>
-                          <TableHead className="w-32">Brand / Make</TableHead>
+                          <TableHead className="w-32">Brand / Make <span className="text-destructive">*</span></TableHead>
                           <TableHead className="w-28">Colour Code</TableHead>
                           <TableHead className="min-w-[140px]">Notes / Instructions</TableHead>
                           <TableHead className="w-24">Site Refs</TableHead>
@@ -746,10 +757,10 @@ export default function PRReview() {
                                 </TableCell>
                                 <TableCell>
                                   <Input
-                                    className="h-8 text-sm w-32"
+                                    className={`h-8 text-sm w-32 ${!li.brand_make.trim() ? "border-destructive/60 focus-visible:border-destructive" : ""}`}
                                     value={li.brand_make}
                                     onChange={(e) => updateItem(idx, { brand_make: e.target.value })}
-                                    placeholder="e.g. Saint-Gobain"
+                                    placeholder="Required"
                                   />
                                 </TableCell>
                                 <TableCell>

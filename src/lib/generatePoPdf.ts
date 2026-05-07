@@ -13,6 +13,9 @@ export interface PoPdfLineItem {
   gst_amount?: number | null;
   total_value: number;
   hsn_code?: string | null;
+  /* Optional brand / make — when present, appended to the description in the
+     rendered table so the founder sees which make is being procured. */
+  brand?: string | null;
 }
 
 export interface PoPdfData {
@@ -453,10 +456,17 @@ export function buildPoPdf(data: PoPdfData): Blob {
   const tableHead = [...baseHead, ...taxHead];
 
   const tableBody = data.lineItems.map((li, i) => {
+    // Append brand / make to description so the founder sees which make is
+    // being procured (e.g. "TMT Bars (16mm) — WELSPUN"). Skip if the brand
+    // is already mentioned in the description to avoid double-printing.
+    const brand = (li.brand ?? "").trim();
+    const descriptionWithBrand = brand && !li.description.toLowerCase().includes(brand.toLowerCase())
+      ? `${li.description} — ${brand}`
+      : li.description;
     const baseRow = [
       i + 1,
       li.hsn_code ?? "",
-      li.description,
+      descriptionWithBrand,
       "",                  /* Image */
       delivSch,            /* Delivery Date */
       li.quantity,

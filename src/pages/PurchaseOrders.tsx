@@ -330,6 +330,7 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
       gst_amount: li.gst_amount,
       total_value: Number(li.total_value ?? 0),
       hsn_code: li.hsn_code,
+      brand: li.brand,
     })),
   });
 };

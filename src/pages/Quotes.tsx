@@ -94,7 +94,7 @@ type PrInfo = {
   requested_by_name: string | null;
   created_at: string | null;
 };
-type PrLineItem = { id: string; description: string; quantity: number | null; unit: string | null };
+type PrLineItem = { id: string; description: string; quantity: number | null; unit: string | null; brand_make?: string | null };
 type Supplier = { id: string; name: string };
 
 const parseStatusConfig: Record<QuoteParseStatus, { badge: string; label: string }> = {
@@ -566,7 +566,7 @@ export default function Quotes() {
     if (rfq?.pr_id) {
       const { data: prLines } = await supabase
         .from("cps_pr_line_items")
-        .select("id, description, quantity, unit")
+        .select("id, description, quantity, unit, brand_make")
         .eq("pr_id", rfq.pr_id)
         .order("sort_order", { ascending: true });
       setPrLineItems((prLines ?? []) as PrLineItem[]);
@@ -980,6 +980,34 @@ Rules:
 
   const confirmAndSaveReview = async () => {
     if (!user || !reviewQuote || !aiResult) return;
+
+    // Brand is mandatory on every line. If a quote line is matched to a PR
+    // line and the brand differs from the PR's brand_make, a reason for the
+    // change is also mandatory — this keeps the audit story tight.
+    const missingBrand: number[] = [];
+    const missingChangeReason: number[] = [];
+    editedItems.forEach((item: any, idx: number) => {
+      const quoteBrand = (item.brand ?? "").trim();
+      if (!quoteBrand) {
+        missingBrand.push(idx + 1);
+        return;
+      }
+      const matchedPr = item.matched_pr_item_index != null ? prLineItems[item.matched_pr_item_index] : null;
+      const prBrandMake = (matchedPr?.brand_make ?? "").trim();
+      const brandDiffers = prBrandMake !== "" && quoteBrand.toLowerCase() !== prBrandMake.toLowerCase();
+      if (brandDiffers && !(item.brand_change_reason ?? "").trim()) {
+        missingChangeReason.push(idx + 1);
+      }
+    });
+    if (missingBrand.length > 0) {
+      toast.error(`Brand is required for line ${missingBrand.join(", ")}`);
+      return;
+    }
+    if (missingChangeReason.length > 0) {
+      toast.error(`Reason for brand change is required for line ${missingChangeReason.join(", ")}`);
+      return;
+    }
+
     setSavingReview(true);
     try {
       const items = editedItems;
@@ -1038,25 +1066,34 @@ Rules:
 
       await supabase.from("cps_quote_line_items").delete().eq("quote_id", reviewQuote.id);
 
-      const lineItems = items.map((item: any) => ({
-        quote_id: reviewQuote.id,
-        pr_line_item_id: item.matched_pr_line_item_id || null,
-        item_id: item.item_id || null,
-        original_description: item.description,
-        brand: item.brand || null,
-        quantity: parseFloat(item.quantity) || 0,
-        unit: item.unit || null,
-        rate: parseFloat(item.rate) || 0,
-        gst_percent: parseFloat(item.gst_percent) || 18,
-        freight: parseFloat(item.freight) || 0,
-        packing: parseFloat(item.packing) || 0,
-        total_landed_rate: parseFloat(item.rate) * (1 + (parseFloat(item.gst_percent) || 18) / 100) + (parseFloat(item.freight) || 0) + (parseFloat(item.packing) || 0),
-        lead_time_days: parseInt(item.lead_time_days) || null,
-        hsn_code: item.hsn_code || null,
-        confidence_score: aiResult.confidence,
-        human_corrected: true,
-        ai_suggested: true,
-      }));
+      const lineItems = items.map((item: any) => {
+        const matchedPr = item.matched_pr_item_index != null ? prLineItems[item.matched_pr_item_index] : null;
+        const prBrandMake = (matchedPr?.brand_make ?? "").trim() || null;
+        const quoteBrand = (item.brand ?? "").trim() || null;
+        const brandDiffers = prBrandMake && quoteBrand && quoteBrand.toLowerCase() !== prBrandMake.toLowerCase();
+        return {
+          quote_id: reviewQuote.id,
+          pr_line_item_id: item.matched_pr_line_item_id || matchedPr?.id || null,
+          item_id: item.item_id || null,
+          original_description: item.description,
+          brand: quoteBrand,
+          // Snapshot the PR's brand_make so the audit trail survives later PR edits.
+          pr_brand_make: prBrandMake,
+          brand_change_reason: brandDiffers ? ((item.brand_change_reason ?? "").trim() || null) : null,
+          quantity: parseFloat(item.quantity) || 0,
+          unit: item.unit || null,
+          rate: parseFloat(item.rate) || 0,
+          gst_percent: parseFloat(item.gst_percent) || 18,
+          freight: parseFloat(item.freight) || 0,
+          packing: parseFloat(item.packing) || 0,
+          total_landed_rate: parseFloat(item.rate) * (1 + (parseFloat(item.gst_percent) || 18) / 100) + (parseFloat(item.freight) || 0) + (parseFloat(item.packing) || 0),
+          lead_time_days: parseInt(item.lead_time_days) || null,
+          hsn_code: item.hsn_code || null,
+          confidence_score: aiResult.confidence,
+          human_corrected: true,
+          ai_suggested: true,
+        };
+      });
       if (lineItems.length > 0) {
         const { error: liErr } = await supabase.from("cps_quote_line_items").insert(lineItems);
         if (liErr) toast.error("Failed to insert line items");
@@ -2266,14 +2303,20 @@ Rules:
                             <Plus className="h-3 w-3 mr-1" /> Add Item
                           </Button>
                         </div>
-                        {editedItems.map((item: any, idx: number) => (
+                        {editedItems.map((item: any, idx: number) => {
+                          // Resolve the PR's brand_make for this item via the AI-matched PR line.
+                          const matchedPr = item.matched_pr_item_index != null ? prLineItems[item.matched_pr_item_index] : null;
+                          const prBrandMake = (matchedPr?.brand_make ?? "").trim();
+                          const quoteBrand = (item.brand ?? "").trim();
+                          const brandDiffersFromPr = prBrandMake !== "" && quoteBrand !== "" && quoteBrand.toLowerCase() !== prBrandMake.toLowerCase();
+                          return (
                           <Card key={idx} className="p-3 space-y-2 border-border/60">
                             <div className="flex items-start justify-between gap-1">
                               <span className="text-xs font-mono text-muted-foreground">{idx + 1}</span>
                               <div className="flex items-center gap-1.5">
-                                {prLineItems[item.matched_pr_item_index] && (
+                                {matchedPr && (
                                   <Badge className="text-[10px] bg-primary/10 text-primary border-0">
-                                    → {prLineItems[item.matched_pr_item_index]?.description?.slice(0, 20)}
+                                    → {matchedPr.description?.slice(0, 20)}
                                   </Badge>
                                 )}
                                 <button
@@ -2300,8 +2343,20 @@ Rules:
                                 <Input className="h-7 text-xs" value={item.unit ?? ""} onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, unit: e.target.value } : it))} />
                               </div>
                               <div className="space-y-0.5">
-                                <Label className="text-[10px] text-muted-foreground">Brand</Label>
-                                <Input className="h-7 text-xs" value={item.brand ?? ""} onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, brand: e.target.value } : it))} />
+                                <Label className="text-[10px] text-muted-foreground">
+                                  Brand <span className="text-destructive">*</span>
+                                  {prBrandMake && (
+                                    <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                                      (PR: <span className="font-medium text-foreground">{prBrandMake}</span>)
+                                    </span>
+                                  )}
+                                </Label>
+                                <Input
+                                  className={`h-7 text-xs ${!quoteBrand ? "border-destructive/60" : brandDiffersFromPr ? "border-amber-500" : ""}`}
+                                  value={item.brand ?? ""}
+                                  onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, brand: e.target.value } : it))}
+                                  placeholder="Required"
+                                />
                               </div>
                               <div className="space-y-0.5">
                                 <Label className="text-[10px] text-muted-foreground">Rate ₹</Label>
@@ -2336,8 +2391,22 @@ Rules:
                                 </span>
                               </div>
                             </div>
+                            {brandDiffersFromPr && (
+                              <div className="rounded-md border border-amber-300 bg-amber-50 p-2 space-y-1">
+                                <Label className="text-[10px] text-amber-900 font-medium">
+                                  Brand differs from PR — Reason for change <span className="text-destructive">*</span>
+                                </Label>
+                                <Input
+                                  className="h-7 text-xs bg-white"
+                                  value={item.brand_change_reason ?? ""}
+                                  onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, brand_change_reason: e.target.value } : it))}
+                                  placeholder={`Why ${quoteBrand} instead of ${prBrandMake}?`}
+                                />
+                              </div>
+                            )}
                           </Card>
-                        ))}
+                          );
+                        })}
                       </div>
 
                       {/* Extra Charges (manual entry for things AI couldn't parse) */}

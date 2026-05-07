@@ -803,6 +803,8 @@ export default function PurchaseRequisitions() {
 
   const [cancelPrTarget, setCancelPrTarget] = useState<PurchaseRequisition | null>(null);
   const [cancelPrSaving, setCancelPrSaving] = useState(false);
+  const [cancelPrReasonCategory, setCancelPrReasonCategory] = useState<string>("");
+  const [cancelPrReasonNotes, setCancelPrReasonNotes] = useState<string>("");
 
   const [itemsMaster, setItemsMaster] = useState<ItemMasterRow[]>([]);
 
@@ -1266,12 +1268,28 @@ export default function PurchaseRequisitions() {
 
   const executeCancelPr = async () => {
     if (!cancelPrTarget || !user) return;
+    if (!cancelPrReasonCategory) {
+      toast.error("Please select a cancellation reason");
+      return;
+    }
+    if (cancelPrReasonCategory === "Other" && !cancelPrReasonNotes.trim()) {
+      toast.error("Please enter notes when reason is 'Other'");
+      return;
+    }
     setCancelPrSaving(true);
     try {
+      const now = new Date().toISOString();
       const isRfqStage = ["rfq_created", "validated"].includes(cancelPrTarget.status);
+      const cancelPayload = {
+        status: "cancelled",
+        cancellation_reason_category: cancelPrReasonCategory,
+        cancellation_reason_notes: cancelPrReasonNotes.trim() || null,
+        cancelled_by: user.id,
+        cancelled_at: now,
+      } as any;
       let query = supabase
         .from("cps_purchase_requisitions")
-        .update({ status: "cancelled" })
+        .update(cancelPayload)
         .eq("id", cancelPrTarget.id);
       if (isRfqStage) {
         query = query.in("status", ["rfq_created", "validated"]);
@@ -1281,28 +1299,41 @@ export default function PurchaseRequisitions() {
       const { error } = await query;
       if (error) throw error;
       if (isRfqStage) {
+        // Cascade cancellation to all linked RFQs (and stamp the same reason
+        // so the audit story is consistent across both tables).
         await supabase
           .from("cps_rfqs")
-          .update({ status: "cancelled" })
+          .update({
+            status: "cancelled",
+            cancellation_reason_category: cancelPrReasonCategory,
+            cancellation_reason_notes: cancelPrReasonNotes.trim() || null,
+            cancelled_by: user.id,
+            cancelled_at: now,
+          } as any)
           .eq("pr_id", cancelPrTarget.id)
           .not("status", "in", '("cancelled")');
       }
+      const reasonSuffix = cancelPrReasonNotes.trim()
+        ? ` — ${cancelPrReasonCategory}: ${cancelPrReasonNotes.trim()}`
+        : ` — ${cancelPrReasonCategory}`;
       await supabase.from("cps_audit_log").insert([{
         action_type: "PR_CANCELLED",
         entity_type: "cps_purchase_requisitions",
         entity_id: cancelPrTarget.id,
         entity_number: cancelPrTarget.pr_number,
         performed_by: user.id,
-        description: isRfqStage
+        description: (isRfqStage
           ? `PR cancelled by procurement during RFQ stage review`
           : cancelPrTarget.status === "duplicate_flagged"
             ? `Duplicate-flagged PR cancelled during review`
-            : `PR cancelled by requestor`,
+            : `PR cancelled by requestor`) + reasonSuffix,
         severity: "warning",
-        logged_at: new Date().toISOString(),
+        logged_at: now,
       }]);
       toast.success(`${cancelPrTarget.pr_number} cancel ho gaya`);
       setCancelPrTarget(null);
+      setCancelPrReasonCategory("");
+      setCancelPrReasonNotes("");
       await refresh();
     } catch (e: any) {
       toast.error(e.message || "Cancel karne mein dikkat aayi");
@@ -3195,22 +3226,58 @@ export default function PurchaseRequisitions() {
       </Dialog>
 
       {/* Cancel PR confirmation dialog */}
-      <AlertDialog open={!!cancelPrTarget} onOpenChange={(o) => { if (!o && !cancelPrSaving) setCancelPrTarget(null); }}>
+      <AlertDialog open={!!cancelPrTarget} onOpenChange={(o) => {
+        if (!o && !cancelPrSaving) {
+          setCancelPrTarget(null);
+          setCancelPrReasonCategory("");
+          setCancelPrReasonNotes("");
+        }
+      }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Cancel {cancelPrTarget?.pr_number}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Ye PR cancel ho jayega aur dobara open nahi ho sakta. Kya aap confirm karte hain?
+              Cancellation is permanent. Please pick a reason — this is captured in the audit log.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Reason <span className="text-destructive">*</span></Label>
+              <Select value={cancelPrReasonCategory} onValueChange={setCancelPrReasonCategory}>
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder="Select a reason" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Duplicate">Duplicate</SelectItem>
+                  <SelectItem value="No longer needed">No longer needed</SelectItem>
+                  <SelectItem value="Wrong project">Wrong project</SelectItem>
+                  <SelectItem value="Mistake in items/qty">Mistake in items/qty</SelectItem>
+                  <SelectItem value="Budget rejected">Budget rejected</SelectItem>
+                  <SelectItem value="Other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">
+                Notes {cancelPrReasonCategory === "Other" && <span className="text-destructive">*</span>}
+                {cancelPrReasonCategory !== "Other" && <span className="text-muted-foreground"> (optional)</span>}
+              </Label>
+              <Textarea
+                rows={3}
+                value={cancelPrReasonNotes}
+                onChange={(e) => setCancelPrReasonNotes(e.target.value)}
+                placeholder={cancelPrReasonCategory === "Other" ? "Required — explain the reason" : "Any extra context"}
+              />
+            </div>
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={cancelPrSaving}>Wapas Jao</AlertDialogCancel>
             <AlertDialogAction
-              disabled={cancelPrSaving}
+              disabled={cancelPrSaving || !cancelPrReasonCategory || (cancelPrReasonCategory === "Other" && !cancelPrReasonNotes.trim())}
               onClick={(e) => { e.preventDefault(); executeCancelPr(); }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {cancelPrSaving ? "Cancel ho raha hai…" : "Haan, Cancel Karo"}
+              {cancelPrSaving ? "Cancelling…" : "Cancel PR"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

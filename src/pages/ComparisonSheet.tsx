@@ -410,6 +410,7 @@ export default function ComparisonSheetPage() {
           gst_amount: lineTotal * gstPct / 100,
           total_value: lineTotal,
           hsn_code: li.hsn_code ?? null,
+          brand: li.brand ?? null,
         };
       });
 
@@ -431,6 +432,7 @@ export default function ComparisonSheetPage() {
           gst_amount: gstAmt,
           total_value: amount,
           hsn_code: null,
+          brand: null,
         });
       });
 
@@ -3599,20 +3601,29 @@ Rules:
                           {supplierTotals.map((t) => {
                             const info = resolveRate(pli.id, t.sup.id);
                             const isCheapest = t.sup.id === cheapest && info.rate !== null;
+                            const cell = cellsByPrLineIdAndSupplierId[pli.id]?.[t.sup.id];
+                            const cellBrand = (cell?.brand ?? "").trim();
                             return (
                               <TableCell
                                 key={t.sup.id}
                                 className={`text-right text-sm font-mono align-top ${isCheapest ? "bg-emerald-50" : ""}`}
                               >
                                 {info.rate !== null ? (
-                                  <div className="flex items-center justify-end gap-1">
-                                    {isCheapest && <span className="text-emerald-700 text-xs">✓</span>}
-                                    {info.source === "inferred" && (
-                                      <span title={info.note ?? "AI-inferred from header total"} className="text-[10px] text-amber-700 font-bold cursor-help">≈</span>
+                                  <div className="space-y-0.5">
+                                    <div className="flex items-center justify-end gap-1">
+                                      {isCheapest && <span className="text-emerald-700 text-xs">✓</span>}
+                                      {info.source === "inferred" && (
+                                        <span title={info.note ?? "AI-inferred from header total"} className="text-[10px] text-amber-700 font-bold cursor-help">≈</span>
+                                      )}
+                                      <span className={isCheapest ? "text-emerald-700 font-semibold" : ""}>
+                                        ₹{info.rate.toLocaleString("en-IN")}
+                                      </span>
+                                    </div>
+                                    {cellBrand && (
+                                      <div className="text-[10px] font-sans font-medium text-muted-foreground text-right truncate max-w-[150px] ml-auto" title={cellBrand}>
+                                        {cellBrand}
+                                      </div>
                                     )}
-                                    <span className={isCheapest ? "text-emerald-700 font-semibold" : ""}>
-                                      ₹{info.rate.toLocaleString("en-IN")}
-                                    </span>
                                   </div>
                                 ) : (
                                   <span className="text-muted-foreground">—</span>
