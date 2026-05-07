@@ -30,7 +30,6 @@ type Item = {
   unit: string | null;
   hsn_code: string | null;
   last_purchase_rate: number | null;
-  benchmark_rate: number | null;
   standard_lead_time_days: number | null;
   preferred_brands: string[] | null;
   active: boolean;
@@ -46,7 +45,6 @@ type ItemForm = {
   hsn_code: string;
   description: string;
   last_purchase_rate: string;
-  benchmark_rate: string;
   standard_lead_time_days: string;
   preferred_brandsText: string;
   active: boolean;
@@ -72,27 +70,6 @@ const formatINR = (value: number | null | undefined) => {
   const n = Number(value);
   if (Number.isNaN(n)) return "—";
   return `₹${n.toLocaleString("en-IN")}`;
-};
-
-const computeBenchmarkBadge = (last: number | null, bench: number | null) => {
-  if (bench === null || bench === undefined) return { text: "—", tone: "muted" as const };
-  if (last === null || last === undefined) return { text: formatINR(bench), tone: "muted" as const };
-  const lastN = Number(last);
-  const benchN = Number(bench);
-  if (Number.isNaN(lastN) || Number.isNaN(benchN) || benchN === 0) {
-    return { text: formatINR(bench), tone: "muted" as const };
-  }
-
-  const diffPct = ((lastN - benchN) / benchN) * 100;
-  if (lastN > benchN * 1.05) {
-    const pct = Math.abs(diffPct).toFixed(0);
-    return { text: `↑ ${pct}% above benchmark`, tone: "bad" as const, diffPct };
-  }
-  if (lastN < benchN) {
-    const pct = Math.abs(diffPct).toFixed(0);
-    return { text: `↓ Good rate (${pct}% below)`, tone: "good" as const, diffPct };
-  }
-  return { text: `On par`, tone: "muted" as const };
 };
 
 export default function ItemMaster() {
@@ -136,7 +113,6 @@ export default function ItemMaster() {
     hsn_code: "",
     description: "",
     last_purchase_rate: "",
-    benchmark_rate: "",
     standard_lead_time_days: "",
     preferred_brandsText: "",
     active: true,
@@ -147,7 +123,7 @@ export default function ItemMaster() {
     const { data, error } = await supabase
       .from("cps_items")
       .select(
-        "id,code,name,description,category,sub_category,unit,hsn_code,last_purchase_rate,benchmark_rate,standard_lead_time_days,preferred_brands,active,created_at",
+        "id,code,name,description,category,sub_category,unit,hsn_code,last_purchase_rate,standard_lead_time_days,preferred_brands,active,created_at",
       )
       .order("name");
 
@@ -296,8 +272,8 @@ export default function ItemMaster() {
   const stats = useMemo(() => {
     const total = items.length;
     const distinctCategories = new Set(items.map((i) => i.category).filter(Boolean)).size;
-    const withBenchmark = items.filter((i) => i.benchmark_rate !== null && i.benchmark_rate !== undefined).length;
-    return { total, distinctCategories, withBenchmark };
+    const withLastRate = items.filter((i) => i.last_purchase_rate !== null && i.last_purchase_rate !== undefined).length;
+    return { total, distinctCategories, withLastRate };
   }, [items]);
 
   const openAdd = () => {
@@ -311,7 +287,6 @@ export default function ItemMaster() {
       hsn_code: "",
       description: "",
       last_purchase_rate: "",
-      benchmark_rate: "",
       standard_lead_time_days: "",
       preferred_brandsText: "",
       active: true,
@@ -330,7 +305,6 @@ export default function ItemMaster() {
       hsn_code: it.hsn_code ?? "",
       description: it.description ?? "",
       last_purchase_rate: it.last_purchase_rate === null || it.last_purchase_rate === undefined ? "" : String(it.last_purchase_rate),
-      benchmark_rate: it.benchmark_rate === null || it.benchmark_rate === undefined ? "" : String(it.benchmark_rate),
       standard_lead_time_days:
         it.standard_lead_time_days === null || it.standard_lead_time_days === undefined ? "" : String(it.standard_lead_time_days),
       preferred_brandsText: (it.preferred_brands ?? []).join(", "),
@@ -374,7 +348,6 @@ export default function ItemMaster() {
       hsn_code: form.hsn_code.trim() || null,
       description: form.description.trim() || null,
       last_purchase_rate: parseNumOrNull(form.last_purchase_rate),
-      benchmark_rate: parseNumOrNull(form.benchmark_rate),
       standard_lead_time_days: parseNumOrNull(form.standard_lead_time_days),
       preferred_brands: preferredArr,
       active: form.active,
@@ -407,7 +380,7 @@ export default function ItemMaster() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Item Master</h1>
-          <p className="text-muted-foreground text-sm mt-1">{items.length} items{items.filter(i => i.benchmark_rate != null).length > 0 ? ` · ${items.filter(i => i.benchmark_rate != null).length} ka benchmark rate hai` : ""}</p>
+          <p className="text-muted-foreground text-sm mt-1">{items.length} items{stats.withLastRate > 0 ? ` · ${stats.withLastRate} ka last purchase rate available` : ""}</p>
         </div>
         {canManageSuppliers && activeTab === "items" && (
           <Button onClick={openAdd}>
@@ -453,10 +426,10 @@ export default function ItemMaster() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">With Benchmark</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">With Last Purchase Rate</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground">{stats.withBenchmark}</div>
+            <div className="text-2xl font-bold text-foreground">{stats.withLastRate}</div>
           </CardContent>
         </Card>
       </div>
@@ -524,7 +497,6 @@ export default function ItemMaster() {
                 <TableHead>Unit</TableHead>
                 <TableHead>HSN</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortItem("last_purchase_rate")}>Last Purchase {sortFieldItem==="last_purchase_rate"?(sortDirItem==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
-                <TableHead>Benchmark</TableHead>
                 <TableHead>Lead Time</TableHead>
                 <TableHead>Status</TableHead>
                 {canManageSuppliers && <TableHead className="text-right">Edit</TableHead>}
@@ -534,7 +506,7 @@ export default function ItemMaster() {
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 9 }).map((__, j) => (
+                    {Array.from({ length: 8 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-24" />
                       </TableCell>
@@ -543,13 +515,12 @@ export default function ItemMaster() {
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
                     No items found
                   </TableCell>
                 </TableRow>
               ) : (
                 paginatedFiltered.map((it) => {
-                  const benchBadge = computeBenchmarkBadge(it.last_purchase_rate, it.benchmark_rate);
                   const status = it.active ? "active" : "inactive";
                   return (
                     <TableRow key={it.id} className="hover:bg-muted/30">
@@ -570,24 +541,6 @@ export default function ItemMaster() {
                       <TableCell className="text-sm text-muted-foreground">{it.unit ?? "—"}</TableCell>
                       <TableCell className="font-mono text-sm text-muted-foreground">{it.hsn_code ?? "—"}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{formatINR(it.last_purchase_rate)}</TableCell>
-                      <TableCell>
-                        <div className="space-y-1">
-                          <div className="text-sm font-medium text-foreground">
-                            {it.benchmark_rate === null ? "—" : formatINR(it.benchmark_rate)}
-                          </div>
-                          <div
-                            className={
-                              benchBadge.tone === "bad"
-                                ? "text-xs text-red-600"
-                                : benchBadge.tone === "good"
-                                  ? "text-xs text-green-600"
-                                  : "text-xs text-muted-foreground"
-                            }
-                          >
-                            {benchBadge.tone === "muted" && it.benchmark_rate === null ? "—" : benchBadge.text}
-                          </div>
-                        </div>
-                      </TableCell>
                       <TableCell className="text-sm text-muted-foreground">{it.standard_lead_time_days ?? "—"}</TableCell>
                       <TableCell>
                         <Badge
@@ -628,11 +581,8 @@ export default function ItemMaster() {
                 <div>
                   <div className="font-semibold text-sm">{it.name}</div>
                   <div className="text-xs text-muted-foreground mt-0.5">{it.category ?? "—"}{it.sub_category ? ` · ${it.sub_category}` : ''} · {it.unit ?? "—"}</div>
-                  {canViewPrices && it.benchmark_rate != null && (
-                    <div className="text-xs text-muted-foreground mt-0.5">Benchmark: ₹{it.benchmark_rate}</div>
-                  )}
                   {canViewPrices && it.last_purchase_rate != null && (
-                    <div className="text-xs text-muted-foreground">Last: ₹{it.last_purchase_rate}</div>
+                    <div className="text-xs text-muted-foreground mt-0.5">Last Purchase: ₹{it.last_purchase_rate}</div>
                   )}
                 </div>
                 {canManageSuppliers && (
@@ -698,7 +648,7 @@ export default function ItemMaster() {
         <DialogContent className="w-[calc(100vw-1rem)] max-w-3xl">
           <DialogHeader>
             <DialogTitle>{editingId ? "Edit Item" : "Add Item"}</DialogTitle>
-            <DialogDescription>Update benchmark and procurement details.</DialogDescription>
+            <DialogDescription>Update item details. Last purchase rate is auto-managed from paid POs.</DialogDescription>
           </DialogHeader>
 
           <div className="overflow-y-auto max-h-[80vh] pr-2">
@@ -740,23 +690,15 @@ export default function ItemMaster() {
               />
             </div>
 
-            <div className="space-y-1">
+            <div className="md:col-span-2 space-y-1">
               <Label>Last Purchase Rate</Label>
               <Input
                 type="number"
                 value={form.last_purchase_rate}
                 onChange={(e) => setForm({ ...form, last_purchase_rate: e.target.value })}
-                placeholder="e.g. 1200"
+                placeholder="Auto-set from paid POs (editable)"
               />
-            </div>
-            <div className="space-y-1">
-              <Label>Benchmark Rate</Label>
-              <Input
-                type="number"
-                value={form.benchmark_rate}
-                onChange={(e) => setForm({ ...form, benchmark_rate: e.target.value })}
-                placeholder="e.g. 1100"
-              />
+              <p className="text-xs text-muted-foreground">Updated automatically when a PO is marked paid in finance. Manual edits are kept until the next paid PO arrives.</p>
             </div>
 
             <div className="md:col-span-2 space-y-1">

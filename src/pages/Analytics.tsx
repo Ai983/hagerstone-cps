@@ -115,7 +115,6 @@ export default function Analytics() {
   const [itemCategoryByPrId, setItemCategoryByPrId] = useState<Record<string, string[]>>({});
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [periodFilter, setPeriodFilter] = useState<string>("all");
-  const [benchmarkVariances, setBenchmarkVariances] = useState<number[]>([]);
   const [compSheets, setCompSheets] = useState<CompSheet[]>([]);
 
   const fetchAll = async () => {
@@ -134,7 +133,7 @@ export default function Analytics() {
         supabase.from("cps_suppliers").select("id, name, performance_score, status"),
         supabase.from("cps_purchase_requisitions").select("id, project_site, project_code, created_at"),
         supabase.from("cps_grns").select("id, po_id, status, created_at"),
-        supabase.from("cps_comparison_sheets").select("rfq_id, potential_savings, reviewer_recommendation, benchmark_variance_pct"),
+        supabase.from("cps_comparison_sheets").select("rfq_id, potential_savings, reviewer_recommendation"),
         supabase.from("cps_pr_line_items").select("pr_id, item_id"),
         supabase.from("cps_items").select("id, category"),
       ]);
@@ -144,10 +143,6 @@ export default function Analytics() {
       setPrs((prData ?? []) as PR[]);
       setGrns((grnData ?? []) as GRN[]);
 
-      const variances = (compData ?? [])
-        .map((c: any) => Number(c.benchmark_variance_pct))
-        .filter((v: number) => !Number.isNaN(v));
-      setBenchmarkVariances(variances);
       setCompSheets((compData ?? []) as CompSheet[]);
 
       // item category by pr_id
@@ -233,18 +228,14 @@ export default function Analytics() {
     });
     const onTimeRate = (onTime + late) > 0 ? (onTime / (onTime + late)) * 100 : null;
 
-    const avgVariance = benchmarkVariances.length > 0
-      ? benchmarkVariances.reduce((s, v) => s + v, 0) / benchmarkVariances.length
-      : null;
-
     const uniqueSuppliers = new Set(filteredPos.map((p) => p.supplier_id).filter(Boolean)).size;
     const uniqueProjects = new Set(filteredPos.map((p) => p.project_code).filter(Boolean)).size;
 
     return {
       total, count, avgValue, active, delivered, onTimeRate,
-      avgVariance, uniqueSuppliers, uniqueProjects, onTime, late,
+      uniqueSuppliers, uniqueProjects, onTime, late,
     };
-  }, [filteredPos, grnByPoId, benchmarkVariances]);
+  }, [filteredPos, grnByPoId]);
 
   // Savings lookup: rfq_id → { savings, winnerSupplierId }
   const savingsByRfqId = useMemo(() => {
@@ -460,7 +451,6 @@ export default function Analytics() {
     rows.push(["Active POs", String(kpis.active)]);
     rows.push(["Delivered POs", String(kpis.delivered)]);
     rows.push(["On-Time Rate", kpis.onTimeRate != null ? `${kpis.onTimeRate.toFixed(1)}%` : "—"]);
-    rows.push(["Avg Benchmark Variance", kpis.avgVariance != null ? `${kpis.avgVariance.toFixed(1)}%` : "—"]);
     rows.push(["Unique Suppliers", String(kpis.uniqueSuppliers)]);
     rows.push(["Unique Projects", String(kpis.uniqueProjects)]);
     rows.push([]);
@@ -545,7 +535,7 @@ export default function Analytics() {
       ["Total Spend", pdfCurrency(kpis.total), "Total Savings", pdfCurrency(totalSavings)],
       ["Total POs", String(kpis.count), "Avg PO Value", pdfCurrency(kpis.avgValue)],
       ["Active POs", String(kpis.active), "Delivered POs", String(kpis.delivered)],
-      ["On-Time Delivery", kpis.onTimeRate != null ? `${kpis.onTimeRate.toFixed(1)}%  (${kpis.onTime} on-time / ${kpis.late} late)` : "—", "Benchmark Variance", kpis.avgVariance != null ? `${kpis.avgVariance > 0 ? "+" : ""}${kpis.avgVariance.toFixed(1)}%` : "—"],
+      ["On-Time Delivery", kpis.onTimeRate != null ? `${kpis.onTimeRate.toFixed(1)}%  (${kpis.onTime} on-time / ${kpis.late} late)` : "—", "", ""],
       ["Unique Suppliers", String(kpis.uniqueSuppliers), "Projects", String(kpis.uniqueProjects)],
       ["PR -> PO Rate", `${prInsight.rate.toFixed(0)}%  (${prInsight.converted} of ${prInsight.total} PRs)`, "", ""],
     ];
@@ -784,27 +774,6 @@ export default function Analytics() {
               {loading ? <Skeleton className="h-7 w-16" /> : (kpis.onTimeRate != null ? `${kpis.onTimeRate.toFixed(0)}%` : "—")}
             </div>
             <p className="text-xs text-muted-foreground mt-1">{kpis.onTime} on-time / {kpis.late} late</p>
-          </CardContent>
-        </Card>
-
-        <Card className="shadow-sm">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-xs font-medium text-muted-foreground">Benchmark Variance</CardTitle>
-            <div className="h-8 w-8 rounded-lg bg-rose-50 flex items-center justify-center">
-              {kpis.avgVariance != null && kpis.avgVariance < 0 ? (
-                <TrendingDown className="h-4 w-4 text-emerald-600" />
-              ) : (
-                <TrendingUp className="h-4 w-4 text-rose-600" />
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold ${kpis.avgVariance != null && kpis.avgVariance < 0 ? "text-emerald-700" : "text-rose-700"}`}>
-              {loading ? <Skeleton className="h-7 w-16" /> : (kpis.avgVariance != null ? `${kpis.avgVariance > 0 ? "+" : ""}${kpis.avgVariance.toFixed(1)}%` : "—")}
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {kpis.avgVariance != null && kpis.avgVariance < 0 ? "Below benchmark (savings)" : "Above benchmark"}
-            </p>
           </CardContent>
         </Card>
 
@@ -1258,7 +1227,7 @@ export default function Analytics() {
       </Card>
 
       {/* Quality Alerts */}
-      {!loading && (kpis.late > 0 || (kpis.avgVariance != null && kpis.avgVariance > 5)) && (
+      {!loading && kpis.late > 0 && (
         <Card className="border-amber-200 bg-amber-50/40">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2 text-amber-800">
@@ -1266,16 +1235,9 @@ export default function Analytics() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1.5 pt-0">
-            {kpis.late > 0 && (
-              <div className="text-sm text-amber-800">
-                {kpis.late} PO{kpis.late > 1 ? "s" : ""} delivered late in the selected period
-              </div>
-            )}
-            {kpis.avgVariance != null && kpis.avgVariance > 5 && (
-              <div className="text-sm text-amber-800">
-                Average price is {kpis.avgVariance.toFixed(1)}% above benchmark — consider negotiation or new vendors
-              </div>
-            )}
+            <div className="text-sm text-amber-800">
+              {kpis.late} PO{kpis.late > 1 ? "s" : ""} delivered late in the selected period
+            </div>
           </CardContent>
         </Card>
       )}

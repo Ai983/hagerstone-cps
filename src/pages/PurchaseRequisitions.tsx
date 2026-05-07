@@ -54,7 +54,6 @@ type ItemMasterRow = {
   name: string;
   unit: string | null;
   category: string | null;
-  benchmark_rate: number | null;
   last_purchase_rate: number | null;
 };
 
@@ -896,7 +895,7 @@ export default function PurchaseRequisitions() {
     setItemsLoading(true);
     const { data, error } = await supabase
       .from("cps_items")
-      .select("id, name, unit, category, benchmark_rate, last_purchase_rate")
+      .select("id, name, unit, category, last_purchase_rate")
       .eq("active", true);
 
     if (error) {
@@ -2293,8 +2292,8 @@ export default function PurchaseRequisitions() {
                                         {m.category && (
                                           <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">{m.category}</span>
                                         )}
-                                        {canViewPrices && m.benchmark_rate != null && (
-                                          <span className="text-[10px] text-muted-foreground">~₹{m.benchmark_rate}/{m.unit}</span>
+                                        {canViewPrices && m.last_purchase_rate != null && (
+                                          <span className="text-[10px] text-muted-foreground">Last: ₹{m.last_purchase_rate}/{m.unit}</span>
                                         )}
                                       </div>
                                     </div>

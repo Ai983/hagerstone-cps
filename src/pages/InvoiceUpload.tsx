@@ -426,7 +426,6 @@ export default function InvoiceUpload() {
               category: "General",
               unit: item.unit || "Nos",
               hsn_code: item.hsn_code || null,
-              benchmark_rate: item.rate || null,
               active: true,
             } as any)
             .select("id")

@@ -62,7 +62,6 @@ export default function BulkInvoiceIngestion() {
     imported: number;
     newVendors: number;
     newMaterials: number;
-    benchmarks: number;
     errors: string[];
   } | null>(null);
 
@@ -231,7 +230,6 @@ export default function BulkInvoiceIngestion() {
     let imported = 0;
     let newVendors = 0;
     let newMaterials = 0;
-    let benchmarks = 0;
     const errors: string[] = [];
     let idx = 0;
     for (const r of rows) {
@@ -243,7 +241,6 @@ export default function BulkInvoiceIngestion() {
         imported += 1;
         if (res.isNewVendor) newVendors += 1;
         newMaterials += res.materialMatches.filter((m) => m.isNew).length;
-        benchmarks += res.benchmarksAdded;
         errors.push(...res.errors);
       } catch (e: unknown) {
         errors.push(`${r.file.name}: ${e instanceof Error ? e.message : String(e)}`);
@@ -251,7 +248,7 @@ export default function BulkInvoiceIngestion() {
     }
     setIsImporting(false);
     setImportProgressLabel("");
-    setSummary({ imported, newVendors, newMaterials, benchmarks, errors });
+    setSummary({ imported, newVendors, newMaterials, errors });
     if (imported > 0) toast.success(`Imported ${imported} invoice(s)`);
   };
 
@@ -456,9 +453,6 @@ export default function BulkInvoiceIngestion() {
               </li>
               <li>
                 New materials (lines): <strong>{summary.newMaterials}</strong>
-              </li>
-              <li>
-                Benchmark rows: <strong>{summary.benchmarks}</strong>
               </li>
             </ul>
             {summary.errors.length > 0 && (

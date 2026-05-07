@@ -263,7 +263,7 @@ export default function Quotes() {
     item_description: string;
     quantity: number;
     unit: string;
-    benchmark_rate: number | null;
+    last_purchase_rate: number | null;
     sort_order: number;
   };
   type LogItemEntry = { rate: string; gst_percent: string; brand: string; quantity: string };
@@ -1304,7 +1304,7 @@ Rules:
     try {
       const { data, error } = await supabase
         .from("cps_rfq_line_items_for_dispatch")
-        .select("line_item_id,item_description,quantity,unit,benchmark_rate,sort_order")
+        .select("line_item_id,item_description,quantity,unit,last_purchase_rate,sort_order")
         .eq("rfq_id", rfqId)
         .order("sort_order", { ascending: true });
       if (error) throw error;
@@ -2012,8 +2012,8 @@ Rules:
                                   <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
                                   <TableCell>
                                     <div className="text-sm font-medium">{it.item_description}</div>
-                                    {it.benchmark_rate && (
-                                      <div className="text-[10px] text-muted-foreground">Benchmark: ₹{it.benchmark_rate}</div>
+                                    {it.last_purchase_rate && (
+                                      <div className="text-[10px] text-muted-foreground">Last Purchase: ₹{it.last_purchase_rate}</div>
                                     )}
                                   </TableCell>
                                   <TableCell>

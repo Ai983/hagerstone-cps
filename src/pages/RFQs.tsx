@@ -87,7 +87,7 @@ type ReviewPrLineItem = {
   description: string;
   quantity: number | null;
   unit: string | null;
-  item: { id: string; name: string; benchmark_rate: number | null; category: string | null } | null;
+  item: { id: string; name: string; last_purchase_rate: number | null; category: string | null } | null;
 };
 
 const statusColor: Record<RfqStatus, { badge: string; label: string }> = {
@@ -536,7 +536,7 @@ export default function RFQs() {
   const loadPrItems = async (prId: string, targetCategory: string | null): Promise<string[]> => {
     const { data: items } = await supabase
       .from("cps_pr_line_items")
-      .select("id, description, quantity, unit, item:cps_items(id, name, benchmark_rate, category)")
+      .select("id, description, quantity, unit, item:cps_items(id, name, last_purchase_rate, category)")
       .eq("pr_id", prId);
     const all = (items ?? []) as unknown as ReviewPrLineItem[];
 
@@ -1472,7 +1472,7 @@ export default function RFQs() {
                             <TableHead>Item</TableHead>
                             <TableHead className="w-20">Qty</TableHead>
                             <TableHead className="w-20">Unit</TableHead>
-                            <TableHead className="w-28">Benchmark Rate</TableHead>
+                            <TableHead className="w-28">Last Purchase Rate</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -1482,7 +1482,7 @@ export default function RFQs() {
                               <TableCell className="text-muted-foreground">{item.quantity ?? "—"}</TableCell>
                               <TableCell className="text-muted-foreground">{item.unit ?? "—"}</TableCell>
                               <TableCell className="text-muted-foreground">
-                                {item.item?.benchmark_rate != null ? `₹${item.item.benchmark_rate}` : "—"}
+                                {item.item?.last_purchase_rate != null ? `₹${item.item.last_purchase_rate}` : "—"}
                               </TableCell>
                             </TableRow>
                           ))}

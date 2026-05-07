@@ -14,7 +14,6 @@ export interface UploadResult {
   invoiceNumber: string;
   lineItemCount: number;
   materialMatches: { description: string; matchedTo: string; isNew: boolean }[];
-  benchmarksAdded: number;
   errors: string[];
 }
 
@@ -50,7 +49,6 @@ async function resolveMaterialForLine(
       name: normalised,
       unit: item.unit,
       hsn_code: item.hsn_sac,
-      last_purchase_rate: item.rate,
       active: true,
     });
     if (itemError) {
@@ -116,7 +114,6 @@ export async function uploadParsedInvoice(
 ): Promise<UploadResult> {
   const errors: string[] = [];
   const materialMatches: UploadResult["materialMatches"] = [];
-  let benchmarksAdded = 0;
 
   let vendorId: string;
   let isNewVendor = false;
@@ -293,34 +290,10 @@ export async function uploadParsedInvoice(
     errors.push(`Line items insert error: ${lineError.message}`);
   }
 
-  for (const li of lineItemsWithMaterialId) {
-    if (li.original.item_type !== "material") continue;
-    if (!li.original.rate || li.original.rate <= 0) continue;
-
-    const { data: cpsItem } = await supabase
-      .from("cps_items")
-      .select("id")
-      .eq("material_id", li.material_id)
-      .maybeSingle();
-
-    if (cpsItem) {
-      const { error: benchError } = await supabase.from("cps_benchmarks").insert({
-        item_id: cpsItem.id,
-        item_description: li.original.description,
-        region: parsed.vendor.state || "Unknown",
-        source: "internal",
-        rate: li.original.rate,
-        confidence_level: parsed.confidence >= 80 ? "high" : parsed.confidence >= 50 ? "medium" : "low",
-      });
-      if (benchError) {
-        errors.push(`Benchmark insert warning: ${benchError.message}`);
-      } else {
-        benchmarksAdded += 1;
-      }
-
-      await supabase.from("cps_items").update({ last_purchase_rate: li.original.rate }).eq("id", cpsItem.id);
-    }
-  }
+  // Historical-invoice uploads no longer write to cps_items.last_purchase_rate
+  // or cps_benchmarks — those concepts were removed. last_purchase_rate is now
+  // sourced exclusively from paid POs via the trg_cps_update_last_purchase_on_paid_po
+  // trigger.
 
   return {
     vendorId,
@@ -330,7 +303,6 @@ export async function uploadParsedInvoice(
     invoiceNumber: parsed.invoice.invoice_number,
     lineItemCount: parsed.line_items.length,
     materialMatches,
-    benchmarksAdded,
     errors,
   };
 }
