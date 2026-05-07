@@ -287,20 +287,31 @@ export default function ComparisonSheetPage() {
 
   const [generating, setGenerating] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
-  const [confirmMode, setConfirmMode] = useState<"draft" | "reviewed" | "send">("draft");
+  const [confirmMode, setConfirmMode] = useState<"draft" | "reviewed">("draft");
 
-  const [approvalNotes, setApprovalNotes] = useState("");
-  const [approving, setApproving] = useState(false);
   const [aiRecommendation, setAiRecommendation] = useState<any>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [creatingPO, setCreatingPO] = useState(false);
 
-  // Bank details dialog — opens before PO creation so PDF/WhatsApp to founder has bank info
+  // Bank details dialog — opens when 'View PO' is clicked. Bank fields appear
+  // on the PDF the founder will see, so we collect them before generating the
+  // preview.
   const [bankDialogOpen, setBankDialogOpen] = useState(false);
   const [bankHolderName, setBankHolderName] = useState("");
   const [bankName, setBankName] = useState("");
   const [bankIfsc, setBankIfsc] = useState("");
   const [bankAccountNumber, setBankAccountNumber] = useState("");
+
+  // PO preview dialog — shows the PDF that will be sent to the founder for
+  // approval. User must click "View PO" before "Send to Founder" enables, so
+  // they can\'t send a PO they haven\'t looked at.
+  const [poPreviewOpen, setPoPreviewOpen] = useState(false);
+  const [poPreviewUrl, setPoPreviewUrl] = useState<string | null>(null);
+  const [poPreviewLoading, setPoPreviewLoading] = useState(false);
+  const [hasViewedPo, setHasViewedPo] = useState(false);
+  const [sendingToFounder, setSendingToFounder] = useState(false);
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
 
   const openBankDialogForCreate = async () => {
     if (!sheet || !rfq || !user) return;
@@ -333,14 +344,276 @@ export default function ComparisonSheetPage() {
     setBankDialogOpen(true);
   };
 
-  const confirmBankAndCreatePO = async () => {
+  const confirmBankAndPreviewPo = async () => {
     // Bank details are optional — but IF IFSC is entered, it must be valid
     if (bankIfsc.trim() && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(bankIfsc.trim().toUpperCase())) {
       toast.error("Invalid IFSC code — must be 11 characters (e.g. HDFC0001234) or leave blank");
       return;
     }
     setBankDialogOpen(false);
-    await createPO();
+    await previewPo();
+  };
+
+  // Build the PO PDF in-memory using the same logic createPO will use, then
+  // open it in a preview dialog so the procurement head sees exactly what
+  // the founder will receive over WhatsApp. No DB writes happen here — the
+  // PO is only created when the user clicks 'Send to Founder'.
+  const previewPo = async () => {
+    if (!sheet || !rfq || !user) return;
+    const supplierId = sheet.reviewer_recommendation;
+    if (!supplierId) {
+      toast.error("No recommended supplier selected");
+      return;
+    }
+    const quote = quoteBySupplierId[supplierId];
+    if (!quote) {
+      toast.error("No quote found for recommended supplier");
+      return;
+    }
+
+    setPoPreviewLoading(true);
+    try {
+      // Pull everything needed to render a PDF identical to the one createPO
+      // will produce.
+      const [
+        { data: prData },
+        { data: quoteLineItems, error: qliErr },
+        { data: quoteFull },
+        { data: supplierRow },
+      ] = await Promise.all([
+        supabase
+          .from("cps_purchase_requisitions")
+          .select("pr_number, project_site, project_code, required_by")
+          .eq("id", rfq.pr_id)
+          .maybeSingle(),
+        supabase.from("cps_quote_line_items").select("*").eq("quote_id", quote.id),
+        supabase.from("cps_quotes").select("ai_parsed_data").eq("id", quote.id).maybeSingle(),
+        supabase
+          .from("cps_suppliers")
+          .select("name,gstin,state,email,phone,address_text,city,pincode")
+          .eq("id", supplierId)
+          .maybeSingle(),
+      ]);
+      if (qliErr) throw qliErr;
+
+      const calcLineItems = (quoteLineItems ?? []).map((li: any) => {
+        const qty = Number(li.quantity ?? 0);
+        const rate = Number(li.rate ?? 0);
+        const gstPct = Number(li.gst_percent ?? 0);
+        const lineTotal = qty * rate;
+        return {
+          description: li.original_description ?? "",
+          quantity: qty,
+          unit: li.unit ?? null,
+          rate,
+          gst_percent: gstPct,
+          gst_amount: lineTotal * gstPct / 100,
+          total_value: lineTotal,
+          hsn_code: li.hsn_code ?? null,
+        };
+      });
+
+      // Append extra charges (Installation, Transportation, etc.) from the quote.
+      const extraCharges = Array.isArray((quoteFull as any)?.ai_parsed_data?.extra_charges)
+        ? (quoteFull as any).ai_parsed_data.extra_charges
+        : [];
+      extraCharges.forEach((charge: any) => {
+        const amount = Number(charge?.amount) || 0;
+        if (!charge?.name || amount <= 0) return;
+        const gstPct = charge?.taxable ? 18 : 0;
+        const gstAmt = amount * gstPct / 100;
+        calcLineItems.push({
+          description: String(charge.name),
+          quantity: 1,
+          unit: "lot",
+          rate: amount,
+          gst_percent: gstPct,
+          gst_amount: gstAmt,
+          total_value: amount,
+          hsn_code: null,
+        });
+      });
+
+      // Inherit advance payments recorded during quote review — same logic
+      // createPO uses, so the preview matches exactly.
+      const advanceRows = Array.isArray((quoteFull as any)?.ai_parsed_data?.advance_payments)
+        ? (quoteFull as any).ai_parsed_data.advance_payments
+            .filter((a: any) => Number(a?.amount) > 0)
+            .map((a: any) => ({
+              amount: Number(a.amount) || 0,
+              method: String(a.method ?? "cash"),
+              date: String(a.date ?? ""),
+              paid_to_name: String(a.paid_to_name ?? ""),
+              reference_number: String(a.reference_number ?? ""),
+              notes: String(a.notes ?? ""),
+            }))
+        : [];
+      const advanceTotal = advanceRows.reduce((s: number, a: any) => s + (Number(a.amount) || 0), 0);
+
+      const subTotal = calcLineItems.reduce((s, li) => s + li.total_value, 0);
+      const gstAmount = calcLineItems.reduce((s, li) => s + (li.gst_amount ?? 0), 0);
+      const grandTotal = subTotal + gstAmount;
+
+      // Optional logo (best-effort)
+      let logoBase64: string | undefined;
+      try {
+        const resp = await fetch(logoUrl);
+        const blob = await resp.blob();
+        logoBase64 = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+      } catch {}
+
+      const supplierAddressLines: string[] = [];
+      if (supplierRow) {
+        const s = supplierRow as any;
+        if (s.address_text) supplierAddressLines.push(String(s.address_text));
+        const cityLine = [s.city, s.state, s.pincode].filter(Boolean).join(", ");
+        if (cityLine) supplierAddressLines.push(cityLine);
+      }
+
+      // Mirror the exact PoPdfData shape buildPoPdfFromDb produces, so the
+      // preview is byte-for-byte the PDF the founder will see (modulo the
+      // poNumber, which is finalised at Send-to-Founder time).
+      const previewBlob = buildPoPdf({
+        poNumber: "PREVIEW (will assign on send)",
+        prNumber: (prData as any)?.pr_number ?? null,
+        poDate: new Date().toISOString(),
+        supplierName: suppliers.find((s) => s.id === supplierId)?.name ?? "",
+        supplierGstin: (supplierRow as any)?.gstin ?? null,
+        supplierState: (supplierRow as any)?.state ?? null,
+        supplierEmail: (supplierRow as any)?.email ?? null,
+        supplierPhone: (supplierRow as any)?.phone ?? null,
+        supplierAddress: supplierAddressLines.join("\n") || null,
+        // createPO writes ship_to_address = prData.project_site ?? "—" — match that.
+        shipToAddress: (prData as any)?.ship_to_address ?? (prData as any)?.project_site ?? "—",
+        inspAt: (prData as any)?.project_site ?? null,
+        paymentTerms: quote.payment_terms ?? null,
+        deliveryDate: (prData as any)?.required_by ?? null,
+        // buildPoPdfFromDb uses pr.project_code as both code and name fallback.
+        projectCode: (prData as any)?.project_code ?? null,
+        projectName: (prData as any)?.project_code ?? null,
+        subTotal,
+        gstAmount,
+        grandTotal,
+        logoBase64,
+        hagerstoneGstin: "09AAECH3768B1ZM",
+        createdByName: user?.name ?? user?.email ?? null,
+        bankAccountHolderName: bankHolderName.trim() || null,
+        bankName: bankName.trim() || null,
+        bankIfsc: bankIfsc.trim().toUpperCase() || null,
+        bankAccountNumber: bankAccountNumber.trim() || null,
+        advancePayments: advanceRows,
+        advancePaidTotal: advanceTotal,
+        lineItems: calcLineItems,
+      });
+
+      // Revoke any prior preview URL before assigning the new one to avoid
+      // memory leaks.
+      if (poPreviewUrl) URL.revokeObjectURL(poPreviewUrl);
+      const url = URL.createObjectURL(previewBlob);
+      setPoPreviewUrl(url);
+      setHasViewedPo(true);
+      setPoPreviewOpen(true);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to generate PO preview");
+    } finally {
+      setPoPreviewLoading(false);
+    }
+  };
+
+  // Atomic 'commit' action — freezes the comparison sheet snapshot, creates
+  // the real PO, uploads the PDF, and fires the founder approval webhook.
+  // The user has already reviewed the PDF via 'View PO' before this fires.
+  const sendToFounder = async () => {
+    if (!sheet || !user) return;
+    if (!hasViewedPo) {
+      toast.error("Please click 'View PO' to review the PO before sending");
+      return;
+    }
+    setSendingToFounder(true);
+    try {
+      // 1. Freeze the snapshot first — captures every number the user just
+      //    saw in the PDF preview / on screen, in case PO creation fails.
+      await freezeSnapshot(sheet.id);
+
+      const now = new Date().toISOString();
+      const { error: updErr } = await supabase.from("cps_comparison_sheets").update({
+        manual_review_status: "sent_for_approval",
+        status: "approved",
+        approved_by: user.id,
+        approved_at: now,
+        is_locked: true,
+        frozen_at: now,
+        frozen_by: user.id,
+      } as any).eq("id", sheet.id);
+      if (updErr) throw updErr;
+
+      // 2. Audit log entry (best-effort).
+      try {
+        await supabase.from("cps_audit_log").insert({
+          user_id: user.id,
+          user_name: user.name,
+          user_role: user.role,
+          action_type: "COMPARISON_SENT_TO_FOUNDER",
+          entity_type: "cps_comparison_sheets",
+          entity_id: sheet.id,
+          entity_number: rfq?.rfq_number ?? null,
+          description: `Comparison frozen and PO dispatched to founder for ${rfq?.rfq_number ?? ""}`,
+          severity: "info",
+          logged_at: now,
+        } as any);
+      } catch {}
+
+      // 3. Create the real PO + upload PDF + fire founder webhook.
+      //    createPO handles all of these and navigates to /purchase-orders
+      //    on success.
+      await createPO();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to send to founder");
+    } finally {
+      setSendingToFounder(false);
+    }
+  };
+
+  // Reject the comparison after Mark-as-Reviewed — sends it back to in_review
+  // so the procurement head can re-pick a supplier or update notes.
+  const handleRejectComparison = async () => {
+    if (!sheet || !user) return;
+    if (!rejectReason.trim()) {
+      toast.error("Please provide a reason for rejection");
+      return;
+    }
+    try {
+      const now = new Date().toISOString();
+      const { error } = await supabase.from("cps_comparison_sheets").update({
+        manual_review_status: "in_review",
+        manual_notes: ((sheet.manual_notes ?? "") + "\n\n[Reverted to In Review]: " + rejectReason.trim()).trim(),
+      }).eq("id", sheet.id);
+      if (error) throw error;
+      try {
+        await supabase.from("cps_audit_log").insert({
+          user_id: user.id,
+          user_name: user.name,
+          user_role: user.role,
+          action_type: "COMPARISON_REVERTED_TO_REVIEW",
+          entity_type: "cps_comparison_sheets",
+          entity_id: sheet.id,
+          entity_number: rfq?.rfq_number ?? null,
+          description: `Comparison sheet reverted to In Review: ${rejectReason.trim()}`,
+          severity: "info",
+          logged_at: now,
+        } as any);
+      } catch {}
+      toast.success("Comparison sheet reverted to In Review");
+      setRejectDialogOpen(false);
+      setRejectReason("");
+      await fetchAll();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to revert");
+    }
   };
 
   const reviewerName = useMemo(() => {
@@ -1416,7 +1689,7 @@ export default function ComparisonSheetPage() {
 
   const canSubmitManual = canCreateRFQ;
 
-  const requestConfirmation = (mode: "draft" | "reviewed" | "send") => {
+  const requestConfirmation = (mode: "draft" | "reviewed") => {
     setConfirmMode(mode);
     setConfirmDialogOpen(true);
   };
@@ -1647,38 +1920,6 @@ export default function ComparisonSheetPage() {
         }).eq("id", sheet.id);
         if (error) throw error;
         toast.success("Marked as Reviewed");
-      }
-
-      if (confirmMode === "send") {
-        // Freeze the comparison sheet — write the full snapshot BEFORE moving
-        // status, so if the snapshot fails the status doesn't drift out of sync.
-        await freezeSnapshot(sheet.id);
-
-        const { error } = await supabase.from("cps_comparison_sheets").update({
-          manual_review_status: "sent_for_approval",
-          is_locked: true,
-          frozen_at: now,
-          frozen_by: user.id,
-        } as any).eq("id", sheet.id);
-        if (error) throw error;
-
-        // Best-effort audit entry — failure shouldn't unwind the freeze.
-        try {
-          await supabase.from("cps_audit_log").insert({
-            user_id: user.id,
-            user_name: user.name,
-            user_role: user.role,
-            action_type: "COMPARISON_FROZEN",
-            entity_type: "cps_comparison_sheets",
-            entity_id: sheet.id,
-            entity_number: rfq?.rfq_number ?? null,
-            description: `Comparison sheet frozen and sent for approval (${prLineItems.length} items × ${suppliers.length} suppliers)`,
-            severity: "info",
-            logged_at: now,
-          } as any);
-        } catch {}
-
-        toast.success("Sent for approval — comparison sheet frozen");
       }
 
       setConfirmDialogOpen(false);
@@ -2235,56 +2476,6 @@ export default function ComparisonSheetPage() {
     doc.save(`Comparison_${rfq.rfq_number}_${new Date().toISOString().slice(0, 10)}.pdf`);
   };
 
-
-  const handleApprove = async () => {
-    if (!sheet || !user) return;
-    setApproving(true);
-    try {
-      const { error } = await supabase.from("cps_comparison_sheets").update({
-        status: "approved",
-        approved_by: user.id,
-        approved_at: new Date().toISOString(),
-        approval_notes: approvalNotes.trim() || null,
-      }).eq("id", sheet.id);
-      if (error) {
-        toast.error("Failed to approve: " + error.message);
-        return;
-      }
-      toast.success("Comparison sheet approved — PO creation enabled");
-      await fetchAll();
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to approve");
-    } finally {
-      setApproving(false);
-    }
-  };
-
-  const handleReject = async () => {
-    if (!sheet || !user) return;
-    if (!approvalNotes.trim()) {
-      toast.error("Please provide a reason for rejection");
-      return;
-    }
-    setApproving(true);
-    try {
-      const { error } = await supabase.from("cps_comparison_sheets").update({
-        status: "rejected",
-        approved_by: user.id,
-        approved_at: new Date().toISOString(),
-        approval_notes: approvalNotes.trim(),
-      }).eq("id", sheet.id);
-      if (error) {
-        toast.error("Failed to reject: " + error.message);
-        return;
-      }
-      toast.success("Comparison sheet rejected");
-      await fetchAll();
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to reject");
-    } finally {
-      setApproving(false);
-    }
-  };
 
   const getAIRecommendation = async () => {
     if (!sheet || !rfq || suppliers.length === 0) return;
@@ -3839,24 +4030,9 @@ Rules:
                 </div>
               </div>
 
-              {canSubmitManual && !sheet.is_locked && (
-                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
-                  <p className="text-amber-900">
-                    Sending for approval will <span className="font-semibold">freeze every number on this sheet</span> — per-supplier rates, market rates, benchmark, last-purchase data and totals are saved exactly as shown right now and cannot be changed afterwards.
-                  </p>
-                  <Button
-                    size="sm"
-                    className="mt-3 bg-purple-600 hover:bg-purple-700 text-white"
-                    onClick={() => requestConfirmation("send")}
-                  >
-                    Send for Approval & Freeze
-                  </Button>
-                </div>
-              )}
-
               {!canSubmitManual && (
                 <div className="text-sm text-muted-foreground">
-                  Manual review is completed. Awaiting send-for-approval by procurement executive.
+                  Manual review is completed. Awaiting next step by procurement head.
                 </div>
               )}
             </>
@@ -3880,36 +4056,18 @@ Rules:
         </CardContent>
       </Card>
 
-      {/* Single-quote bypass — if only 1 quote received, allow direct PO */}
-      {canApprove && sheet.status !== "approved" && sheet.status !== "rejected" && (sheet.total_quotes_received ?? 0) === 1 && (
-        <Card className="border-amber-200 bg-amber-50">
-          <CardContent className="py-4">
-            <div className="flex items-start justify-between gap-4 flex-wrap">
-              <div>
-                <p className="text-sm font-semibold text-amber-900">Single Quote Received</p>
-                <p className="text-xs text-amber-700 mt-0.5">Only 1 quote was received for this RFQ. You can bypass the standard comparison and proceed directly to PO creation.</p>
-              </div>
-              <Button size="sm" className="bg-amber-600 hover:bg-amber-700 text-white shrink-0"
-                onClick={openBankDialogForCreate}
-                disabled={
-                  creatingPO
-                  || !comparisonReadiness.isReady
-                  || comparisonReadiness.isGenerating
-                  || (decisionSummary.aboveMarketCount > 0 && !aboveMarketJustification.trim())
-                }>
-                {creatingPO ? "Creating PO..." : "Proceed Directly to PO →"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Approval Section — visible to procurement_head / management after review */}
-      {canApprove && (manualStatus === "reviewed" || manualStatus === "sent_for_approval") && sheet.status !== "approved" && sheet.status !== "rejected" && (
+      {/* Send to Founder Section — appears after Mark as Reviewed.
+          Three actions:
+            1. View PO       — opens bank dialog (if needed) then PDF preview
+            2. Send to Founder — atomic: freeze + create PO + WhatsApp founder
+            3. Reject         — sends sheet back to In Review
+          The same flow handles single/double quote scenarios after the
+          AI-team min-quotes override is granted. */}
+      {canApprove && manualStatus === "reviewed" && !sheet.is_locked && sheet.status !== "approved" && sheet.status !== "rejected" && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Approval Decision</CardTitle>
-            <CardDescription>Review the comparison and approve or reject for PO creation.</CardDescription>
+            <CardTitle className="text-base">Send to Founder for Approval</CardTitle>
+            <CardDescription>Review the PO that will be sent to the founder, then send. Sending freezes this comparison sheet.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="text-sm space-y-1">
@@ -3917,78 +4075,82 @@ Rules:
               <div><span className="text-muted-foreground">Reason:</span> {sheet.reviewer_recommendation_reason ?? "—"}</div>
               <div><span className="text-muted-foreground">Reviewer Notes:</span> {sheet.manual_notes ?? "—"}</div>
             </div>
+
             {sheet.above_market_justification && (
               <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm">
                 <div className="text-xs font-semibold text-amber-900 mb-1 uppercase tracking-wide">Above-market justification</div>
                 <p className="text-amber-900 whitespace-pre-wrap">{sheet.above_market_justification}</p>
               </div>
             )}
-            <div className="space-y-2">
-              <div className="text-sm font-medium">Approval Notes</div>
-              <Textarea
-                rows={3}
-                value={approvalNotes}
-                onChange={(e) => setApprovalNotes(e.target.value)}
-                placeholder="Optional notes for approval/rejection"
-              />
+
+            <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+              <p className="font-medium mb-1">How this works:</p>
+              <ol className="list-decimal pl-5 space-y-0.5 text-blue-800 text-xs">
+                <li>Click <span className="font-semibold">View PO</span> to preview the PO that will be sent to the founder for WhatsApp approval.</li>
+                <li>After reviewing, click <span className="font-semibold">Send to Founder</span> to dispatch it. This freezes every number on this comparison sheet permanently.</li>
+                <li>If something looks wrong, click <span className="font-semibold">Reject Comparison</span> to send the sheet back to In Review.</li>
+              </ol>
             </div>
-            <div className="flex items-center gap-3">
+
+            <div className="flex items-center gap-3 flex-wrap">
               <Button
-                className="bg-green-600 hover:bg-green-700 text-white"
-                onClick={handleApprove}
-                disabled={approving}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+                onClick={openBankDialogForCreate}
+                disabled={poPreviewLoading || sendingToFounder}
               >
-                {approving ? "Processing..." : "Approve for PO"}
+                {poPreviewLoading ? "Generating preview…" : (hasViewedPo ? "View PO again" : "View PO")}
+              </Button>
+              <Button
+                className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"
+                onClick={sendToFounder}
+                disabled={!hasViewedPo || sendingToFounder || creatingPO}
+              >
+                {sendingToFounder ? "Sending…" : "Send to Founder & Freeze"}
               </Button>
               <Button
                 variant="destructive"
-                onClick={handleReject}
-                disabled={approving}
+                onClick={() => { setRejectReason(""); setRejectDialogOpen(true); }}
+                disabled={sendingToFounder || creatingPO}
               >
-                Reject
+                Reject Comparison
               </Button>
             </div>
+
+            {!hasViewedPo && (
+              <p className="text-xs text-muted-foreground">
+                You must click <span className="font-medium">View PO</span> at least once before <span className="font-medium">Send to Founder</span> enables.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
 
-      {/* Show approval status if already approved/rejected */}
+      {/* Post-send / post-reject status banner */}
       {(sheet.status === "approved" || sheet.status === "rejected") && (
         <Card>
           <CardContent className="py-6">
             <div className="flex items-center gap-3 flex-wrap">
               <Badge className={`text-xs border-0 ${sheet.status === "approved" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
-                {sheet.status === "approved" ? "Approved" : "Rejected"}
+                {sheet.status === "approved" ? "Sent to Founder" : "Rejected"}
               </Badge>
               {sheet.approved_by && (
                 <span className="text-sm text-muted-foreground">
                   by {approvedName} on {formatDateTime(sheet.approved_at)}
                 </span>
               )}
-              {sheet.status === "approved" && (
-                existingPo ? (
-                  <div className="ml-auto flex items-center gap-2">
-                    <Badge className="bg-blue-100 text-blue-800 border-0">
-                      PO already created — {existingPo.po_number}
-                    </Badge>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => navigate("/purchase-orders")}
-                    >
-                      View PO →
-                    </Button>
-                  </div>
-                ) : (
+              {sheet.status === "approved" && existingPo && (
+                <div className="ml-auto flex items-center gap-2">
+                  <Badge className="bg-blue-100 text-blue-800 border-0">
+                    PO {existingPo.po_number}
+                  </Badge>
                   <Button
                     size="sm"
-                    className="ml-auto bg-green-600 hover:bg-green-700 text-white"
-                    onClick={openBankDialogForCreate}
-                    disabled={creatingPO}
+                    variant="outline"
+                    onClick={() => navigate("/purchase-orders")}
                   >
-                    {creatingPO ? "Creating PO..." : "Create PO →"}
+                    View PO →
                   </Button>
-                )
+                </div>
               )}
             </div>
             {sheet.approval_notes && (
@@ -4005,9 +4167,7 @@ Rules:
             <DialogTitle>
               {confirmMode === "draft"
                 ? "Save as Draft (In Review)"
-                : confirmMode === "reviewed"
-                  ? "Mark as Reviewed"
-                  : "Send for Approval"}
+                : "Mark as Reviewed"}
             </DialogTitle>
             <DialogDescription>Confirm this manual action for the comparison sheet.</DialogDescription>
           </DialogHeader>
@@ -4020,13 +4180,15 @@ Rules:
         </DialogContent>
       </Dialog>
 
-      {/* Supplier Bank Details dialog — opens before PO creation to ensure PDF + founder WhatsApp have bank info */}
+      {/* Supplier Bank Details dialog — opens when 'View PO' is clicked.
+          Bank fields appear on the PDF the founder will see, so we collect
+          them before generating the preview. */}
       <Dialog open={bankDialogOpen} onOpenChange={setBankDialogOpen}>
         <DialogContent className="w-[calc(100vw-1rem)] max-w-lg">
           <DialogHeader>
             <DialogTitle>Supplier Bank Account Details</DialogTitle>
             <DialogDescription>
-              Optional — if filled, these appear on the PO PDF sent to the founder for approval. You can skip and add later via the PO Edit page.
+              These appear on the PO PDF that goes to the founder. Optional — you can skip and add later via the PO Edit page.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-2">
@@ -4053,11 +4215,83 @@ Rules:
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setBankDialogOpen(false)} disabled={creatingPO}>
+            <Button variant="outline" onClick={() => setBankDialogOpen(false)} disabled={poPreviewLoading}>
               Cancel
             </Button>
-            <Button onClick={confirmBankAndCreatePO} disabled={creatingPO} className="bg-green-600 hover:bg-green-700 text-white">
-              {creatingPO ? "Creating PO..." : "Confirm & Create PO"}
+            <Button onClick={confirmBankAndPreviewPo} disabled={poPreviewLoading} className="bg-blue-600 hover:bg-blue-700 text-white">
+              {poPreviewLoading ? "Generating preview…" : "Continue to PO Preview"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* PO Preview dialog — shows the PDF that will be sent to the founder.
+          This is purely a preview (no DB writes) — the PO is only created
+          when the user clicks 'Send to Founder' on the comparison page. */}
+      <Dialog open={poPreviewOpen} onOpenChange={(open) => {
+        setPoPreviewOpen(open);
+        if (!open && poPreviewUrl) {
+          // Don't revoke yet — user may re-open the dialog without
+          // regenerating. Cleanup happens on next preview or unmount.
+        }
+      }}>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-5xl h-[calc(100vh-4rem)] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>PO Preview — for founder approval</DialogTitle>
+            <DialogDescription>
+              This is exactly what the founder will see over WhatsApp. Close this dialog and click <span className="font-medium">Send to Founder</span> to dispatch.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 min-h-0 border rounded-md overflow-hidden bg-muted/30">
+            {poPreviewUrl ? (
+              <iframe
+                src={poPreviewUrl}
+                className="w-full h-full"
+                title="PO PDF Preview"
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground">
+                Preview not available
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPoPreviewOpen(false)}>
+              Close Preview
+            </Button>
+            {poPreviewUrl && (
+              <Button variant="outline" onClick={() => window.open(poPreviewUrl, "_blank")}>
+                Open in new tab
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Comparison dialog — sends the sheet back to In Review with a
+          note explaining why. Required so the audit trail captures the
+          reason. */}
+      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Reject Comparison Sheet</DialogTitle>
+            <DialogDescription>
+              The sheet will be reverted to <span className="font-medium">In Review</span> so you can change the recommended supplier or notes. The reason below is appended to the reviewer notes for audit.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label className="text-xs">Reason</Label>
+            <Textarea
+              rows={4}
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="Why is this comparison being reverted? (required)"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleRejectComparison} disabled={!rejectReason.trim()}>
+              Revert to In Review
             </Button>
           </DialogFooter>
         </DialogContent>
