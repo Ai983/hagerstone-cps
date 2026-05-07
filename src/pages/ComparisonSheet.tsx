@@ -42,7 +42,6 @@ type ComparisonSheetRow = {
   compliant_quotes_count: number | null;
   red_flags_count: number | null;
   potential_savings: number | null;
-  benchmark_variance_pct: number | null;
   anomaly_flags: any[] | null;
   manual_review_status: ManualReviewStatus | string | null;
   manual_review_by: string | null;
@@ -58,6 +57,10 @@ type ComparisonSheetRow = {
   above_market_justification: string | null;
   above_market_justified_by: string | null;
   above_market_justified_at: string | null;
+  is_locked?: boolean | null;
+  frozen_at?: string | null;
+  frozen_by?: string | null;
+  snapshot_version?: number | null;
 };
 
 type RfqRow = { id: string; rfq_number: string; title: string | null; pr_id: string };
@@ -70,6 +73,7 @@ type LastPurchase = {
   unit: string | null;
   po_number: string;
   po_date: string;        // ISO date of the PO
+  supplier_id: string | null;
   supplier_name: string | null;
   match_type: 'item_id' | 'description';
 };
@@ -269,7 +273,6 @@ export default function ComparisonSheetPage() {
 
   const [quoteBySupplierId, setQuoteBySupplierId] = useState<Record<string, QuoteRow>>({});
   const [cellsByPrLineIdAndSupplierId, setCellsByPrLineIdAndSupplierId] = useState<Record<string, Record<string, MatchCell>>>( {});
-  const [benchmarkByPrLineId, setBenchmarkByPrLineId] = useState<Record<string, number | null>>({});
   const [allQuoteLinesBySupplierId, setAllQuoteLinesBySupplierId] = useState<Record<string, QuoteLineItem[]>>({});
   const [extraChargesBySupplierId, setExtraChargesBySupplierId] = useState<Record<string, Array<{ name: string; amount: number; taxable: boolean }>>>({});
 
@@ -349,6 +352,181 @@ export default function ComparisonSheetPage() {
     if (!sheet?.approved_by) return "—";
     return usersById[sheet.approved_by]?.name ?? "—";
   }, [sheet?.approved_by, usersById]);
+
+  const frozenByName = useMemo(() => {
+    if (!sheet?.frozen_by) return null;
+    return usersById[sheet.frozen_by]?.name ?? null;
+  }, [sheet?.frozen_by, usersById]);
+
+  // Hydrate every state var the renderer reads from the 3 snapshot tables
+  // instead of from live quotes / benchmarks / last-purchase queries.
+  // Used when the comparison sheet is locked (frozen at send-for-approval).
+  const hydrateFromSnapshot = async (sheetId: string): Promise<void> => {
+    const [linesRes, supRes, totalsRes] = await Promise.all([
+      supabase
+        .from("cps_comparison_line_snapshots")
+        .select("*")
+        .eq("sheet_id", sheetId)
+        .order("sort_order", { ascending: true }),
+      supabase
+        .from("cps_comparison_supplier_snapshots")
+        .select("*")
+        .eq("sheet_id", sheetId),
+      supabase
+        .from("cps_comparison_supplier_totals")
+        .select("*")
+        .eq("sheet_id", sheetId)
+        .order("rank", { ascending: true, nullsFirst: false }),
+    ]);
+
+    if (linesRes.error) throw linesRes.error;
+    if (supRes.error) throw supRes.error;
+    if (totalsRes.error) throw totalsRes.error;
+
+    const lineRows = (linesRes.data ?? []) as any[];
+    const supRows = (supRes.data ?? []) as any[];
+    const totalsRows = (totalsRes.data ?? []) as any[];
+
+    // PR line items reconstructed from the snapshot — preserves item shape
+    // even if the original row was edited or deleted after freeze.
+    const localPrLineItems: PrLineItem[] = lineRows.map((r) => ({
+      id: String(r.pr_line_item_id),
+      pr_id: rfq?.pr_id ?? "",
+      description: r.item_description ?? "",
+      quantity: Number(r.item_quantity ?? 0),
+      unit: r.item_unit ?? null,
+      item_id: null,
+    }));
+    setPrLineItems(localPrLineItems);
+
+    // Market benchmarks
+    const benchMap: Record<string, MarketBenchmark> = {};
+    lineRows.forEach((r) => {
+      if (r.market_lowest_rate == null && (!r.market_suppliers || r.market_suppliers.length === 0)) return;
+      benchMap[String(r.pr_line_item_id)] = {
+        pr_line_item_id: String(r.pr_line_item_id),
+        market_lowest_rate: Number(r.market_lowest_rate ?? 0),
+        market_lowest_unit: r.market_lowest_unit ?? "",
+        market_verdict: r.market_verdict ?? "",
+        market_suppliers: Array.isArray(r.market_suppliers) ? r.market_suppliers : [],
+        source: (r.market_source ?? "cache") as MarketBenchmark["source"],
+        searched_at: r.market_searched_at ?? "",
+        city_used: r.market_city_used ?? "",
+      };
+    });
+    setMarketBenchmarks(benchMap);
+
+    // Last purchase per line
+    const lpMap: Record<string, LastPurchase> = {};
+    lineRows.forEach((r) => {
+      if (r.last_purchase_rate == null) return;
+      lpMap[String(r.pr_line_item_id)] = {
+        rate: Number(r.last_purchase_rate),
+        unit: r.last_purchase_unit ?? null,
+        po_number: r.last_purchase_po_number ?? "",
+        po_date: r.last_purchase_po_date ?? "",
+        supplier_id: r.last_purchase_supplier_id ?? null,
+        supplier_name: r.last_purchase_supplier_name ?? null,
+        match_type: (r.last_purchase_match_type as LastPurchase["match_type"]) ?? "description",
+      };
+    });
+    setLastPurchases(lpMap);
+
+    // Override notes
+    const overrides: Record<string, string> = {};
+    lineRows.forEach((r) => {
+      if (r.override_reason) overrides[String(r.pr_line_item_id)] = String(r.override_reason);
+    });
+    setOverrideNotesByPrLineId(overrides);
+
+    // Suppliers + per-supplier quote header (synthesized from totals snapshot)
+    const suppliersList: SupplierRow[] = totalsRows.map((t) => ({
+      id: String(t.supplier_id),
+      name: t.supplier_name ?? "",
+    }));
+    setSuppliers(suppliersList);
+
+    const quoteMap: Record<string, QuoteRow> = {};
+    totalsRows.forEach((t) => {
+      const sId = String(t.supplier_id);
+      quoteMap[sId] = {
+        id: t.quote_id ?? "",
+        rfq_id: rfq?.id ?? "",
+        supplier_id: sId,
+        parse_status: "approved",
+        total_quoted_value: Number(t.subtotal ?? 0),
+        total_landed_value: Number(t.landed_total ?? 0),
+        commercial_score: null,
+        compliance_status: t.compliance_status ?? null,
+        payment_terms: t.payment_terms ?? null,
+        delivery_terms: t.delivery_terms ?? null,
+        warranty_months: t.warranty_months ?? null,
+        validity_days: t.validity_days ?? null,
+      };
+    });
+    setQuoteBySupplierId(quoteMap);
+
+    // Extra charges per supplier (from totals snapshot)
+    const extrasMap: Record<string, Array<{ name: string; amount: number; taxable: boolean }>> = {};
+    totalsRows.forEach((t) => {
+      const breakdown = t.extras_breakdown;
+      if (Array.isArray(breakdown) && breakdown.length) {
+        extrasMap[String(t.supplier_id)] = breakdown as Array<{ name: string; amount: number; taxable: boolean }>;
+      }
+    });
+    setExtraChargesBySupplierId(extrasMap);
+
+    // Per-supplier-per-line rate matrix
+    const cells: Record<string, Record<string, MatchCell>> = {};
+    const linesBySupplier: Record<string, QuoteLineItem[]> = {};
+    const qtyByPrLineId: Record<string, number> = {};
+    const unitByPrLineId: Record<string, string | null> = {};
+    lineRows.forEach((r) => {
+      qtyByPrLineId[String(r.pr_line_item_id)] = Number(r.item_quantity ?? 0);
+      unitByPrLineId[String(r.pr_line_item_id)] = r.item_unit ?? null;
+    });
+    supRows.forEach((r) => {
+      const prId = String(r.pr_line_item_id);
+      const supId = String(r.supplier_id);
+      if (!cells[prId]) cells[prId] = {};
+      cells[prId][supId] = {
+        brand: r.brand ?? null,
+        rate: r.rate != null ? Number(r.rate) : null,
+        gst_percent: r.gst_percent != null ? Number(r.gst_percent) : null,
+        freight: r.freight != null ? Number(r.freight) : null,
+        packing: r.packing != null ? Number(r.packing) : null,
+        total_landed_rate: r.total_landed_rate != null ? Number(r.total_landed_rate) : null,
+        lead_time_days: r.lead_time_days != null ? Number(r.lead_time_days) : null,
+        hsn_code: r.hsn_code ?? null,
+        matchScore: r.match_score != null ? Number(r.match_score) : 200000,
+      };
+      // Reconstruct quote-line shape for the Detailed Quote Breakdown card.
+      if (!linesBySupplier[supId]) linesBySupplier[supId] = [];
+      linesBySupplier[supId].push({
+        id: String(r.id ?? `${supId}-${prId}`),
+        quote_id: r.quote_id ?? "",
+        pr_line_item_id: prId,
+        item_id: null,
+        original_description: null,
+        brand: r.brand ?? null,
+        quantity: qtyByPrLineId[prId] ?? null,
+        unit: unitByPrLineId[prId] ?? null,
+        rate: r.rate != null ? Number(r.rate) : null,
+        gst_percent: r.gst_percent != null ? Number(r.gst_percent) : null,
+        freight: r.freight != null ? Number(r.freight) : null,
+        packing: r.packing != null ? Number(r.packing) : null,
+        total_landed_rate: r.total_landed_rate != null ? Number(r.total_landed_rate) : null,
+        lead_time_days: r.lead_time_days != null ? Number(r.lead_time_days) : null,
+        hsn_code: r.hsn_code ?? null,
+        is_compliant: null,
+        confidence_score: null,
+        human_corrected: null,
+        correction_log: null,
+      });
+    });
+    setCellsByPrLineIdAndSupplierId(cells);
+    setAllQuoteLinesBySupplierId(linesBySupplier);
+  };
 
   const fetchAll = async () => {
     if (!rfqId) return;
@@ -432,7 +610,6 @@ export default function ComparisonSheetPage() {
         setSuppliers([]);
         setQuoteBySupplierId({});
         setCellsByPrLineIdAndSupplierId({});
-        setBenchmarkByPrLineId({});
         setAllQuoteLinesBySupplierId({});
         setExtraChargesBySupplierId({});
         setUsersById({});
@@ -456,6 +633,39 @@ export default function ComparisonSheetPage() {
         .order("created_at", { ascending: false })
         .limit(1);
       setExistingPo(((existingPoRows ?? [])[0] as any) ?? null);
+
+      // Frozen sheet — render purely from snapshot tables. Skip the live
+      // quote / market / last-purchase / benchmark queries below so revisits
+      // show the exact picture captured at "Send for Approval" time, even if
+      // the underlying quotes/benchmarks were edited afterwards.
+      if (sRow.is_locked) {
+        await hydrateFromSnapshot(sRow.id);
+
+        // Manual-review fields are still on the sheet row itself.
+        setReviewNotes((sRow.manual_notes ?? "") as string);
+        setRecommendedSupplierId((sRow.reviewer_recommendation ?? sRow.recommended_supplier_id ?? "") as string);
+        setRecommendReason((sRow.reviewer_recommendation_reason ?? "") as string);
+        setAboveMarketJustification((sRow.above_market_justification ?? "") as string);
+
+        // Load reviewer / approver / freezer names.
+        const idsToLoad = Array.from(new Set([
+          sRow.manual_review_by ?? undefined,
+          sRow.approved_by ?? undefined,
+          sRow.frozen_by ?? undefined,
+        ].filter(Boolean) as string[]));
+        if (idsToLoad.length) {
+          const { data: userRows } = await supabase
+            .from("cps_users").select("id,name").in("id", idsToLoad);
+          const map: Record<string, { id: string; name: string }> = {};
+          (userRows ?? []).forEach((u: any) => {
+            map[String(u.id)] = { id: String(u.id), name: String(u.name ?? "") };
+          });
+          setUsersById(map);
+        }
+
+        setLoading(false);
+        return;
+      }
 
       // Load any previously-saved market-rate benchmarks for this RFQ.
       // Buttons gate on these — empty map = market check pending = blocked.
@@ -626,29 +836,6 @@ export default function ComparisonSheetPage() {
       });
       setExtraChargesBySupplierId(extraBySupplier);
 
-      // Benchmarks (optional; if missing, matrix will simply show no benchmark).
-      let benchByPr: Record<string, number | null> = {};
-      try {
-        const { data: benchRows, error: benchErr } = await supabase.from("cps_benchmarks").select("description,benchmark_rate");
-        if (!benchErr && benchRows) {
-          const bench = benchRows as Array<{ description: string | null; benchmark_rate: number | null }>;
-          for (const pli of localPrLineItems) {
-            let best = 0;
-            let bestRate: number | null = null;
-            for (const b of bench) {
-              const s = matchScore(pli.description, String(b.description ?? ""));
-              if (s > best) {
-                best = s;
-                bestRate = b.benchmark_rate ?? null;
-              }
-            }
-            benchByPr[pli.id] = bestRate;
-          }
-        }
-      } catch {
-        benchByPr = {};
-      }
-      setBenchmarkByPrLineId(benchByPr);
 
       // Manual review fields.
       setReviewNotes((sRow.manual_notes ?? "") as string);
@@ -913,6 +1100,7 @@ export default function ComparisonSheetPage() {
           unit: top.unit,
           po_number: top.cps_purchase_orders.po_number,
           po_date: top.cps_purchase_orders.created_at,
+          supplier_id: top.cps_purchase_orders.supplier_id ?? null,
           supplier_name: top.cps_purchase_orders.cps_suppliers?.name ?? null,
           match_type: pli.item_id && top.item_id ? "item_id" : "description",
         };
@@ -1233,6 +1421,159 @@ export default function ComparisonSheetPage() {
     setConfirmDialogOpen(true);
   };
 
+  // Freeze the comparison sheet — snapshot every number visible on screen
+  // (per-supplier rates, market rate, benchmark, last-purchase, totals, terms)
+  // into cps_comparison_line_snapshots / cps_comparison_supplier_snapshots /
+  // cps_comparison_supplier_totals so future visits show the exact picture
+  // the procurement executive sent for approval, even if quotes/benchmarks
+  // change later. Called from commitManualUpdate when status moves to
+  // sent_for_approval.
+  const freezeSnapshot = async (sheetId: string): Promise<void> => {
+    if (!sheet || !rfq || !user) throw new Error("Missing sheet/rfq/user");
+
+    const exportData = buildExportData();
+    if (!exportData) throw new Error("Comparison data not ready");
+
+    const { supplierTotals, winnerSupplierId, resolveRate, cheapestPerRow } = exportData;
+    const recommendedId = sheet.reviewer_recommendation ?? sheet.recommended_supplier_id ?? null;
+
+    // Pull blind_quote_ref for every quote we're snapshotting (not in the
+    // existing in-memory shape).
+    const quoteIds = Array.from(new Set(supplierTotals
+      .map((t) => quoteBySupplierId[t.sup.id]?.id)
+      .filter((x): x is string => Boolean(x))));
+    const blindRefByQuoteId: Record<string, string | null> = {};
+    if (quoteIds.length) {
+      const { data: blindRows } = await supabase
+        .from("cps_quotes")
+        .select("id, blind_quote_ref")
+        .in("id", quoteIds);
+      (blindRows ?? []).forEach((r: any) => {
+        blindRefByQuoteId[String(r.id)] = r?.blind_quote_ref ?? null;
+      });
+    }
+
+    // ---- 1. Per-line snapshots -----------------------------------------
+    const lineRows = prLineItems.map((pli, idx) => {
+      const bench = marketBenchmarks[pli.id];
+      const lp = lastPurchases[pli.id];
+      return {
+        sheet_id: sheetId,
+        pr_line_item_id: pli.id,
+        sort_order: idx,
+        item_description: pli.description ?? null,
+        item_quantity: Number(pli.quantity ?? 0) || null,
+        item_unit: pli.unit ?? null,
+        item_hsn_code: null,
+        item_specs: null,
+        market_lowest_rate: bench ? Number(bench.market_lowest_rate ?? 0) || null : null,
+        market_lowest_unit: bench?.market_lowest_unit ?? null,
+        market_verdict: bench?.market_verdict ?? null,
+        market_suppliers: bench?.market_suppliers ?? null,
+        market_searched_at: bench?.searched_at ?? null,
+        market_city_used: bench?.city_used ?? null,
+        market_source: bench?.source ?? null,
+        last_purchase_rate: lp ? Number(lp.rate) : null,
+        last_purchase_unit: lp?.unit ?? null,
+        last_purchase_po_number: lp?.po_number ?? null,
+        last_purchase_po_date: lp?.po_date ? lp.po_date.slice(0, 10) : null,
+        last_purchase_supplier_id: lp?.supplier_id ?? null,
+        last_purchase_supplier_name: lp?.supplier_name ?? null,
+        last_purchase_match_type: lp?.match_type ?? null,
+        override_reason: overrideNotesByPrLineId[pli.id] ?? null,
+      };
+    });
+
+    if (lineRows.length) {
+      const { error: lineErr } = await supabase
+        .from("cps_comparison_line_snapshots")
+        .upsert(lineRows, { onConflict: "sheet_id,pr_line_item_id" });
+      if (lineErr) throw new Error(`Line snapshot failed: ${lineErr.message}`);
+    }
+
+    // ---- 2. Per-supplier-per-line rate matrix --------------------------
+    const supplierRows: any[] = [];
+    prLineItems.forEach((pli) => {
+      const cheapestForRow = cheapestPerRow[pli.id];
+      suppliers.forEach((sup) => {
+        const cell = cellsByPrLineIdAndSupplierId[pli.id]?.[sup.id];
+        const resolved = resolveRate(pli.id, sup.id);
+        // Skip cells that are completely empty for this supplier — keeps the
+        // snapshot focused on suppliers who actually quoted this line.
+        if (!cell && resolved.source === "unavailable") return;
+        const quote = quoteBySupplierId[sup.id];
+        supplierRows.push({
+          sheet_id: sheetId,
+          pr_line_item_id: pli.id,
+          supplier_id: sup.id,
+          supplier_name: sup.name,
+          blind_quote_ref: quote?.id ? blindRefByQuoteId[quote.id] ?? null : null,
+          quote_id: quote?.id ?? null,
+          brand: cell?.brand ?? null,
+          rate: resolved.rate ?? cell?.rate ?? null,
+          gst_percent: cell?.gst_percent ?? null,
+          freight: cell?.freight ?? null,
+          packing: cell?.packing ?? null,
+          total_landed_rate: cell?.total_landed_rate ?? null,
+          lead_time_days: cell?.lead_time_days ?? null,
+          hsn_code: cell?.hsn_code ?? null,
+          match_score: cell?.matchScore ?? null,
+          rate_source: resolved.source,
+          is_lowest: cheapestForRow === sup.id,
+          is_recommended: recommendedId === sup.id,
+        });
+      });
+    });
+
+    if (supplierRows.length) {
+      const { error: supErr } = await supabase
+        .from("cps_comparison_supplier_snapshots")
+        .upsert(supplierRows, { onConflict: "sheet_id,pr_line_item_id,supplier_id" });
+      if (supErr) throw new Error(`Supplier-line snapshot failed: ${supErr.message}`);
+    }
+
+    // ---- 3. Per-supplier totals (footer row) ---------------------------
+    const sortedLanded = supplierTotals
+      .map((t) => t.landedTotal)
+      .filter((v) => v > 0)
+      .sort((a, b) => a - b);
+    const rankByLanded = new Map<number, number>();
+    sortedLanded.forEach((v, i) => {
+      if (!rankByLanded.has(v)) rankByLanded.set(v, i + 1);
+    });
+    const totalsRows = supplierTotals.map((t) => {
+      const quote = quoteBySupplierId[t.sup.id];
+      const charges = extraChargesBySupplierId[t.sup.id] ?? [];
+      return {
+        sheet_id: sheetId,
+        supplier_id: t.sup.id,
+        supplier_name: t.sup.name,
+        quote_id: quote?.id ?? null,
+        blind_quote_ref: quote?.id ? blindRefByQuoteId[quote.id] ?? null : null,
+        subtotal: Number(t.subtotal) || 0,
+        gst_amount: Number(t.gst) || 0,
+        freight_amount: Number(t.freight) || 0,
+        extras_amount: Number(t.extraSum) || 0,
+        extras_breakdown: charges.length ? charges : null,
+        landed_total: Number(t.landedTotal) || 0,
+        payment_terms: t.paymentTerms ?? null,
+        delivery_terms: t.deliveryTerms ?? null,
+        warranty_months: t.warrantyMonths ?? null,
+        validity_days: t.validityDays ?? null,
+        compliance_status: t.compliance ?? null,
+        rank: rankByLanded.get(t.landedTotal) ?? null,
+        is_winner: t.sup.id === winnerSupplierId,
+      };
+    });
+
+    if (totalsRows.length) {
+      const { error: totErr } = await supabase
+        .from("cps_comparison_supplier_totals")
+        .upsert(totalsRows, { onConflict: "sheet_id,supplier_id" });
+      if (totErr) throw new Error(`Totals snapshot failed: ${totErr.message}`);
+    }
+  };
+
   const commitManualUpdate = async () => {
     if (!sheet || !user) return;
     const now = new Date().toISOString();
@@ -1309,11 +1650,35 @@ export default function ComparisonSheetPage() {
       }
 
       if (confirmMode === "send") {
+        // Freeze the comparison sheet — write the full snapshot BEFORE moving
+        // status, so if the snapshot fails the status doesn't drift out of sync.
+        await freezeSnapshot(sheet.id);
+
         const { error } = await supabase.from("cps_comparison_sheets").update({
           manual_review_status: "sent_for_approval",
-        }).eq("id", sheet.id);
+          is_locked: true,
+          frozen_at: now,
+          frozen_by: user.id,
+        } as any).eq("id", sheet.id);
         if (error) throw error;
-        toast.success("Sent for approval");
+
+        // Best-effort audit entry — failure shouldn't unwind the freeze.
+        try {
+          await supabase.from("cps_audit_log").insert({
+            user_id: user.id,
+            user_name: user.name,
+            user_role: user.role,
+            action_type: "COMPARISON_FROZEN",
+            entity_type: "cps_comparison_sheets",
+            entity_id: sheet.id,
+            entity_number: rfq?.rfq_number ?? null,
+            description: `Comparison sheet frozen and sent for approval (${prLineItems.length} items × ${suppliers.length} suppliers)`,
+            severity: "info",
+            logged_at: now,
+          } as any);
+        } catch {}
+
+        toast.success("Sent for approval — comparison sheet frozen");
       }
 
       setConfirmDialogOpen(false);
@@ -1936,7 +2301,7 @@ export default function ComparisonSheetPage() {
           description: pli.description,
           quantity: pli.quantity,
           unit: pli.unit,
-          benchmark_rate: benchmarkByPrLineId[pli.id] ?? null,
+          last_purchase_rate: lastPurchases[pli.id]?.rate ?? null,
         })),
         suppliers: suppliers.map((s) => {
           const quote = quoteBySupplierId[s.id];
@@ -2495,6 +2860,9 @@ Rules:
       setAiRecommendation(sheet.ai_recommendation);
       return;
     }
+    // Frozen sheet — keep whatever AI verdict (if any) was captured at freeze.
+    // Don't auto-trigger a fresh run since refresh is locked.
+    if (sheet.is_locked) return;
     if (canCreateRFQ) {
       getAIRecommendation();
     }
@@ -2729,6 +3097,25 @@ Rules:
         </CardHeader>
       </Card>
 
+      {/* Frozen banner — shown when the sheet is locked */}
+      {sheet.is_locked && (
+        <Card className="border-purple-300 bg-purple-50">
+          <CardContent className="py-3 flex items-start gap-3">
+            <CheckCircle2 className="h-5 w-5 text-purple-700 shrink-0 mt-0.5" />
+            <div className="flex-1 text-sm">
+              <p className="font-semibold text-purple-900">
+                🔒 Comparison sheet frozen
+                {sheet.frozen_at && <> on <span className="font-medium">{formatDateTime(sheet.frozen_at)}</span></>}
+                {frozenByName && <> by <span className="font-medium">{frozenByName}</span></>}
+              </p>
+              <p className="text-purple-800 mt-0.5">
+                The numbers below — supplier rates, market rates, benchmark, last-purchase data and totals — are exactly what was sent for approval. Re-running AI / market search is disabled.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Anomaly flags */}
       {(Number(sheet.red_flags_count ?? 0) > 0 || (sheet.anomaly_flags ?? []).length > 0) && (
         <Card>
@@ -2902,12 +3289,12 @@ Rules:
                   {marketLoading && (
                     <span className="text-xs text-muted-foreground">Searching {marketProgress.done}/{marketProgress.total}…</span>
                   )}
-                  {canCreateRFQ && (
+                  {canCreateRFQ && !sheet?.is_locked && (
                     <Button size="sm" variant="outline" onClick={() => runMarketRateSearch(true)} disabled={marketLoading || prLineItems.length === 0}>
                       {marketLoading ? "Searching…" : (Object.keys(marketBenchmarks).length === 0 ? "Run Market Search" : "Refresh Market")}
                     </Button>
                   )}
-                  {canCreateRFQ && (
+                  {canCreateRFQ && !sheet?.is_locked && (
                     <Button size="sm" variant="outline" onClick={getAIRecommendation} disabled={aiLoading}>
                       <Sparkles className="h-3.5 w-3.5 mr-1" />
                       {aiLoading ? "Analyzing…" : (aiRecommendation ? "Re-run AI" : "Run AI")}
@@ -3452,9 +3839,26 @@ Rules:
                 </div>
               </div>
 
-              <div className="text-sm text-muted-foreground">
-                Manual review is completed. Awaiting procurement head / management approval via PO page.
-              </div>
+              {canSubmitManual && !sheet.is_locked && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+                  <p className="text-amber-900">
+                    Sending for approval will <span className="font-semibold">freeze every number on this sheet</span> — per-supplier rates, market rates, benchmark, last-purchase data and totals are saved exactly as shown right now and cannot be changed afterwards.
+                  </p>
+                  <Button
+                    size="sm"
+                    className="mt-3 bg-purple-600 hover:bg-purple-700 text-white"
+                    onClick={() => requestConfirmation("send")}
+                  >
+                    Send for Approval & Freeze
+                  </Button>
+                </div>
+              )}
+
+              {!canSubmitManual && (
+                <div className="text-sm text-muted-foreground">
+                  Manual review is completed. Awaiting send-for-approval by procurement executive.
+                </div>
+              )}
             </>
           )}
 
