@@ -954,14 +954,15 @@ Rules:
 - If field not in quote: set null and add to missing_fields
 - missing_fields examples: "GST not specified", "Delivery timeline missing", "Freight not specified", "Payment terms not stated"
 - matched_pr_item_index = 0-based index of matching PR item, or -1 if unmatched
-- confidence = 0-100 based on how clearly readable the data was`,
+- confidence = 0-100 based on how clearly readable the data was
+- CRITICAL JSON RULE: Indian plumbing/electrical quotes use inch marks (") in item names like 1" CPVC Pipe, 3/4" Elbow. In your JSON output you MUST escape them as \" (e.g. "1\" CPVC Pipe") OR replace with 'in' (e.g. "1in CPVC Pipe"). Never output a bare " inside a JSON string value — it will break parsing.`,
       });
 
       // Step 5: Call Claude API via Edge Function (server-side key)
       const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
           model: "claude-sonnet-4-5",
-          max_tokens: 4000,
+          max_tokens: 6000,
           messages: [{ role: "user", content }],
         },
       });
@@ -970,7 +971,13 @@ Rules:
 
       const text = data?.content?.[0]?.text ?? "";
       const clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      return JSON.parse(clean);
+      try {
+        return JSON.parse(clean);
+      } catch {
+        // Repair unescaped inch marks that Claude may have missed: e.g. 1" CPVC → 1in CPVC
+        const repaired = clean.replace(/(\d)\s*"(\s*[A-Za-z(])/g, '$1in$2');
+        return JSON.parse(repaired);
+      }
 
     } catch (err: any) {
       toast.error("AI parse failed: " + (err.message || "Unknown error"));
