@@ -45,6 +45,7 @@ type Rfq = {
   status: RfqStatus;
   deadline: string | null;
   created_at: string | null;
+  created_by: string | null;
   target_category: string | null;
   min_quotes_override_status?: "none" | "requested" | "allowed" | "denied" | null;
 };
@@ -154,6 +155,7 @@ export default function RFQs() {
   const [supplierCountByRfqId, setSupplierCountByRfqId] = useState<Record<string, number>>({});
   const [totalQuotesByRfq, setTotalQuotesByRfq] = useState<Record<string, number>>({});
   const [approvedQuotesByRfq, setApprovedQuotesByRfq] = useState<Record<string, number>>({});
+  const [creatorNameById, setCreatorNameById] = useState<Record<string, string>>({});
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
@@ -262,7 +264,7 @@ export default function RFQs() {
     setSupplierCountByRfqId({});
     setTotalQuotesByRfq({});
     setApprovedQuotesByRfq({});
-    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,pr_id,title,status,deadline,created_at,target_category,min_quotes_override_status").order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,pr_id,title,status,deadline,created_at,created_by,target_category,min_quotes_override_status").order("created_at", { ascending: false });
     if (error) {
       toast.error("Failed to load RFQs");
       setRfqs([]);
@@ -330,6 +332,23 @@ export default function RFQs() {
       rfqSupCounts[key] = (rfqSupCounts[key] ?? 0) + 1;
     });
     setSupplierCountByRfqId(rfqSupCounts);
+
+    // Resolve creator names for the new "Created By" column.
+    const creatorIds = Array.from(new Set(rfqRows.map((r) => r.created_by).filter(Boolean) as string[]));
+    if (creatorIds.length) {
+      const { data: userRows } = await supabase
+        .from("cps_users")
+        .select("id,name,email")
+        .in("id", creatorIds);
+      const nameMap: Record<string, string> = {};
+      (userRows ?? []).forEach((u: any) => {
+        nameMap[String(u.id)] = (u.name ?? u.email ?? "").trim() || "—";
+      });
+      setCreatorNameById(nameMap);
+    } else {
+      setCreatorNameById({});
+    }
+
     setLoading(false);
   };
 
@@ -1087,6 +1106,7 @@ export default function RFQs() {
                 <TableHead>Quotes Reviewed</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortRfq("deadline")}>Deadline {sortFieldRfq==="deadline"?(sortDirRfq==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortRfq("status")}>Status {sortFieldRfq==="status"?(sortDirRfq==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead>Created By</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortRfq("created_at")}>Created {sortFieldRfq==="created_at"?(sortDirRfq==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="text-right">Action</TableHead>
               </TableRow>
@@ -1095,7 +1115,7 @@ export default function RFQs() {
               {loading ? (
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 9 }).map((__, j) => (
+                    {Array.from({ length: 10 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-28" />
                       </TableCell>
@@ -1104,7 +1124,7 @@ export default function RFQs() {
                 ))
               ) : rfqTable.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
+                  <TableCell colSpan={10} className="text-center py-10 text-muted-foreground">
                     No RFQs yet.
                   </TableCell>
                 </TableRow>
@@ -1171,6 +1191,9 @@ export default function RFQs() {
                       <TableCell>
                         <Badge className={`text-xs border-0 ${sc.badge}`}>{sc.label}</Badge>
                       </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {r.created_by ? (creatorNameById[r.created_by] ?? "—") : "—"}
+                      </TableCell>
                       <TableCell className="text-muted-foreground">{formatIndianDateTime(r.created_at)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-start justify-end gap-2">
@@ -1235,7 +1258,7 @@ export default function RFQs() {
                     {/* Expanded preview row */}
                     {expandedRfqId === r.id && (
                       <TableRow className="bg-muted/20">
-                        <TableCell colSpan={9} className="py-2 px-6">
+                        <TableCell colSpan={10} className="py-2 px-6">
                           {expandLoading ? (
                             <div className="flex items-center gap-2 py-2"><Skeleton className="h-4 w-48" /><Skeleton className="h-4 w-32" /></div>
                           ) : expandedItems.length === 0 ? (
