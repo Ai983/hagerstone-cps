@@ -2020,14 +2020,14 @@ export default function PurchaseOrders() {
   }, [rows]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Purchase Orders</h1>
-          <p className="text-muted-foreground text-sm mt-1">PO approve karo aur supplier ko bhejo</p>
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">Purchase Orders</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">PO approve karo aur supplier ko bhejo</p>
         </div>
         {isProcurementHead && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button variant="outline" onClick={() => setLegacyModalOpen(true)}>
               <Upload className="h-4 w-4 mr-2" />
               Purana PO Upload
@@ -2040,7 +2040,7 @@ export default function PurchaseOrders() {
         )}
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2 lg:gap-3">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Digital Flow POs</CardTitle>
@@ -2085,13 +2085,13 @@ export default function PurchaseOrders() {
         </Card>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[260px]">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 lg:gap-3">
+        <div className="relative flex-1 sm:min-w-[260px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search PO number..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger className="w-full sm:w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -2108,12 +2108,12 @@ export default function PurchaseOrders() {
             <SelectItem value="closed">Closed</SelectItem>
           </SelectContent>
         </Select>
-        <div className="flex items-center gap-2">
-          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" title="From date" />
-          <span className="text-xs text-muted-foreground">to</span>
-          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" title="To date" />
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="flex-1 sm:flex-none sm:w-36" title="From date" />
+          <span className="text-xs text-muted-foreground shrink-0">to</span>
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="flex-1 sm:flex-none sm:w-36" title="To date" />
           {(dateFrom || dateTo) && (
-            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs px-2">Clear</Button>
+            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs px-2 shrink-0">Clear</Button>
           )}
         </div>
       </div>
@@ -3563,7 +3563,7 @@ export default function PurchaseOrders() {
 
       {/* Revise / Cancel PO dialog */}
       <Dialog open={reviseCancelOpen} onOpenChange={(o) => { if (!reviseCancelSaving) { setReviseCancelOpen(o); setReviseCancelReason(""); } }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
           <DialogHeader>
             <DialogTitle>Revise or Cancel PO</DialogTitle>
             <DialogDescription>
@@ -3659,7 +3659,7 @@ export default function PurchaseOrders() {
 
       {/* Mark as Paid dialog */}
       <Dialog open={markPaidOpen} onOpenChange={setMarkPaidOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-sm">
           <DialogHeader>
             <DialogTitle>Mark as Paid</DialogTitle>
             <DialogDescription>{markPaidRow?.milestone_name ?? "Payment Milestone"}</DialogDescription>

@@ -526,20 +526,20 @@ export default function PRReview() {
   const visibleItems = lineItems.filter((li) => !li._deleted);
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-2 lg:p-6 space-y-3 lg:space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex items-center justify-between flex-wrap gap-2 lg:gap-3">
         <div>
-          <h1 className="text-xl font-bold text-foreground">PR Review</h1>
-          <p className="text-sm text-muted-foreground">Review and edit purchase request line items before sending to RFQ</p>
+          <h1 className="text-lg lg:text-xl font-bold text-foreground">PR Review</h1>
+          <p className="text-xs lg:text-sm text-muted-foreground">Review and edit purchase request line items before sending to RFQ</p>
         </div>
       </div>
 
       {/* Filters */}
       <Card>
-        <CardContent className="pt-4 pb-4">
-          <div className="flex flex-wrap gap-3 items-center">
-            <div className="relative flex-1 min-w-[200px]">
+        <CardContent className="pt-3 pb-3 lg:pt-4 lg:pb-4">
+          <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 lg:gap-3 sm:items-center">
+            <div className="relative flex-1 sm:min-w-[200px]">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Search PR#, project, site, requestor…"
@@ -549,7 +549,7 @@ export default function PRReview() {
               />
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-48">
+              <SelectTrigger className="w-full sm:w-48">
                 <SelectValue placeholder="All Statuses" />
               </SelectTrigger>
               <SelectContent>
@@ -567,8 +567,43 @@ export default function PRReview() {
         </CardContent>
       </Card>
 
-      {/* Table */}
-      <Card>
+      {/* Mobile cards */}
+      <Card className="lg:hidden">
+        <CardContent className="p-0 divide-y divide-border">
+          {loading ? (
+            Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="p-3"><Skeleton className="h-16 w-full" /></div>
+            ))
+          ) : displayPrs.length === 0 ? (
+            <div className="text-center py-10 text-sm text-muted-foreground">No purchase requests found</div>
+          ) : (
+            displayPrs.map((pr) => (
+              <button
+                key={pr.id}
+                type="button"
+                onClick={() => openEdit(pr)}
+                className="w-full text-left p-3 active:bg-muted/50 space-y-1.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-primary font-semibold text-sm">{pr.pr_number}</span>
+                  <Badge className={`text-[10px] border-0 ${STATUS_COLORS[pr.status] ?? "bg-gray-100 text-gray-700"}`}>
+                    {pr.status.replace(/_/g, " ")}
+                  </Badge>
+                </div>
+                <div className="text-sm font-medium truncate">{pr.project_site}</div>
+                {pr.project_code && <div className="text-[11px] text-muted-foreground">{pr.project_code}</div>}
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>By {pr.requester_name} · {pr.items_count} items</span>
+                  <span>Req {fmt(pr.required_by)}</span>
+                </div>
+              </button>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Desktop table */}
+      <Card className="hidden lg:block">
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <Table>

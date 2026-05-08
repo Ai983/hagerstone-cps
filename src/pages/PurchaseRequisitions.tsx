@@ -1640,11 +1640,11 @@ export default function PurchaseRequisitions() {
   const isProcurementUser = user?.role === "procurement_executive" || user?.role === "procurement_head" || user?.role === "it_head" || user?.role === "management";
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">{t("Purchase Requisitions")}</h1>
-          <p className="text-muted-foreground text-sm mt-1">{t("Step 1 of procurement — raise a material request")}</p>
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">{t("Purchase Requisitions")}</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">{t("Step 1 of procurement — raise a material request")}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button onClick={() => openWizard()} className="h-11 sm:h-9">

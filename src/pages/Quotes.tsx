@@ -1484,11 +1484,11 @@ Rules:
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Vendor Quotes</h1>
-          <p className="text-muted-foreground text-sm mt-1">Vendors ke quotes yahan dikhte hain — review karke OK ya reject karo</p>
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">Vendor Quotes</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">Vendors ke quotes yahan dikhte hain — review karke OK ya reject karo</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Popover>

@@ -409,19 +409,19 @@ export default function ProjectBOQ() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div className="space-y-3 lg:space-y-4">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Project BOQ</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">Project BOQ</h1>
+          <p className="text-xs lg:text-sm text-muted-foreground mt-1">
             Har project ke liye BOQ items + existing stock yahan dikhta hai. Pencil click karke seedha row mein edit karo. Planned Qty optional hai.
           </p>
         </div>
       </div>
 
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 lg:gap-3 sm:flex-wrap">
         <Select value={projectCode} onValueChange={setProjectCode}>
-          <SelectTrigger className="w-72"><SelectValue placeholder="Project chuno…" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-72"><SelectValue placeholder="Project chuno…" /></SelectTrigger>
           <SelectContent>
             {projects.map((p) => {
               const a = assignments.get(p);
@@ -435,7 +435,7 @@ export default function ProjectBOQ() {
           </SelectContent>
         </Select>
 
-        <div className="relative flex-1 min-w-[220px] max-w-md">
+        <div className="relative flex-1 sm:min-w-[220px] sm:max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="BOQ items search karo…"
@@ -446,7 +446,7 @@ export default function ProjectBOQ() {
           />
         </div>
 
-        <Button onClick={openAdd} disabled={!projectCode}>
+        <Button onClick={openAdd} disabled={!projectCode} className="sm:w-auto w-full">
           <Plus className="h-4 w-4 mr-1.5" /> Naya Item Add Karo
         </Button>
       </div>
@@ -640,7 +640,7 @@ export default function ProjectBOQ() {
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
           <DialogHeader>
             <DialogTitle>Naya Item BOQ Mein Add Karo</DialogTitle>
           </DialogHeader>
@@ -688,7 +688,7 @@ export default function ProjectBOQ() {
 
       {/* Assign Site Engineer dialog */}
       <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
           <DialogHeader>
             <DialogTitle>Site Engineer Assign Karo</DialogTitle>
           </DialogHeader>

@@ -181,7 +181,7 @@ export function TopBar() {
               </button>
 
               {open && (
-                <div className="absolute right-0 top-10 w-96 bg-background border border-border rounded-lg shadow-xl z-50 overflow-hidden">
+                <div className="fixed sm:absolute right-2 sm:right-0 top-14 sm:top-10 left-2 sm:left-auto sm:w-96 bg-background border border-border rounded-lg shadow-xl z-50 overflow-hidden">
                   {/* Header */}
                   <div className="px-4 py-2.5 border-b border-border flex items-center justify-between">
                     <span className="text-sm font-semibold text-foreground">Notifications</span>

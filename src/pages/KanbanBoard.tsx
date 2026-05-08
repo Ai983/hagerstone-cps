@@ -563,12 +563,12 @@ export default function KanbanBoard() {
   if (!user) return null;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3 lg:space-y-5">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Kanban Board</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">Kanban Board</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">
             Har PR kis stage par hai — start se PR band hone tak ka live view
           </p>
         </div>
@@ -579,35 +579,35 @@ export default function KanbanBoard() {
       </div>
 
       {/* Top stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 lg:gap-3">
         <Card className="shadow-sm">
-          <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground mb-1">Pipeline Mein</div>
-            <div className="text-2xl font-bold text-foreground">
+          <CardContent className="p-3 lg:p-4">
+            <div className="text-[10px] lg:text-xs text-muted-foreground mb-1">Pipeline Mein</div>
+            <div className="text-xl lg:text-2xl font-bold text-foreground">
               {loading ? <Skeleton className="h-7 w-12" /> : overallStats.totalActive}
             </div>
           </CardContent>
         </Card>
         <Card className="shadow-sm">
-          <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground mb-1">Band Ho Chuki</div>
-            <div className="text-2xl font-bold text-foreground">
+          <CardContent className="p-3 lg:p-4">
+            <div className="text-[10px] lg:text-xs text-muted-foreground mb-1">Band Ho Chuki</div>
+            <div className="text-xl lg:text-2xl font-bold text-foreground">
               {loading ? <Skeleton className="h-7 w-12" /> : overallStats.totalClosed}
             </div>
           </CardContent>
         </Card>
         <Card className="shadow-sm">
-          <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground mb-1">Total PO Amount</div>
-            <div className="text-2xl font-bold text-foreground">
+          <CardContent className="p-3 lg:p-4">
+            <div className="text-[10px] lg:text-xs text-muted-foreground mb-1">Total PO Amount</div>
+            <div className="text-xl lg:text-2xl font-bold text-foreground">
               {loading ? <Skeleton className="h-7 w-24" /> : fmtCurrency(overallStats.totalValue)}
             </div>
           </CardContent>
         </Card>
         <Card className="shadow-sm">
-          <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground mb-1">Avg Cycle Time</div>
-            <div className="text-2xl font-bold text-foreground">
+          <CardContent className="p-3 lg:p-4">
+            <div className="text-[10px] lg:text-xs text-muted-foreground mb-1">Avg Cycle Time</div>
+            <div className="text-xl lg:text-2xl font-bold text-foreground">
               {loading ? <Skeleton className="h-7 w-16" /> : `${overallStats.avgAge.toFixed(0)}d`}
             </div>
           </CardContent>
@@ -615,8 +615,8 @@ export default function KanbanBoard() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[220px] max-w-md">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 lg:gap-3">
+        <div className="relative flex-1 sm:min-w-[220px] sm:max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="PR, RFQ, PO, supplier ya project search karo…"
@@ -626,7 +626,7 @@ export default function KanbanBoard() {
           />
         </div>
         <Select value={projectFilter} onValueChange={setProjectFilter}>
-          <SelectTrigger className="w-56"><SelectValue placeholder="Saare projects" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-56"><SelectValue placeholder="Saare projects" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Saare Projects</SelectItem>
             {projectOptions.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
@@ -798,7 +798,7 @@ export default function KanbanBoard() {
 
       {/* Invoice review dialog — procurement must view the file before verify/reject */}
       <Dialog open={!!reviewCard} onOpenChange={(open) => { if (!open) closeReview(); }}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-3xl w-[95vw] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Invoice Review — {reviewCard?.pr_number}</DialogTitle>
             <DialogDescription>

@@ -1031,11 +1031,11 @@ export default function RFQs() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">RFQs (Vendor Quote Requests)</h1>
-          <p className="text-muted-foreground text-sm mt-1">Vendors ko quote request bhejo aur status track karo</p>
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">RFQs (Vendor Quote Requests)</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">Vendors ko quote request bhejo aur status track karo</p>
         </div>
         {canCreateRFQ && (
           <Button onClick={openDialog}>
@@ -1046,13 +1046,13 @@ export default function RFQs() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[240px]">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 lg:gap-3">
+        <div className="relative flex-1 sm:min-w-[240px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search RFQ number, title..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as any)}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger className="w-full sm:w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1066,12 +1066,12 @@ export default function RFQs() {
             <SelectItem value="cancelled">Cancelled</SelectItem>
           </SelectContent>
         </Select>
-        <div className="flex items-center gap-2">
-          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36" title="From date" />
-          <span className="text-xs text-muted-foreground">to</span>
-          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36" title="To date" />
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="flex-1 sm:flex-none sm:w-36" title="From date" />
+          <span className="text-xs text-muted-foreground shrink-0">to</span>
+          <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="flex-1 sm:flex-none sm:w-36" title="To date" />
           {(dateFrom || dateTo) && (
-            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs px-2">Clear</Button>
+            <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs px-2 shrink-0">Clear</Button>
           )}
         </div>
       </div>

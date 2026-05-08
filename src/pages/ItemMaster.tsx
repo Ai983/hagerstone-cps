@@ -376,11 +376,11 @@ export default function ItemMaster() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Item Master</h1>
-          <p className="text-muted-foreground text-sm mt-1">{items.length} items{stats.withLastRate > 0 ? ` · ${stats.withLastRate} ka last purchase rate available` : ""}</p>
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">Item Master</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">{items.length} items{stats.withLastRate > 0 ? ` · ${stats.withLastRate} ka last purchase rate available` : ""}</p>
         </div>
         {canManageSuppliers && activeTab === "items" && (
           <Button onClick={openAdd}>
@@ -603,42 +603,70 @@ export default function ItemMaster() {
             ) : pendingRequests.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">No pending item requests</div>
             ) : (
-              <div className="rounded-md border border-border/60 overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Item Name</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Unit</TableHead>
-                      <TableHead>Requested By</TableHead>
-                      <TableHead>From PR</TableHead>
-                      <TableHead>Requested On</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pendingRequests.map(req => (
-                      <TableRow key={req.id}>
-                        <TableCell className="font-medium">{req.item_name}</TableCell>
-                        <TableCell className="text-muted-foreground">{req.category ?? "—"}</TableCell>
-                        <TableCell className="text-muted-foreground">{req.unit ?? "—"}</TableCell>
-                        <TableCell className="text-muted-foreground">
-                          <div>{req.requested_by_name ?? "—"}</div>
-                          {req.requested_by_role && <div className="text-xs capitalize">{req.requested_by_role.replace(/_/g, " ")}</div>}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs text-muted-foreground">{req.pr_id ? req.pr_id.slice(0, 8) + "…" : "—"}</TableCell>
-                        <TableCell className="text-muted-foreground text-xs">{req.created_at ? new Date(req.created_at).toLocaleDateString("en-IN") : "—"}</TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white h-7 text-xs" onClick={() => openApprove(req)}>Approve</Button>
-                            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => openReject(req)}>Reject</Button>
-                          </div>
-                        </TableCell>
+              <>
+                {/* Mobile cards */}
+                <div className="lg:hidden rounded-md border border-border/60 divide-y divide-border bg-background">
+                  {pendingRequests.map(req => (
+                    <div key={req.id} className="p-3 space-y-1.5">
+                      <div className="font-medium text-sm">{req.item_name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {req.category ?? "—"} · {req.unit ?? "—"}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        By {req.requested_by_name ?? "—"}
+                        {req.requested_by_role && <span className="capitalize"> · {req.requested_by_role.replace(/_/g, " ")}</span>}
+                      </div>
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <span className="text-[11px] text-muted-foreground">
+                          {req.created_at ? new Date(req.created_at).toLocaleDateString("en-IN") : "—"}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white h-8 text-xs" onClick={() => openApprove(req)}>Approve</Button>
+                          <Button size="sm" variant="destructive" className="h-8 text-xs" onClick={() => openReject(req)}>Reject</Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Desktop table */}
+                <div className="hidden lg:block rounded-md border border-border/60 overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Item Name</TableHead>
+                        <TableHead>Category</TableHead>
+                        <TableHead>Unit</TableHead>
+                        <TableHead>Requested By</TableHead>
+                        <TableHead>From PR</TableHead>
+                        <TableHead>Requested On</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {pendingRequests.map(req => (
+                        <TableRow key={req.id}>
+                          <TableCell className="font-medium">{req.item_name}</TableCell>
+                          <TableCell className="text-muted-foreground">{req.category ?? "—"}</TableCell>
+                          <TableCell className="text-muted-foreground">{req.unit ?? "—"}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            <div>{req.requested_by_name ?? "—"}</div>
+                            {req.requested_by_role && <div className="text-xs capitalize">{req.requested_by_role.replace(/_/g, " ")}</div>}
+                          </TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{req.pr_id ? req.pr_id.slice(0, 8) + "…" : "—"}</TableCell>
+                          <TableCell className="text-muted-foreground text-xs">{req.created_at ? new Date(req.created_at).toLocaleDateString("en-IN") : "—"}</TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white h-7 text-xs" onClick={() => openApprove(req)}>Approve</Button>
+                              <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => openReject(req)}>Reject</Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
             )}
           </TabsContent>
         )}
@@ -728,7 +756,7 @@ export default function ItemMaster() {
 
       {/* Approve Item Request Dialog */}
       <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
           <DialogHeader>
             <DialogTitle>Approve & Add to Item Master</DialogTitle>
             <DialogDescription>Review and edit details before adding to the master.</DialogDescription>
@@ -773,7 +801,7 @@ export default function ItemMaster() {
 
       {/* Reject Item Request Dialog */}
       <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-sm">
           <DialogHeader>
             <DialogTitle>Reject Item Request</DialogTitle>
             <DialogDescription>Provide a reason for rejecting "{activeRequest?.item_name}".</DialogDescription>

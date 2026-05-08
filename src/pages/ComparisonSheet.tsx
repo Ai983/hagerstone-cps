@@ -3255,17 +3255,17 @@ Rules:
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 lg:space-y-6">
       {/* Header */}
       <Card>
-        <CardHeader className="flex-row items-start gap-4 justify-between">
+        <CardHeader className="flex flex-col lg:flex-row items-start gap-3 lg:gap-4 lg:justify-between p-4 lg:p-6">
           <div>
-            <CardTitle className="text-lg font-bold text-foreground">Comparison Sheet</CardTitle>
-            <CardDescription className="mt-1">
+            <CardTitle className="text-base lg:text-lg font-bold text-foreground">Comparison Sheet</CardTitle>
+            <CardDescription className="mt-1 text-xs lg:text-sm">
               {rfq?.rfq_number} | {rfq?.title ?? ""}
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-2 flex-wrap lg:justify-end">
             <Badge className={`text-xs border-0 ${manualStatusBadge(sheet.manual_review_status)}`}>{sheet.manual_review_status}</Badge>
             <Badge className="text-xs border-0 bg-muted text-muted-foreground border-border/80">
               {sheet.total_quotes_received ?? 0} quotes received

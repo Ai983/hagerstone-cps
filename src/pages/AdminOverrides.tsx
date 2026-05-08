@@ -236,14 +236,14 @@ export default function AdminOverrides() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <ShieldCheck className="h-6 w-6 text-primary" />
+          <h1 className="text-xl lg:text-2xl font-bold flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 lg:h-6 lg:w-6 text-primary" />
             Override Requests
           </h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-xs lg:text-sm text-muted-foreground">
             Procurement team se aaye hue requests jahan 3 vendors nahi mil paye. Sir ka approval lene ke baad allow ya deny karo.
           </p>
         </div>
@@ -270,64 +270,108 @@ export default function AdminOverrides() {
                   Koi pending override request nahi hai.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>RFQ / PR</TableHead>
-                      <TableHead>Project</TableHead>
-                      <TableHead>Requestor</TableHead>
-                      <TableHead>Approved Quotes</TableHead>
-                      <TableHead>Reason</TableHead>
-                      <TableHead>Requested At</TableHead>
-                      <TableHead className="text-right">Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+                <>
+                  {/* Mobile cards */}
+                  <div className="lg:hidden divide-y divide-border">
                     {pending.map((r) => (
-                      <TableRow key={r.id}>
-                        <TableCell>
-                          <div className="font-mono text-xs text-primary font-semibold">{r.rfq_number}</div>
-                          {r.pr_number && <div className="text-[11px] text-muted-foreground">{r.pr_number}</div>}
-                          {r.title && <div className="text-xs mt-0.5 max-w-[220px] truncate" title={r.title}>{r.title}</div>}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          {r.pr_project_code && <div className="font-medium">{r.pr_project_code}</div>}
-                          {r.pr_project_site && <div className="text-muted-foreground">{r.pr_project_site}</div>}
-                        </TableCell>
-                        <TableCell className="text-xs">{r.requestor_name ?? "—"}</TableCell>
-                        <TableCell>
-                          <Badge className={`text-xs border-0 ${r.approved_count >= 3 ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
-                            {r.approved_count}/3
+                      <div key={r.id} className="p-3 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-xs text-primary font-semibold">{r.rfq_number}</span>
+                          <Badge className={`text-[10px] border-0 ${r.approved_count >= 3 ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+                            {r.approved_count}/3 quotes
                           </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs max-w-[280px] whitespace-pre-wrap">
-                          <div>{r.min_quotes_override_reason ?? "—"}</div>
-                          {r.min_quotes_override_attachment_url && (
-                            <a
-                              href={r.min_quotes_override_attachment_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="mt-1 inline-flex items-center gap-1 text-primary underline hover:text-primary/80"
-                            >
-                              📎 View attachment
-                            </a>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(r.min_quotes_override_requested_at)}</TableCell>
-                        <TableCell className="text-right">
-                          <div className="inline-flex gap-1">
-                            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => openDecide(r, "allow")}>
-                              Allow
-                            </Button>
-                            <Button size="sm" variant="outline" className="text-destructive border-destructive/40 hover:bg-destructive/10" onClick={() => openDecide(r, "deny")}>
-                              Deny
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
+                        </div>
+                        {r.pr_number && <div className="text-[11px] text-muted-foreground">{r.pr_number}</div>}
+                        {r.pr_project_code && <div className="text-xs font-medium">{r.pr_project_code}</div>}
+                        {r.pr_project_site && <div className="text-[11px] text-muted-foreground">{r.pr_project_site}</div>}
+                        <div className="text-[11px] text-muted-foreground">By {r.requestor_name ?? "—"} · {formatDateTime(r.min_quotes_override_requested_at)}</div>
+                        {r.min_quotes_override_reason && (
+                          <div className="text-xs whitespace-pre-wrap">{r.min_quotes_override_reason}</div>
+                        )}
+                        {r.min_quotes_override_attachment_url && (
+                          <a
+                            href={r.min_quotes_override_attachment_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-primary underline"
+                          >
+                            📎 View attachment
+                          </a>
+                        )}
+                        <div className="flex items-center gap-2 pt-1">
+                          <Button size="sm" className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white h-8" onClick={() => openDecide(r, "allow")}>
+                            Allow
+                          </Button>
+                          <Button size="sm" variant="outline" className="flex-1 text-destructive border-destructive/40 hover:bg-destructive/10 h-8" onClick={() => openDecide(r, "deny")}>
+                            Deny
+                          </Button>
+                        </div>
+                      </div>
                     ))}
-                  </TableBody>
-                </Table>
+                  </div>
+
+                  {/* Desktop table */}
+                  <div className="hidden lg:block">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>RFQ / PR</TableHead>
+                          <TableHead>Project</TableHead>
+                          <TableHead>Requestor</TableHead>
+                          <TableHead>Approved Quotes</TableHead>
+                          <TableHead>Reason</TableHead>
+                          <TableHead>Requested At</TableHead>
+                          <TableHead className="text-right">Action</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {pending.map((r) => (
+                          <TableRow key={r.id}>
+                            <TableCell>
+                              <div className="font-mono text-xs text-primary font-semibold">{r.rfq_number}</div>
+                              {r.pr_number && <div className="text-[11px] text-muted-foreground">{r.pr_number}</div>}
+                              {r.title && <div className="text-xs mt-0.5 max-w-[220px] truncate" title={r.title}>{r.title}</div>}
+                            </TableCell>
+                            <TableCell className="text-xs">
+                              {r.pr_project_code && <div className="font-medium">{r.pr_project_code}</div>}
+                              {r.pr_project_site && <div className="text-muted-foreground">{r.pr_project_site}</div>}
+                            </TableCell>
+                            <TableCell className="text-xs">{r.requestor_name ?? "—"}</TableCell>
+                            <TableCell>
+                              <Badge className={`text-xs border-0 ${r.approved_count >= 3 ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-800"}`}>
+                                {r.approved_count}/3
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-xs max-w-[280px] whitespace-pre-wrap">
+                              <div>{r.min_quotes_override_reason ?? "—"}</div>
+                              {r.min_quotes_override_attachment_url && (
+                                <a
+                                  href={r.min_quotes_override_attachment_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="mt-1 inline-flex items-center gap-1 text-primary underline hover:text-primary/80"
+                                >
+                                  📎 View attachment
+                                </a>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(r.min_quotes_override_requested_at)}</TableCell>
+                            <TableCell className="text-right">
+                              <div className="inline-flex gap-1">
+                                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => openDecide(r, "allow")}>
+                                  Allow
+                                </Button>
+                                <Button size="sm" variant="outline" className="text-destructive border-destructive/40 hover:bg-destructive/10" onClick={() => openDecide(r, "deny")}>
+                                  Deny
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>
@@ -345,52 +389,90 @@ export default function AdminOverrides() {
                   Abhi tak koi decision nahi liya gaya.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>RFQ / PR</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Requested By</TableHead>
-                      <TableHead>Decided By</TableHead>
-                      <TableHead>Decided At</TableHead>
-                      <TableHead>Reason / Note</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+                <>
+                  {/* Mobile cards */}
+                  <div className="lg:hidden divide-y divide-border">
                     {decided.map((r) => (
-                      <TableRow key={r.id}>
-                        <TableCell>
-                          <div className="font-mono text-xs text-primary font-semibold">{r.rfq_number}</div>
-                          {r.pr_number && <div className="text-[11px] text-muted-foreground">{r.pr_number}</div>}
-                        </TableCell>
-                        <TableCell>
+                      <div key={r.id} className="p-3 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-xs text-primary font-semibold">{r.rfq_number}</span>
                           {r.min_quotes_override_status === "allowed" ? (
-                            <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 border text-xs">✓ Allowed</Badge>
+                            <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 border text-[10px]">✓ Allowed</Badge>
                           ) : (
-                            <Badge className="bg-red-100 text-red-800 border-red-300 border text-xs">✗ Denied</Badge>
+                            <Badge className="bg-red-100 text-red-800 border-red-300 border text-[10px]">✗ Denied</Badge>
                           )}
-                        </TableCell>
-                        <TableCell className="text-xs">{r.requestor_name ?? "—"}</TableCell>
-                        <TableCell className="text-xs">{r.decided_by_name ?? "—"}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(r.min_quotes_override_allowed_at)}</TableCell>
-                        <TableCell className="text-xs max-w-[320px] whitespace-pre-wrap">
-                          {r.min_quotes_override_reason && <div><span className="text-muted-foreground">Procurement:</span> {r.min_quotes_override_reason}</div>}
-                          {r.min_quotes_override_admin_note && <div className="mt-1"><span className="text-muted-foreground">IT team note:</span> {r.min_quotes_override_admin_note}</div>}
-                          {r.min_quotes_override_attachment_url && (
-                            <a
-                              href={r.min_quotes_override_attachment_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="mt-1 inline-flex items-center gap-1 text-primary underline hover:text-primary/80"
-                            >
-                              📎 View attachment
-                            </a>
-                          )}
-                        </TableCell>
-                      </TableRow>
+                        </div>
+                        {r.pr_number && <div className="text-[11px] text-muted-foreground">{r.pr_number}</div>}
+                        <div className="text-[11px] text-muted-foreground">
+                          By {r.requestor_name ?? "—"} → Decided by {r.decided_by_name ?? "—"}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground">{formatDateTime(r.min_quotes_override_allowed_at)}</div>
+                        {r.min_quotes_override_reason && <div className="text-xs whitespace-pre-wrap"><span className="text-muted-foreground">Procurement:</span> {r.min_quotes_override_reason}</div>}
+                        {r.min_quotes_override_admin_note && <div className="text-xs whitespace-pre-wrap"><span className="text-muted-foreground">IT note:</span> {r.min_quotes_override_admin_note}</div>}
+                        {r.min_quotes_override_attachment_url && (
+                          <a
+                            href={r.min_quotes_override_attachment_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-primary underline"
+                          >
+                            📎 View attachment
+                          </a>
+                        )}
+                      </div>
                     ))}
-                  </TableBody>
-                </Table>
+                  </div>
+
+                  {/* Desktop table */}
+                  <div className="hidden lg:block">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>RFQ / PR</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Requested By</TableHead>
+                          <TableHead>Decided By</TableHead>
+                          <TableHead>Decided At</TableHead>
+                          <TableHead>Reason / Note</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {decided.map((r) => (
+                          <TableRow key={r.id}>
+                            <TableCell>
+                              <div className="font-mono text-xs text-primary font-semibold">{r.rfq_number}</div>
+                              {r.pr_number && <div className="text-[11px] text-muted-foreground">{r.pr_number}</div>}
+                            </TableCell>
+                            <TableCell>
+                              {r.min_quotes_override_status === "allowed" ? (
+                                <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 border text-xs">✓ Allowed</Badge>
+                              ) : (
+                                <Badge className="bg-red-100 text-red-800 border-red-300 border text-xs">✗ Denied</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-xs">{r.requestor_name ?? "—"}</TableCell>
+                            <TableCell className="text-xs">{r.decided_by_name ?? "—"}</TableCell>
+                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(r.min_quotes_override_allowed_at)}</TableCell>
+                            <TableCell className="text-xs max-w-[320px] whitespace-pre-wrap">
+                              {r.min_quotes_override_reason && <div><span className="text-muted-foreground">Procurement:</span> {r.min_quotes_override_reason}</div>}
+                              {r.min_quotes_override_admin_note && <div className="mt-1"><span className="text-muted-foreground">IT team note:</span> {r.min_quotes_override_admin_note}</div>}
+                              {r.min_quotes_override_attachment_url && (
+                                <a
+                                  href={r.min_quotes_override_attachment_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="mt-1 inline-flex items-center gap-1 text-primary underline hover:text-primary/80"
+                                >
+                                  📎 View attachment
+                                </a>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </>
               )}
             </CardContent>
           </Card>

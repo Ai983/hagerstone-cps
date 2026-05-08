@@ -141,23 +141,23 @@ export default function StockOverview() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3 lg:space-y-4">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Stock Overview</h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <h1 className="text-xl lg:text-2xl font-bold text-foreground">Stock Overview</h1>
+        <p className="text-xs lg:text-sm text-muted-foreground mt-1">
           Har project ka live stock yahan dikhta hai. BOQ ke baahar jo items site team ne add kiye hain unpe <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300 mx-1">EXTRA</Badge> tag lagta hai.
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Projects Track Ho Rahe</div><div className="text-2xl font-bold">{stats.projects}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground">Stock Items</div><div className="text-2xl font-bold">{stats.totalRows}</div></CardContent></Card>
-        <Card><CardContent className="p-4"><div className="text-xs text-muted-foreground text-amber-700">Extra Items</div><div className="text-2xl font-bold text-amber-700">{stats.extras}</div></CardContent></Card>
+      <div className="grid grid-cols-3 gap-2 lg:gap-3">
+        <Card><CardContent className="p-3 lg:p-4"><div className="text-[10px] lg:text-xs text-muted-foreground">Projects Track Ho Rahe</div><div className="text-xl lg:text-2xl font-bold">{stats.projects}</div></CardContent></Card>
+        <Card><CardContent className="p-3 lg:p-4"><div className="text-[10px] lg:text-xs text-muted-foreground">Stock Items</div><div className="text-xl lg:text-2xl font-bold">{stats.totalRows}</div></CardContent></Card>
+        <Card><CardContent className="p-3 lg:p-4"><div className="text-[10px] lg:text-xs text-muted-foreground text-amber-700">Extra Items</div><div className="text-xl lg:text-2xl font-bold text-amber-700">{stats.extras}</div></CardContent></Card>
       </div>
 
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 lg:gap-3 sm:flex-wrap">
         <Select value={projectFilter} onValueChange={setProjectFilter}>
-          <SelectTrigger className="w-56"><SelectValue placeholder="All projects" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-56"><SelectValue placeholder="All projects" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Saare Projects</SelectItem>
             {projects.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
@@ -169,7 +169,7 @@ export default function StockOverview() {
           <span>Sirf Extras</span>
         </label>
 
-        <div className="relative flex-1 min-w-[220px] max-w-md">
+        <div className="relative flex-1 sm:min-w-[220px] sm:max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Item ya project search karo…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
@@ -189,54 +189,91 @@ export default function StockOverview() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Project</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Unit</TableHead>
-                  <TableHead className="text-right">Planned</TableHead>
-                  <TableHead className="text-right">Current</TableHead>
-                  <TableHead className="text-right">Diff</TableHead>
-                  <TableHead>Last Updated</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((r, idx) => {
-                  const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
-                  return (
-                    <TableRow key={`${r.project_code}::${norm(r.item_description)}::${idx}`} className={!r.from_boq ? "bg-amber-50/50" : undefined}>
-                      <TableCell className="font-medium">{r.project_code}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span>{r.item_description}</span>
-                          {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">EXTRA</Badge>}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{r.unit ?? "—"}</TableCell>
-                      <TableCell className="text-right font-mono">
-                        {r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}
-                      </TableCell>
-                      <TableCell className="text-right font-mono font-semibold">
-                        {Number(r.current_qty).toLocaleString("en-IN")}
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {diff == null ? "—" : (
-                          <span className={diff < 0 ? "text-red-700" : diff > 0 ? "text-green-700" : "text-muted-foreground"}>
-                            {diff > 0 ? "+" : ""}{Number(diff).toLocaleString("en-IN")}
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-xs">{fmtDate(r.last_updated)}</TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <>
+          {/* Mobile cards */}
+          <Card className="lg:hidden">
+            <CardContent className="p-0 divide-y divide-border">
+              {filtered.map((r, idx) => {
+                const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
+                return (
+                  <div key={`${r.project_code}::${norm(r.item_description)}::${idx}`} className={`p-3 space-y-1 ${!r.from_boq ? "bg-amber-50/50" : ""}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-sm truncate">{r.project_code}</span>
+                      {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300 shrink-0">EXTRA</Badge>}
+                    </div>
+                    <div className="text-sm">{r.item_description}</div>
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-muted-foreground">
+                        Planned: <span className="font-mono">{r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}</span> {r.unit ?? ""}
+                      </span>
+                      <span className="font-mono font-semibold">
+                        Now: {Number(r.current_qty).toLocaleString("en-IN")}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
+                      {diff == null ? <span className="text-muted-foreground">No plan</span> : (
+                        <span className={`font-mono ${diff < 0 ? "text-red-700" : diff > 0 ? "text-green-700" : "text-muted-foreground"}`}>
+                          Diff: {diff > 0 ? "+" : ""}{Number(diff).toLocaleString("en-IN")}
+                        </span>
+                      )}
+                      <span className="text-muted-foreground">{fmtDate(r.last_updated)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+
+          {/* Desktop table */}
+          <Card className="hidden lg:block">
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Project</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead>Unit</TableHead>
+                    <TableHead className="text-right">Planned</TableHead>
+                    <TableHead className="text-right">Current</TableHead>
+                    <TableHead className="text-right">Diff</TableHead>
+                    <TableHead>Last Updated</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map((r, idx) => {
+                    const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
+                    return (
+                      <TableRow key={`${r.project_code}::${norm(r.item_description)}::${idx}`} className={!r.from_boq ? "bg-amber-50/50" : undefined}>
+                        <TableCell className="font-medium">{r.project_code}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span>{r.item_description}</span>
+                            {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">EXTRA</Badge>}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{r.unit ?? "—"}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}
+                        </TableCell>
+                        <TableCell className="text-right font-mono font-semibold">
+                          {Number(r.current_qty).toLocaleString("en-IN")}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {diff == null ? "—" : (
+                            <span className={diff < 0 ? "text-red-700" : diff > 0 ? "text-green-700" : "text-muted-foreground"}>
+                              {diff > 0 ? "+" : ""}{Number(diff).toLocaleString("en-IN")}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-xs">{fmtDate(r.last_updated)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </>
       )}
     </div>
   );

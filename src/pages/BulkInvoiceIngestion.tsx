@@ -268,10 +268,10 @@ export default function BulkInvoiceIngestion() {
   const approvedCount = useMemo(() => rows.filter((r) => r.decision === "approved").length, [rows]);
 
   return (
-    <div className="space-y-8 max-w-6xl mx-auto pb-24">
+    <div className="space-y-4 lg:space-y-8 max-w-6xl mx-auto pb-24">
       <div>
-        <h1 className="text-2xl font-bold text-foreground tracking-tight">Bulk Invoice Import</h1>
-        <p className="text-muted-foreground mt-1">
+        <h1 className="text-xl lg:text-2xl font-bold text-foreground tracking-tight">Bulk Invoice Import</h1>
+        <p className="text-xs lg:text-sm text-muted-foreground mt-1">
           Import invoices from Google Drive into the procurement database
         </p>
       </div>
@@ -324,28 +324,45 @@ export default function BulkInvoiceIngestion() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-md border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Filename</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((r) => (
-                    <TableRow key={r.file.id}>
-                      <TableCell className="font-medium max-w-[200px] truncate" title={r.file.name}>
-                        {r.file.name}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{r.file.mimeType}</TableCell>
-                      <TableCell className="text-muted-foreground text-sm">{formatBytes(r.file.sizeBytes)}</TableCell>
-                      <TableCell>{statusBadge(r)}</TableCell>
+              {/* Mobile cards */}
+              <div className="lg:hidden divide-y divide-border">
+                {rows.map((r) => (
+                  <div key={r.file.id} className="p-3 space-y-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="font-medium text-sm truncate" title={r.file.name}>{r.file.name}</span>
+                      <div className="shrink-0">{statusBadge(r)}</div>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      {r.file.mimeType} · {formatBytes(r.file.sizeBytes)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {/* Desktop table */}
+              <div className="hidden lg:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Filename</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Size</TableHead>
+                      <TableHead>Status</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {rows.map((r) => (
+                      <TableRow key={r.file.id}>
+                        <TableCell className="font-medium max-w-[200px] truncate" title={r.file.name}>
+                          {r.file.name}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-sm">{r.file.mimeType}</TableCell>
+                        <TableCell className="text-muted-foreground text-sm">{formatBytes(r.file.sizeBytes)}</TableCell>
+                        <TableCell>{statusBadge(r)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
             {isParsing && (
               <div className="space-y-2">

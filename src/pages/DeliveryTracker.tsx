@@ -695,15 +695,15 @@ export default function DeliveryTracker() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 lg:space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Delivery Tracker</h1>
-        <p className="text-muted-foreground text-sm mt-1">Steps 19–21 — track dispatches and confirm receipt</p>
+        <h1 className="text-xl lg:text-2xl font-bold text-foreground">Delivery Tracker</h1>
+        <p className="text-muted-foreground text-xs lg:text-sm mt-1">Steps 19–21 — track dispatches and confirm receipt</p>
       </div>
 
       {/* Stats Row */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 lg:gap-3">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Active Deliveries</CardTitle>
@@ -739,13 +739,13 @@ export default function DeliveryTracker() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[260px]">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 lg:gap-3">
+        <div className="relative flex-1 sm:min-w-[260px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search PO number, supplier..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
-          <SelectTrigger className="w-48">
+          <SelectTrigger className="w-full sm:w-48">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -758,7 +758,7 @@ export default function DeliveryTracker() {
           </SelectContent>
         </Select>
         <Select value={`${sortFieldDel}:${sortDirDel}`} onValueChange={(v) => { const [f, d] = v.split(":"); setSortFieldDel(f); setSortDirDel(d as "asc" | "desc"); }}>
-          <SelectTrigger className="w-48">
+          <SelectTrigger className="w-full sm:w-48">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -882,7 +882,7 @@ export default function DeliveryTracker() {
 
       {/* ── Add Update Dialog ──────────────────────────────────────────────── */}
       <Dialog open={updateOpen} onOpenChange={setUpdateOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-lg">
           <DialogHeader>
             <DialogTitle>Add Delivery Update — {updatePo?.po_number}</DialogTitle>
             <DialogDescription>Log a delivery milestone for this PO.</DialogDescription>
@@ -1165,7 +1165,7 @@ export default function DeliveryTracker() {
 
       {/* Vendor Feedback Dialog */}
       <Dialog open={feedbackOpen} onOpenChange={setFeedbackOpen}>
-        <DialogContent className="max-w-lg p-0">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-lg p-0">
           <div className="overflow-y-auto max-h-[80vh]">
           <DialogHeader className="px-6 pt-6">
             <DialogTitle>Rate this Vendor</DialogTitle>

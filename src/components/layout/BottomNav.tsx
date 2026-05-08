@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FileText, Send, ShoppingCart, Truck, MessageSquare,
-  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, ClipboardCheck, Boxes, ListChecks, Trophy,
+  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, ClipboardCheck, Boxes, ListChecks, Trophy, KanbanSquare, LineChart, ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
@@ -16,15 +16,18 @@ const ADMIN_PRIMARY = [
 ];
 
 const ADMIN_MORE = [
-  { title: "PR Review", url: "/pr-review", icon: ClipboardCheck },
-  { title: "Quotes", url: "/quotes", icon: MessageSquare },
-  { title: "Comparison", url: "/comparison", icon: BarChart3 },
-  { title: "Delivery", url: "/delivery", icon: Truck },
-  { title: "BOQ", url: "/boq", icon: ListChecks },
-  { title: "Stock", url: "/stock-overview", icon: Boxes },
-  { title: "Suppliers", url: "/suppliers", icon: Users },
-  { title: "Items", url: "/items", icon: Package },
-  { title: "Audit Log", url: "/audit", icon: Shield },
+  { title: "PR Review", url: "/pr-review", icon: ClipboardCheck, roles: ["procurement_executive", "procurement_head", "it_head", "management"] },
+  { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor"] },
+  { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive", "procurement_head", "it_head", "management"] },
+  { title: "Kanban", url: "/kanban", icon: KanbanSquare, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor", "finance"] },
+  { title: "Analytics", url: "/analytics", icon: LineChart, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
+  { title: "Delivery", url: "/delivery", icon: Truck, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
+  { title: "BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive", "procurement_head", "it_head", "management"] },
+  { title: "Stock", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
+  { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor"] },
+  { title: "Items", url: "/items", icon: Package, roles: ["procurement_executive", "procurement_head", "it_head"] },
+  { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor", "procurement_head", "it_head", "management"] },
+  { title: "Overrides", url: "/admin/overrides", icon: ShieldCheck, roles: ["it_head"] },
 ];
 
 const EMPLOYEE_NAV = [
@@ -106,6 +109,8 @@ export function BottomNav() {
     );
   }
 
+  const visibleMore = ADMIN_MORE.filter(item => item.roles.includes(user.role));
+
   return (
     <>
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 h-16 bg-sidebar text-sidebar-foreground border-t border-sidebar-border flex items-center">
@@ -139,8 +144,8 @@ export function BottomNav() {
               Hagerstone CPS
             </SheetTitle>
           </SheetHeader>
-          <div className="grid grid-cols-3 gap-2 mb-4">
-            {ADMIN_MORE.map(item => (
+          <div className="grid grid-cols-3 gap-2 mb-4 max-h-[60vh] overflow-y-auto">
+            {visibleMore.map(item => (
               <NavLink
                 key={item.url}
                 to={item.url}

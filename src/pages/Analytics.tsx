@@ -84,19 +84,37 @@ const statusColor: Record<string, string> = {
   rejected: "bg-red-100 text-red-800",
 };
 
-// Simple horizontal bar
+// Simple horizontal bar — stacks label/bar/value on mobile
 function HBar({ label, value, max, valueLabel, color = "bg-primary" }: {
   label: string; value: number; max: number; valueLabel: string; color?: string;
 }) {
   const pct = max > 0 ? Math.max(4, (value / max) * 100) : 0;
   return (
-    <div className="flex items-center gap-3 py-1.5">
-      <div className="w-40 text-sm text-foreground truncate" title={label}>{label}</div>
-      <div className="flex-1 bg-muted rounded-full h-5 relative overflow-hidden">
-        <div className={`absolute inset-y-0 left-0 ${color} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+    <>
+      {/* Mobile: stacked */}
+      <div className="lg:hidden py-1.5 space-y-1">
+        {label && (
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <div className="text-foreground truncate" title={label}>{label}</div>
+            <div className="text-right font-medium tabular-nums shrink-0">{valueLabel}</div>
+          </div>
+        )}
+        <div className="bg-muted rounded-full h-3 relative overflow-hidden">
+          <div className={`absolute inset-y-0 left-0 ${color} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+        </div>
+        {!label && (
+          <div className="text-right text-xs font-medium tabular-nums">{valueLabel}</div>
+        )}
       </div>
-      <div className="w-28 text-right text-sm font-medium tabular-nums">{valueLabel}</div>
-    </div>
+      {/* Desktop: side-by-side */}
+      <div className="hidden lg:flex items-center gap-3 py-1.5">
+        <div className="w-40 text-sm text-foreground truncate" title={label}>{label}</div>
+        <div className="flex-1 bg-muted rounded-full h-5 relative overflow-hidden">
+          <div className={`absolute inset-y-0 left-0 ${color} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+        </div>
+        <div className="w-28 text-right text-sm font-medium tabular-nums">{valueLabel}</div>
+      </div>
+    </>
   );
 }
 
@@ -665,16 +683,16 @@ export default function Analytics() {
   const currencyLabel = (v: number) => canViewPrices ? fmtCurrency(v, true) : "***";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 lg:space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Analytics</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">Analytics</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">
             Projects, suppliers aur categories ke hisaab se procurement performance
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="outline" size="sm" onClick={exportCSV} disabled={loading}>
             <Download className="h-3.5 w-3.5 mr-1.5" /> Export CSV
           </Button>
@@ -688,16 +706,16 @@ export default function Analytics() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 lg:gap-3">
         <Select value={projectFilter} onValueChange={setProjectFilter}>
-          <SelectTrigger className="w-56"><SelectValue placeholder="All projects" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-56"><SelectValue placeholder="All projects" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Projects</SelectItem>
             {projectOptions.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={periodFilter} onValueChange={setPeriodFilter}>
-          <SelectTrigger className="w-44"><SelectValue placeholder="All time" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-44"><SelectValue placeholder="All time" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Time</SelectItem>
             <SelectItem value="7d">Last 7 Days</SelectItem>
@@ -819,26 +837,28 @@ export default function Analytics() {
 
       {/* Tabbed detail views */}
       <Tabs defaultValue="projects" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="projects">
-            <Building2 className="h-3.5 w-3.5 mr-1.5" /> By Project
-          </TabsTrigger>
-          <TabsTrigger value="suppliers">
-            <Users className="h-3.5 w-3.5 mr-1.5" /> By Supplier
-          </TabsTrigger>
-          <TabsTrigger value="category">
-            <Package className="h-3.5 w-3.5 mr-1.5" /> By Category
-          </TabsTrigger>
-          <TabsTrigger value="trend">
-            <BarChart3 className="h-3.5 w-3.5 mr-1.5" /> Monthly Trend
-          </TabsTrigger>
-          <TabsTrigger value="payments">
-            Payments Due
-          </TabsTrigger>
-          <TabsTrigger value="status">
-            <FileText className="h-3.5 w-3.5 mr-1.5" /> PO Status
-          </TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto -mx-1 px-1">
+          <TabsList className="w-max">
+            <TabsTrigger value="projects">
+              <Building2 className="h-3.5 w-3.5 mr-1.5" /> By Project
+            </TabsTrigger>
+            <TabsTrigger value="suppliers">
+              <Users className="h-3.5 w-3.5 mr-1.5" /> By Supplier
+            </TabsTrigger>
+            <TabsTrigger value="category">
+              <Package className="h-3.5 w-3.5 mr-1.5" /> By Category
+            </TabsTrigger>
+            <TabsTrigger value="trend">
+              <BarChart3 className="h-3.5 w-3.5 mr-1.5" /> Monthly Trend
+            </TabsTrigger>
+            <TabsTrigger value="payments">
+              Payments Due
+            </TabsTrigger>
+            <TabsTrigger value="status">
+              <FileText className="h-3.5 w-3.5 mr-1.5" /> PO Status
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* Project */}
         <TabsContent value="projects">
@@ -929,36 +949,56 @@ export default function Analytics() {
               <p className="text-xs text-muted-foreground">Top 15 suppliers by spend, with delivery performance</p>
             </CardHeader>
             <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Supplier</TableHead>
-                    <TableHead className="text-right">POs</TableHead>
-                    <TableHead className="text-right">Spend</TableHead>
-                    <TableHead className="text-right">On-Time</TableHead>
-                    <TableHead className="text-right">Score</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {supplierLeaderboard.map((s) => (
-                    <TableRow key={s.id}>
-                      <TableCell className="font-medium">{s.name}</TableCell>
-                      <TableCell className="text-right">{s.wins}</TableCell>
-                      <TableCell className="text-right">{currencyLabel(s.totalValue)}</TableCell>
-                      <TableCell className="text-right">
-                        {s.onTimeRate != null ? (
-                          <span className={s.onTimeRate >= 80 ? "text-emerald-700" : s.onTimeRate >= 50 ? "text-amber-700" : "text-rose-700"}>
-                            {s.onTimeRate.toFixed(0)}%
-                          </span>
-                        ) : "—"}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {s.score != null ? <Badge variant="outline">{Number(s.score).toFixed(1)}</Badge> : "—"}
-                      </TableCell>
+              {/* Mobile cards */}
+              <div className="lg:hidden divide-y divide-border">
+                {supplierLeaderboard.map((s) => (
+                  <div key={s.id} className="p-3 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-sm truncate">{s.name}</span>
+                      {s.score != null && <Badge variant="outline" className="text-xs shrink-0">{Number(s.score).toFixed(1)}</Badge>}
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="text-muted-foreground">{s.wins} POs · {currencyLabel(s.totalValue)}</span>
+                      <span className={s.onTimeRate == null ? "text-muted-foreground" : s.onTimeRate >= 80 ? "text-emerald-700" : s.onTimeRate >= 50 ? "text-amber-700" : "text-rose-700"}>
+                        {s.onTimeRate != null ? `${s.onTimeRate.toFixed(0)}% on-time` : "—"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {/* Desktop table */}
+              <div className="hidden lg:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Supplier</TableHead>
+                      <TableHead className="text-right">POs</TableHead>
+                      <TableHead className="text-right">Spend</TableHead>
+                      <TableHead className="text-right">On-Time</TableHead>
+                      <TableHead className="text-right">Score</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {supplierLeaderboard.map((s) => (
+                      <TableRow key={s.id}>
+                        <TableCell className="font-medium">{s.name}</TableCell>
+                        <TableCell className="text-right">{s.wins}</TableCell>
+                        <TableCell className="text-right">{currencyLabel(s.totalValue)}</TableCell>
+                        <TableCell className="text-right">
+                          {s.onTimeRate != null ? (
+                            <span className={s.onTimeRate >= 80 ? "text-emerald-700" : s.onTimeRate >= 50 ? "text-amber-700" : "text-rose-700"}>
+                              {s.onTimeRate.toFixed(0)}%
+                            </span>
+                          ) : "—"}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {s.score != null ? <Badge variant="outline">{Number(s.score).toFixed(1)}</Badge> : "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -1089,51 +1129,81 @@ export default function Analytics() {
                       </div>
                     </div>
 
-                    {/* Table */}
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>PO Number</TableHead>
-                          <TableHead>Supplier</TableHead>
-                          <TableHead>Amount</TableHead>
-                          <TableHead>Payment Terms</TableHead>
-                          <TableHead>Due Date</TableHead>
-                          <TableHead>Status</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {overdue.map((p) => (
-                          <TableRow key={p.id} className="bg-red-50/50">
-                            <TableCell className="font-mono text-primary text-xs">{p.po_number}</TableCell>
-                            <TableCell className="text-sm">{supName(p)}</TableCell>
-                            <TableCell className="text-sm">{fmtCurrency(p.grand_total)}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{p.payment_terms_type ?? "—"}</TableCell>
-                            <TableCell className="text-xs font-medium text-red-600">{fmtDueDate(p.payment_due_date)}</TableCell>
-                            <TableCell><Badge className="text-[10px] bg-red-100 text-red-800 border-0">Overdue</Badge></TableCell>
+                    {/* Mobile cards */}
+                    <div className="lg:hidden divide-y divide-border">
+                      {[
+                        ...overdue.map((p) => ({ p, kind: "overdue" as const })),
+                        ...upcoming.map((p) => ({ p, kind: "upcoming" as const })),
+                        ...completed.map((p) => ({ p, kind: "closed" as const })),
+                      ].map(({ p, kind }) => {
+                        const bg = kind === "overdue" ? "bg-red-50/50" : kind === "closed" ? "opacity-60" : "";
+                        const dateColor = kind === "overdue" ? "text-red-600" : kind === "upcoming" ? "text-amber-600" : "text-muted-foreground";
+                        const badgeClass = kind === "overdue" ? "bg-red-100 text-red-800" : kind === "upcoming" ? "bg-amber-100 text-amber-800" : "bg-green-100 text-green-800";
+                        return (
+                          <div key={p.id} className={`p-3 space-y-1.5 ${bg}`}>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-mono text-primary text-xs">{p.po_number}</span>
+                              <Badge className={`text-[10px] border-0 ${badgeClass} capitalize`}>{kind}</Badge>
+                            </div>
+                            <div className="text-sm font-medium truncate">{supName(p)}</div>
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <span>{fmtCurrency(p.grand_total)}</span>
+                              <span className={`font-medium ${dateColor}`}>Due {fmtDueDate(p.payment_due_date)}</span>
+                            </div>
+                            {p.payment_terms_type && (
+                              <div className="text-[11px] text-muted-foreground">{p.payment_terms_type}</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {/* Desktop table */}
+                    <div className="hidden lg:block">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>PO Number</TableHead>
+                            <TableHead>Supplier</TableHead>
+                            <TableHead>Amount</TableHead>
+                            <TableHead>Payment Terms</TableHead>
+                            <TableHead>Due Date</TableHead>
+                            <TableHead>Status</TableHead>
                           </TableRow>
-                        ))}
-                        {upcoming.map((p) => (
-                          <TableRow key={p.id}>
-                            <TableCell className="font-mono text-primary text-xs">{p.po_number}</TableCell>
-                            <TableCell className="text-sm">{supName(p)}</TableCell>
-                            <TableCell className="text-sm">{fmtCurrency(p.grand_total)}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{p.payment_terms_type ?? "—"}</TableCell>
-                            <TableCell className="text-xs font-medium text-amber-600">{fmtDueDate(p.payment_due_date)}</TableCell>
-                            <TableCell><Badge className="text-[10px] bg-amber-100 text-amber-800 border-0">Upcoming</Badge></TableCell>
-                          </TableRow>
-                        ))}
-                        {completed.map((p) => (
-                          <TableRow key={p.id} className="opacity-60">
-                            <TableCell className="font-mono text-primary text-xs">{p.po_number}</TableCell>
-                            <TableCell className="text-sm">{supName(p)}</TableCell>
-                            <TableCell className="text-sm">{fmtCurrency(p.grand_total)}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{p.payment_terms_type ?? "—"}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{fmtDueDate(p.payment_due_date)}</TableCell>
-                            <TableCell><Badge className="text-[10px] bg-green-100 text-green-800 border-0">Closed</Badge></TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                        </TableHeader>
+                        <TableBody>
+                          {overdue.map((p) => (
+                            <TableRow key={p.id} className="bg-red-50/50">
+                              <TableCell className="font-mono text-primary text-xs">{p.po_number}</TableCell>
+                              <TableCell className="text-sm">{supName(p)}</TableCell>
+                              <TableCell className="text-sm">{fmtCurrency(p.grand_total)}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{p.payment_terms_type ?? "—"}</TableCell>
+                              <TableCell className="text-xs font-medium text-red-600">{fmtDueDate(p.payment_due_date)}</TableCell>
+                              <TableCell><Badge className="text-[10px] bg-red-100 text-red-800 border-0">Overdue</Badge></TableCell>
+                            </TableRow>
+                          ))}
+                          {upcoming.map((p) => (
+                            <TableRow key={p.id}>
+                              <TableCell className="font-mono text-primary text-xs">{p.po_number}</TableCell>
+                              <TableCell className="text-sm">{supName(p)}</TableCell>
+                              <TableCell className="text-sm">{fmtCurrency(p.grand_total)}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{p.payment_terms_type ?? "—"}</TableCell>
+                              <TableCell className="text-xs font-medium text-amber-600">{fmtDueDate(p.payment_due_date)}</TableCell>
+                              <TableCell><Badge className="text-[10px] bg-amber-100 text-amber-800 border-0">Upcoming</Badge></TableCell>
+                            </TableRow>
+                          ))}
+                          {completed.map((p) => (
+                            <TableRow key={p.id} className="opacity-60">
+                              <TableCell className="font-mono text-primary text-xs">{p.po_number}</TableCell>
+                              <TableCell className="text-sm">{supName(p)}</TableCell>
+                              <TableCell className="text-sm">{fmtCurrency(p.grand_total)}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{p.payment_terms_type ?? "—"}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{fmtDueDate(p.payment_due_date)}</TableCell>
+                              <TableCell><Badge className="text-[10px] bg-green-100 text-green-800 border-0">Closed</Badge></TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </div>
                 );
               })()}
@@ -1189,39 +1259,68 @@ export default function Analytics() {
               {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Project</TableHead>
-                  <TableHead className="text-right">PO Count</TableHead>
-                  <TableHead className="text-right">Total Spend</TableHead>
-                  <TableHead className="text-right">Savings</TableHead>
-                  <TableHead className="text-right">Avg PO</TableHead>
-                  <TableHead className="text-right">% of Total</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {spendByProject.map((p) => (
-                  <TableRow key={p.project}>
-                    <TableCell className="font-medium">{p.project}</TableCell>
-                    <TableCell className="text-right">{p.count}</TableCell>
-                    <TableCell className="text-right">{currencyLabel(p.value)}</TableCell>
-                    <TableCell className="text-right text-emerald-700 font-medium">
-                      {p.savings > 0 && canViewPrices ? fmtCurrency(p.savings) : "—"}
-                    </TableCell>
-                    <TableCell className="text-right">{currencyLabel(p.value / p.count)}</TableCell>
-                    <TableCell className="text-right text-muted-foreground">
-                      {kpis.total > 0 ? `${((p.value / kpis.total) * 100).toFixed(1)}%` : "—"}
-                    </TableCell>
-                  </TableRow>
+            <>
+              {/* Mobile cards */}
+              <div className="lg:hidden divide-y divide-border">
+                {spendByProject.length === 0 ? (
+                  <div className="text-center text-muted-foreground py-6 text-sm">No data</div>
+                ) : spendByProject.map((p) => (
+                  <div key={p.project} className="p-3 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-sm truncate">{p.project}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {kpis.total > 0 ? `${((p.value / kpis.total) * 100).toFixed(1)}%` : "—"}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {p.count} POs · Avg {currencyLabel(p.value / p.count)}
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="font-medium">{currencyLabel(p.value)}</span>
+                      {p.savings > 0 && canViewPrices && (
+                        <span className="text-emerald-700">Saved {fmtCurrency(p.savings, true)}</span>
+                      )}
+                    </div>
+                  </div>
                 ))}
-                {spendByProject.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-6">No data</TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+              </div>
+              {/* Desktop table */}
+              <div className="hidden lg:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Project</TableHead>
+                      <TableHead className="text-right">PO Count</TableHead>
+                      <TableHead className="text-right">Total Spend</TableHead>
+                      <TableHead className="text-right">Savings</TableHead>
+                      <TableHead className="text-right">Avg PO</TableHead>
+                      <TableHead className="text-right">% of Total</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {spendByProject.map((p) => (
+                      <TableRow key={p.project}>
+                        <TableCell className="font-medium">{p.project}</TableCell>
+                        <TableCell className="text-right">{p.count}</TableCell>
+                        <TableCell className="text-right">{currencyLabel(p.value)}</TableCell>
+                        <TableCell className="text-right text-emerald-700 font-medium">
+                          {p.savings > 0 && canViewPrices ? fmtCurrency(p.savings) : "—"}
+                        </TableCell>
+                        <TableCell className="text-right">{currencyLabel(p.value / p.count)}</TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {kpis.total > 0 ? `${((p.value / kpis.total) * 100).toFixed(1)}%` : "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {spendByProject.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-muted-foreground py-6">No data</TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

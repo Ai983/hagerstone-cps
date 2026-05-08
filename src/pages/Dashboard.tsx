@@ -372,12 +372,12 @@ export default function Dashboard() {
   }, [user?.role, lang]);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-4 lg:space-y-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">{greeting}, {user?.name?.split(" ")[0]} 👋</h1>
-          <p className="text-muted-foreground text-sm mt-1">{dateStr}</p>
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">{greeting}, {user?.name?.split(" ")[0]} 👋</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">{dateStr}</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           {quickActions.map((a) => (
@@ -539,36 +539,56 @@ export default function Dashboard() {
             </Badge>
           </CardHeader>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t("PO Number", "PO Number")}</TableHead>
-                  <TableHead>{t("Supplier", "Supplier")}</TableHead>
-                  <TableHead>{t("Grand Total", "Total Amount")}</TableHead>
-                  <TableHead className="text-right">{t("Action", "Action")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {pendingApprovals.map((po) => (
-                  <TableRow key={po.id}>
-                    <TableCell className="font-mono text-primary">{po.po_number}</TableCell>
-                    <TableCell>{po.supplier_name ?? "—"}</TableCell>
-                    <TableCell>
-                      {po.grand_total != null ? formatCurrency(po.grand_total) : "—"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => navigate(`/purchase-orders?status=pending_approval`)}
-                      >
-                        {t("View", "Dekho")}
-                      </Button>
-                    </TableCell>
+            {/* Mobile: card list */}
+            <div className="lg:hidden divide-y divide-border">
+              {pendingApprovals.map((po) => (
+                <div key={po.id} className="p-3 space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-primary text-sm font-medium">{po.po_number}</span>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => navigate(`/purchase-orders?status=pending_approval`)}>
+                      {t("View", "Dekho")}
+                    </Button>
+                  </div>
+                  <div className="text-sm text-foreground truncate">{po.supplier_name ?? "—"}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {po.grand_total != null ? formatCurrency(po.grand_total) : "—"}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Desktop: table */}
+            <div className="hidden lg:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t("PO Number", "PO Number")}</TableHead>
+                    <TableHead>{t("Supplier", "Supplier")}</TableHead>
+                    <TableHead>{t("Grand Total", "Total Amount")}</TableHead>
+                    <TableHead className="text-right">{t("Action", "Action")}</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {pendingApprovals.map((po) => (
+                    <TableRow key={po.id}>
+                      <TableCell className="font-mono text-primary">{po.po_number}</TableCell>
+                      <TableCell>{po.supplier_name ?? "—"}</TableCell>
+                      <TableCell>
+                        {po.grand_total != null ? formatCurrency(po.grand_total) : "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => navigate(`/purchase-orders?status=pending_approval`)}
+                        >
+                          {t("View", "Dekho")}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -653,30 +673,48 @@ export default function Dashboard() {
             </Button>
           </CardHeader>
           <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t("Time", "Samay")}</TableHead>
-                  <TableHead>{t("User", "User")}</TableHead>
-                  <TableHead>{t("Action", "Kaam")}</TableHead>
-                  <TableHead>{t("Description", "Details")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {recentActivity.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+            {/* Mobile: card list */}
+            <div className="lg:hidden divide-y divide-border">
+              {recentActivity.map((row) => (
+                <div key={row.id} className="p-3 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge variant="outline" className="text-[10px]">{row.action_type}</Badge>
+                    <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                       {new Date(row.logged_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                    </TableCell>
-                    <TableCell className="text-sm">{row.user_name ?? t("System", "System")}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-xs">{row.action_type}</Badge>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground max-w-[300px] truncate">{row.description ?? "—"}</TableCell>
+                    </span>
+                  </div>
+                  <div className="text-xs font-medium text-foreground">{row.user_name ?? t("System", "System")}</div>
+                  <div className="text-xs text-muted-foreground line-clamp-2">{row.description ?? "—"}</div>
+                </div>
+              ))}
+            </div>
+            {/* Desktop: table */}
+            <div className="hidden lg:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t("Time", "Samay")}</TableHead>
+                    <TableHead>{t("User", "User")}</TableHead>
+                    <TableHead>{t("Action", "Kaam")}</TableHead>
+                    <TableHead>{t("Description", "Details")}</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {recentActivity.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
+                        {new Date(row.logged_at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </TableCell>
+                      <TableCell className="text-sm">{row.user_name ?? t("System", "System")}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">{row.action_type}</Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground max-w-[300px] truncate">{row.description ?? "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
         </Card>
       )}

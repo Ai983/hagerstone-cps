@@ -524,17 +524,17 @@ export default function InvoiceUpload() {
   // -------------------------------------------------------------------------
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 lg:p-6 space-y-4 lg:space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Upload Vendor Invoice</h1>
-        <p className="text-sm text-muted-foreground mt-1">AI will extract vendor, items, and rates</p>
+        <h1 className="text-xl lg:text-2xl font-bold text-foreground">Upload Vendor Invoice</h1>
+        <p className="text-xs lg:text-sm text-muted-foreground mt-1">AI will extract vendor, items, and rates</p>
       </div>
 
       {/* Upload stage */}
       {stage === "upload" && (
         <div
-          className={`border-2 border-dashed rounded-xl p-16 text-center transition-colors cursor-pointer ${
+          className={`border-2 border-dashed rounded-xl p-8 lg:p-16 text-center transition-colors cursor-pointer ${
             isDragging ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
           }`}
           onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
@@ -566,9 +566,9 @@ export default function InvoiceUpload() {
 
       {/* Review stage */}
       {stage === "review" && (
-        <div className="grid grid-cols-2 gap-6 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6 items-start">
           {/* Left: file preview */}
-          <div className="sticky top-6 rounded-xl border border-border overflow-hidden bg-muted" style={{ height: "80vh" }}>
+          <div className="lg:sticky lg:top-6 rounded-xl border border-border overflow-hidden bg-muted h-[40vh] lg:h-[80vh]">
             {file?.type === "application/pdf" ? (
               <embed src={fileUrl!} type="application/pdf" className="w-full h-full" />
             ) : (
@@ -577,7 +577,7 @@ export default function InvoiceUpload() {
           </div>
 
           {/* Right: editable form */}
-          <div className="space-y-4 overflow-y-auto" style={{ maxHeight: "80vh", paddingRight: "4px" }}>
+          <div className="space-y-4 lg:overflow-y-auto" style={{ maxHeight: "80vh", paddingRight: "4px" }}>
 
             {/* Vendor Info */}
             <Card>
@@ -599,7 +599,7 @@ export default function InvoiceUpload() {
                   )}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-3">
+              <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {([
                   ["vendor_name", "Vendor Name"],
                   ["vendor_gstin", "GSTIN"],
@@ -625,7 +625,7 @@ export default function InvoiceUpload() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Invoice Details</CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-3">
+              <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {([
                   ["invoice_number", "Invoice #"],
                   ["invoice_date", "Date (YYYY-MM-DD)"],
@@ -716,7 +716,7 @@ export default function InvoiceUpload() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Totals</CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-3">
+              <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {([
                   ["subtotal", "Subtotal"],
                   ["cgst", "CGST"],
@@ -742,7 +742,7 @@ export default function InvoiceUpload() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Banking Details</CardTitle>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-3">
+              <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {([
                   ["bank_name", "Bank Name"],
                   ["bank_ifsc", "IFSC Code"],

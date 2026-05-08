@@ -762,76 +762,126 @@ For any field not found on the card, use empty string. For phone, if the card sh
   );
 
   const pendingContent = (
-    <Card>
-      <CardContent className="p-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Company Name</TableHead>
-              <TableHead>Contact Person</TableHead>
-              <TableHead>Email</TableHead>
-              <TableHead>Phone</TableHead>
-              <TableHead>Categories</TableHead>
-              <TableHead>Submitted</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {pendingLoading ? (
-              Array.from({ length: 4 }).map((_, i) => (
-                <TableRow key={i}>
-                  {Array.from({ length: 7 }).map((__, j) => (
-                    <TableCell key={j}><Skeleton className="h-4 w-24" /></TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : pendingRegs.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">No pending registrations</TableCell>
-              </TableRow>
-            ) : (
-              pendingRegs.map((reg) => (
-                <TableRow key={reg.id} className="hover:bg-muted/30">
-                  <TableCell className="font-medium">{reg.company_name ?? "—"}</TableCell>
-                  <TableCell>{reg.contact_person ?? "—"}</TableCell>
-                  <TableCell className="text-muted-foreground">{reg.email ?? "—"}</TableCell>
-                  <TableCell className="text-muted-foreground">{reg.phone ?? "—"}</TableCell>
-                  <TableCell>
-                    <div className="flex gap-1 flex-wrap">
-                      {(reg.categories ?? []).slice(0, 2).map((c) => (
-                        <span key={c} className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">{c}</span>
-                      ))}
-                      {(reg.categories ?? []).length > 2 && (
-                        <span className="text-xs text-muted-foreground">+{(reg.categories ?? []).length - 2}</span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
+    <>
+      {/* Mobile cards */}
+      <Card className="lg:hidden">
+        <CardContent className="p-0 divide-y divide-border">
+          {pendingLoading ? (
+            Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="p-3"><Skeleton className="h-16 w-full" /></div>
+            ))
+          ) : pendingRegs.length === 0 ? (
+            <div className="text-center py-10 text-sm text-muted-foreground">No pending registrations</div>
+          ) : (
+            pendingRegs.map((reg) => (
+              <div key={reg.id} className="p-3 space-y-2">
+                <div className="space-y-0.5">
+                  <div className="font-medium text-sm">{reg.company_name ?? "—"}</div>
+                  {reg.contact_person && <div className="text-xs text-muted-foreground">{reg.contact_person}</div>}
+                </div>
+                <div className="text-xs text-muted-foreground space-y-0.5">
+                  {reg.email && <div className="truncate">{reg.email}</div>}
+                  {reg.phone && <div>{reg.phone}</div>}
+                </div>
+                {(reg.categories ?? []).length > 0 && (
+                  <div className="flex gap-1 flex-wrap">
+                    {(reg.categories ?? []).slice(0, 3).map((c) => (
+                      <span key={c} className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">{c}</span>
+                    ))}
+                    {(reg.categories ?? []).length > 3 && (
+                      <span className="text-[10px] text-muted-foreground">+{(reg.categories ?? []).length - 3}</span>
+                    )}
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <span className="text-[11px] text-muted-foreground">
                     {reg.submitted_at || reg.created_at
                       ? new Date(reg.submitted_at ?? reg.created_at!).toLocaleDateString("en-IN")
                       : "—"}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => { setApproveTarget(reg); setApproveConfirmOpen(true); }}>Approve</Button>
-                      <Button size="sm" variant="destructive" onClick={() => { setRejectTarget(reg); setRejectReason(""); setRejectDialogOpen(true); }}>Reject</Button>
-                    </div>
-                  </TableCell>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" className="bg-green-600 hover:bg-green-700 h-8 text-xs" onClick={() => { setApproveTarget(reg); setApproveConfirmOpen(true); }}>Approve</Button>
+                    <Button size="sm" variant="destructive" className="h-8 text-xs" onClick={() => { setRejectTarget(reg); setRejectReason(""); setRejectDialogOpen(true); }}>Reject</Button>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Desktop table */}
+      <Card className="hidden lg:block">
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Company Name</TableHead>
+                <TableHead>Contact Person</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>Phone</TableHead>
+                <TableHead>Categories</TableHead>
+                <TableHead>Submitted</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pendingLoading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <TableRow key={i}>
+                    {Array.from({ length: 7 }).map((__, j) => (
+                      <TableCell key={j}><Skeleton className="h-4 w-24" /></TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : pendingRegs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">No pending registrations</TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+              ) : (
+                pendingRegs.map((reg) => (
+                  <TableRow key={reg.id} className="hover:bg-muted/30">
+                    <TableCell className="font-medium">{reg.company_name ?? "—"}</TableCell>
+                    <TableCell>{reg.contact_person ?? "—"}</TableCell>
+                    <TableCell className="text-muted-foreground">{reg.email ?? "—"}</TableCell>
+                    <TableCell className="text-muted-foreground">{reg.phone ?? "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1 flex-wrap">
+                        {(reg.categories ?? []).slice(0, 2).map((c) => (
+                          <span key={c} className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">{c}</span>
+                        ))}
+                        {(reg.categories ?? []).length > 2 && (
+                          <span className="text-xs text-muted-foreground">+{(reg.categories ?? []).length - 2}</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {reg.submitted_at || reg.created_at
+                        ? new Date(reg.submitted_at ?? reg.created_at!).toLocaleDateString("en-IN")
+                        : "—"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => { setApproveTarget(reg); setApproveConfirmOpen(true); }}>Approve</Button>
+                        <Button size="sm" variant="destructive" onClick={() => { setRejectTarget(reg); setRejectReason(""); setRejectDialogOpen(true); }}>Reject</Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </>
   );
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
+    <div className="space-y-4 lg:space-y-6">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Supplier Master</h1>
-          <p className="text-muted-foreground text-sm mt-1">{stats.active} active suppliers</p>
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">Supplier Master</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">{stats.active} active suppliers</p>
         </div>
         {canManageSuppliers && (
           <Button onClick={openAdd}><Plus className="h-4 w-4 mr-2" />Naya Supplier Add Karo</Button>

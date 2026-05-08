@@ -206,12 +206,12 @@ export default function AuditLog() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 lg:space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Audit Log</h1>
-          <p className="text-muted-foreground text-sm mt-1">System me hua har action ka permanent record</p>
+          <h1 className="text-xl lg:text-2xl font-bold text-foreground">Audit Log</h1>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">System me hua har action ka permanent record</p>
         </div>
         <Badge className="bg-muted text-muted-foreground border-border/80 text-xs border-0">
           Read Only — Edit ya delete nahi ho sakta
@@ -219,22 +219,24 @@ export default function AuditLog() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative flex-1 min-w-[220px]">
+      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 lg:gap-3">
+        <div className="relative flex-1 sm:min-w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search description, entity, user..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
-        <Input type="date" className="w-40" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} title="From date" />
-        <Input type="date" className="w-40" value={dateTo} onChange={(e) => setDateTo(e.target.value)} title="To date" />
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <Input type="date" className="flex-1 sm:flex-none sm:w-40" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} title="From date" />
+          <Input type="date" className="flex-1 sm:flex-none sm:w-40" value={dateTo} onChange={(e) => setDateTo(e.target.value)} title="To date" />
+        </div>
         <Select value={actionFilter} onValueChange={setActionFilter}>
-          <SelectTrigger className="w-40"><SelectValue placeholder="Action" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-40"><SelectValue placeholder="Action" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Actions</SelectItem>
             {actionTypes.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={severityFilter} onValueChange={setSeverityFilter}>
-          <SelectTrigger className="w-36"><SelectValue placeholder="Severity" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-36"><SelectValue placeholder="Severity" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Severity</SelectItem>
             <SelectItem value="info">Info</SelectItem>
@@ -243,7 +245,7 @@ export default function AuditLog() {
           </SelectContent>
         </Select>
         <Select value={entityFilter} onValueChange={setEntityFilter}>
-          <SelectTrigger className="w-40"><SelectValue placeholder="Entity" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-40"><SelectValue placeholder="Entity" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Entities</SelectItem>
             {entityTypes.map((e) => <SelectItem key={e} value={e}>{e}</SelectItem>)}
@@ -395,7 +397,7 @@ export default function AuditLog() {
 
       {/* Detail Dialog */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {detailRow?.action_type ?? "—"} — {detailRow?.entity_number ?? detailRow?.entity_type ?? "—"}
