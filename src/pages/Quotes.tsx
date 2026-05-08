@@ -1556,7 +1556,7 @@ Rules:
         </Card>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <Card
           role="button"
           tabIndex={0}
@@ -1569,21 +1569,6 @@ Rules:
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-foreground">{stats.total}</div>
-          </CardContent>
-        </Card>
-        <Card
-          role="button"
-          tabIndex={0}
-          onClick={() => setStatusFilter("review_karna_hai")}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("review_karna_hai"); } }}
-          className="cursor-pointer hover:bg-amber-50 transition-colors border-amber-200"
-          title="Quotes jo abhi tak review nahi hue — click karo filter ke liye"
-        >
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-amber-800">Quote Added</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-amber-900">{stats.added}</div>
           </CardContent>
         </Card>
         <Card
@@ -1604,16 +1589,16 @@ Rules:
         <Card
           role="button"
           tabIndex={0}
-          onClick={() => setStatusFilter("reject_kiya")}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("reject_kiya"); } }}
-          className="cursor-pointer hover:bg-red-50 transition-colors border-red-200"
-          title="Reject kiye gaye quotes"
+          onClick={() => setStatusFilter("review_karna_hai")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("review_karna_hai"); } }}
+          className="cursor-pointer hover:bg-amber-50 transition-colors border-amber-200"
+          title="Quotes jo abhi approve karne baaki hain"
         >
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-red-800">Not Approved</CardTitle>
+            <CardTitle className="text-sm font-medium text-amber-800">Approve Karne Baaki</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-900">{stats.notApproved}</div>
+            <div className="text-2xl font-bold text-amber-900">{stats.added}</div>
           </CardContent>
         </Card>
       </div>
