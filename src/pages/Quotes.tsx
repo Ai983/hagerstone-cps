@@ -83,7 +83,7 @@ type QuoteLineItem = {
   correction_log: any[] | null;
 };
 
-type Rfq = { id: string; rfq_number: string; title: string | null; pr_id: string | null; status: string | null };
+type Rfq = { id: string; rfq_number: string; title: string | null; pr_id: string | null; status: string | null; created_by: string | null; created_by_name: string | null };
 
 type PrInfo = {
   id: string;
@@ -325,7 +325,7 @@ export default function Quotes() {
   const [savingReview, setSavingReview] = useState(false);
 
   const fetchRfqs = async () => {
-    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,title,pr_id,status").order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,title,pr_id,status,created_by").order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []) as Rfq[];
   };
@@ -349,7 +349,23 @@ export default function Quotes() {
     setLoading(true);
     setLoadError(null);
     try {
-      const rfqsRows = await fetchRfqs();
+      const rfqsRowsRaw = await fetchRfqs();
+
+      // Resolve RFQ creator names — same lookup table as PR requesters, batched together below
+      const rfqCreatorIds = [...new Set(rfqsRowsRaw.map((r) => r.created_by).filter(Boolean))] as string[];
+      const rfqCreatorNameMap: Record<string, string> = {};
+      if (rfqCreatorIds.length > 0) {
+        const { data: creators } = await supabase
+          .from("cps_users")
+          .select("id,name")
+          .in("id", rfqCreatorIds);
+        (creators ?? []).forEach((u: any) => { rfqCreatorNameMap[u.id] = u.name; });
+      }
+      const rfqsRows = rfqsRowsRaw.map((r) => ({
+        ...r,
+        created_by_name: r.created_by ? (rfqCreatorNameMap[r.created_by] ?? null) : null,
+      }));
+
       const byId: Record<string, Rfq> = {};
       rfqsRows.forEach((r) => (byId[r.id] = r));
       setRfqs(rfqsRows);
@@ -471,6 +487,7 @@ export default function Quotes() {
     pr: PrInfo | null;
     pr_key: string; // pr_id or "orphan:<rfq_id>"
     rfq_numbers: string[];
+    rfq_creator_names: string[]; // distinct names of who created each RFQ in this group
     quotes: QuoteListRow[];
     latest_received: string | null;
   };
@@ -491,6 +508,7 @@ export default function Quotes() {
           pr: prId ? (prById[prId] ?? null) : null,
           pr_key: key,
           rfq_numbers: [],
+          rfq_creator_names: [],
           quotes: [],
           latest_received: null,
         };
@@ -498,6 +516,9 @@ export default function Quotes() {
       }
       g.quotes.push(q);
       if (rfq?.rfq_number && !g.rfq_numbers.includes(rfq.rfq_number)) g.rfq_numbers.push(rfq.rfq_number);
+      if (rfq?.created_by_name && !g.rfq_creator_names.includes(rfq.created_by_name)) {
+        g.rfq_creator_names.push(rfq.created_by_name);
+      }
       if (q.received_at) {
         if (!g.latest_received || new Date(q.received_at) > new Date(g.latest_received)) {
           g.latest_received = q.received_at;
@@ -1732,7 +1753,14 @@ Rules:
                           ) : "—"}
                         </TableCell>
                         <TableCell className="text-muted-foreground font-mono text-xs">
-                          {g.rfq_numbers.length ? g.rfq_numbers.join(", ") : "—"}
+                          <div className="flex flex-col gap-0.5">
+                            <span>{g.rfq_numbers.length ? g.rfq_numbers.join(", ") : "—"}</span>
+                            {g.rfq_creator_names.length > 0 && (
+                              <span className="text-[10px] text-muted-foreground/80 font-sans">
+                                RFQ by {g.rfq_creator_names.join(", ")}
+                              </span>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-center">
                           <div className="inline-flex items-center gap-1.5">
