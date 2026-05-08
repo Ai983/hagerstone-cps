@@ -2164,8 +2164,8 @@ export default function ComparisonSheetPage() {
     URL.revokeObjectURL(url);
   };
 
-  const downloadPDF = () => {
-    if (!sheet || !rfq) return;
+  const getComparisonPdfBuffer = (): ArrayBuffer | null => {
+    if (!sheet || !rfq) return null;
     const data = buildExportData();
     if (!data) return;
     const { supplierTotals, winnerSupplierId, resolveRate, cheapestPerRow, aiVerdict, headPickName, justification, aboveMarketCount } = data;
@@ -2475,7 +2475,36 @@ export default function ComparisonSheetPage() {
       );
     }
 
-    doc.save(`Comparison_${rfq.rfq_number}_${new Date().toISOString().slice(0, 10)}.pdf`);
+    return doc.output("arraybuffer");
+  };
+
+  const downloadPDF = () => {
+    const buf = getComparisonPdfBuffer();
+    if (!buf) return;
+    const blob = new Blob([buf], { type: "application/pdf" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `Comparison_${rfq!.rfq_number}_${new Date().toISOString().slice(0, 10)}.pdf`;
+    link.click();
+  };
+
+  const uploadComparisonPdf = async (sheetId: string): Promise<string | null> => {
+    try {
+      const buf = getComparisonPdfBuffer();
+      if (!buf) return null;
+      const pdfBlob = new Blob([buf], { type: "application/pdf" });
+      const path = `comparison-sheets/${sheetId}/${rfq!.rfq_number}.pdf`;
+      const { error } = await supabase.storage
+        .from("cps-comparison-pdfs")
+        .upload(path, pdfBlob, { contentType: "application/pdf", upsert: true });
+      if (error) return null;
+      const { data } = supabase.storage.from("cps-comparison-pdfs").getPublicUrl(path);
+      await supabase.from("cps_comparison_sheets")
+        .update({ comparison_pdf_url: data.publicUrl }).eq("id", sheetId);
+      return data.publicUrl;
+    } catch {
+      return null;
+    }
   };
 
 
@@ -3012,6 +3041,12 @@ Rules:
             .update({ founder_approval_status: "pending" })
             .eq("id", poId);
 
+          /* upload comparison PDF for founder WhatsApp — non-fatal if it fails */
+          let comparisonPdfUrl: string | null = null;
+          try {
+            comparisonPdfUrl = await uploadComparisonPdf(sheet!.id);
+          } catch { /* non-fatal */ }
+
           /* fire webhook — financial values now always present, and BOTH founders
              receive their own approval links (the n8n workflow sends them
              separately, see CPS — Build 5 — Founder PO Approval JSON). */
@@ -3034,6 +3069,12 @@ Rules:
               bhaskar_whatsapp: bhaskarWA,
               dhruv_approval_link: dhruvLink,
               dhruv_whatsapp: dhruvWA,
+              comparison_pdf_url: comparisonPdfUrl ?? null,
+              rfq_number: rfq?.rfq_number ?? null,
+              total_quotes_received: sheet?.total_quotes_received ?? null,
+              potential_savings: sheet?.potential_savings ?? null,
+              reviewer_recommendation_reason: sheet?.reviewer_recommendation_reason ?? null,
+              item_descriptions: prLineItems.slice(0, 6).map((li) => li.description).join(", ") || null,
             }),
           });
         } catch {

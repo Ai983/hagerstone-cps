@@ -1307,6 +1307,21 @@ export default function PurchaseOrders() {
          flow shipped. uploadPoPdf upserts at the same path, so the URL stays stable. */
       const refreshedPdfUrl = await regeneratePoPdfAndUpload(poId, poNumber);
 
+      /* fetch comparison sheet context for enriched WhatsApp message */
+      let comparisonPdfUrl: string | null = null;
+      let comparisonExtra: { total_quotes_received?: number; potential_savings?: number; reviewer_recommendation_reason?: string; rfq_number?: string; item_descriptions?: string } = {};
+      if ((viewPo as any).comparison_sheet_id) {
+        const { data: cs } = await supabase
+          .from("cps_comparison_sheets")
+          .select("comparison_pdf_url,total_quotes_received,potential_savings,reviewer_recommendation_reason")
+          .eq("id", (viewPo as any).comparison_sheet_id)
+          .maybeSingle();
+        if (cs) {
+          comparisonPdfUrl = (cs as any).comparison_pdf_url ?? null;
+          comparisonExtra = cs as any;
+        }
+      }
+
       /* fire webhook */
       const resp = await fetch(webhookUrl, {
         method: "POST",
@@ -1326,6 +1341,11 @@ export default function PurchaseOrders() {
           bhaskar_whatsapp: bhaskarWA,
           dhruv_approval_link: dhruvLink,
           dhruv_whatsapp: dhruvWA,
+          comparison_pdf_url: comparisonPdfUrl ?? null,
+          rfq_number: (viewPo as any).rfq_number ?? null,
+          total_quotes_received: comparisonExtra.total_quotes_received ?? null,
+          potential_savings: comparisonExtra.potential_savings ?? null,
+          reviewer_recommendation_reason: comparisonExtra.reviewer_recommendation_reason ?? null,
         }),
       });
 
