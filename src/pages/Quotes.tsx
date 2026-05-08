@@ -117,6 +117,28 @@ const complianceBadge = (s: QuoteComplianceStatus) => {
   }
 };
 
+// Simple human-facing status — collapses parse_status/compliance into 3 states the user actually cares about.
+type SimpleQuoteStatus = "added" | "approved" | "not_approved";
+
+const simpleQuoteStatus = (q: { compliance_status: string | null }): SimpleQuoteStatus => {
+  if (q.compliance_status === "compliant") return "approved";
+  if (q.compliance_status === "non_compliant") return "not_approved";
+  return "added";
+};
+
+const simpleStatusConfig: Record<SimpleQuoteStatus, { label: string; badge: string }> = {
+  added:        { label: "Added",        badge: "bg-amber-100 text-amber-800 border-amber-200" },
+  approved:     { label: "Approved",     badge: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  not_approved: { label: "Not Approved", badge: "bg-red-100 text-red-800 border-red-200" },
+};
+
+// AI helper hint — shown only when AI couldn't extract data, so user knows to fill rates manually.
+const aiHint = (parseStatus: string): string | null => {
+  if (parseStatus === "failed")  return "AI couldn't read — fill manually";
+  if (parseStatus === "pending") return "AI still parsing…";
+  return null;
+};
+
 const confidenceTone = (c: number | null) => {
   const v = c ?? 0;
   if (v >= 80) return { cls: "text-green-700 bg-green-100 border-green-200", label: `${v.toFixed(0)}%`, kind: "good" };
@@ -213,7 +235,7 @@ export default function Quotes() {
   const debouncedSearch = useDebounce(search);
   const [rfqFilter, setRfqFilter] = useState<string>("all");
   // Single combined status filter — Hinglish labels mapped to underlying parse + compliance states
-  type StatusFilter = "all" | "review_karna_hai" | "ok_hai" | "reject_kiya" | "ai_pending";
+  type StatusFilter = "all" | "review_karna_hai" | "ok_hai" | "reject_kiya";
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sortFieldQ, setSortFieldQ] = useState("received_at");
   const [sortDirQ, setSortDirQ] = useState<"asc" | "desc">("desc");
@@ -415,16 +437,14 @@ export default function Quotes() {
     const list = quotes.filter((row) => {
       const matchesRfq = rfqFilter === "all" ? true : row.rfq_id === rfqFilter;
 
+      // Simple human-facing filter on compliance state (AI is just a helper, not a status).
       let matchesStatus = true;
       if (statusFilter === "review_karna_hai") {
-        matchesStatus = row.compliance_status === "pending"
-          && (row.parse_status === "parsed" || row.parse_status === "approved" || row.parse_status === "needs_review");
+        matchesStatus = row.compliance_status === "pending" || !row.compliance_status;
       } else if (statusFilter === "ok_hai") {
         matchesStatus = row.compliance_status === "compliant";
       } else if (statusFilter === "reject_kiya") {
         matchesStatus = row.compliance_status === "non_compliant";
-      } else if (statusFilter === "ai_pending") {
-        matchesStatus = row.parse_status === "pending" || row.parse_status === "failed";
       }
 
       return matchesRfq && matchesStatus;
@@ -439,18 +459,11 @@ export default function Quotes() {
 
   const stats = useMemo(() => {
     const total = quotes.length;
-    // "Needs Review" = quotes the AI has finished extracting but procurement hasn't
-    // made a compliance call on yet. parse_status === "needs_review" alone misses
-    // the much larger pile of parsed/approved quotes whose compliance is still pending.
-    const needsReview = quotes.filter((q) => {
-      if (q.parse_status === "needs_review") return true;
-      if (q.compliance_status === "pending" && (q.parse_status === "parsed" || q.parse_status === "approved")) return true;
-      return false;
-    }).length;
-    const compliant = quotes.filter((q) => q.compliance_status === "compliant").length;
-    const confValues = quotes.map((q) => q.parse_confidence).filter((x): x is number => typeof x === "number" && !Number.isNaN(x));
-    const avg = confValues.length ? confValues.reduce((a, b) => a + b, 0) / confValues.length : null;
-    return { total, needsReview, compliant, avgConfidence: avg as number | null };
+    // Simple human counts — only the procurement-facing compliance state matters.
+    const added = quotes.filter((q) => q.compliance_status === "pending" || !q.compliance_status).length;
+    const approved = quotes.filter((q) => q.compliance_status === "compliant").length;
+    const notApproved = quotes.filter((q) => q.compliance_status === "non_compliant").length;
+    return { total, added, approved, notApproved };
   }, [quotes]);
 
   // Group the filtered quotes by PR for the new grouped view
@@ -1564,37 +1577,43 @@ Rules:
           onClick={() => setStatusFilter("review_karna_hai")}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("review_karna_hai"); } }}
           className="cursor-pointer hover:bg-amber-50 transition-colors border-amber-200"
-          title="Inka decision lena baki hai — click karke filter karo"
+          title="Quotes jo abhi tak review nahi hue — click karo filter ke liye"
         >
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-amber-800">Review Karna Hai</CardTitle>
+            <CardTitle className="text-sm font-medium text-amber-800">Quote Added</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-amber-900">{stats.needsReview}</div>
+            <div className="text-2xl font-bold text-amber-900">{stats.added}</div>
           </CardContent>
         </Card>
         <Card
           role="button"
           tabIndex={0}
           onClick={() => setStatusFilter("ok_hai")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("ok_hai"); } }}
           className="cursor-pointer hover:bg-green-50 transition-colors border-green-200"
           title="Approve ho chuke quotes"
         >
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-green-800">OK Hai</CardTitle>
+            <CardTitle className="text-sm font-medium text-green-800">Approved</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-900">{stats.compliant}</div>
+            <div className="text-2xl font-bold text-green-900">{stats.approved}</div>
           </CardContent>
         </Card>
-        <Card>
+        <Card
+          role="button"
+          tabIndex={0}
+          onClick={() => setStatusFilter("reject_kiya")}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setStatusFilter("reject_kiya"); } }}
+          className="cursor-pointer hover:bg-red-50 transition-colors border-red-200"
+          title="Reject kiye gaye quotes"
+        >
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">AI Confidence</CardTitle>
+            <CardTitle className="text-sm font-medium text-red-800">Not Approved</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground">
-              {stats.total === 0 || stats.avgConfidence === null ? "—" : `${stats.avgConfidence.toFixed(0)}%`}
-            </div>
+            <div className="text-2xl font-bold text-red-900">{stats.notApproved}</div>
           </CardContent>
         </Card>
       </div>
@@ -1629,10 +1648,9 @@ Rules:
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Saare Status</SelectItem>
-            <SelectItem value="review_karna_hai">Review Karna Hai</SelectItem>
-            <SelectItem value="ok_hai">OK Hai</SelectItem>
-            <SelectItem value="reject_kiya">Reject Kiya</SelectItem>
-            <SelectItem value="ai_pending">AI Parse Pending</SelectItem>
+            <SelectItem value="review_karna_hai">Quote Added</SelectItem>
+            <SelectItem value="ok_hai">Approved</SelectItem>
+            <SelectItem value="reject_kiya">Not Approved</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -1757,16 +1775,15 @@ Rules:
                                     <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("total_landed_value")}>Total Landed {sortFieldQ==="total_landed_value"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                                     <TableHead>Payment Terms</TableHead>
                                     <TableHead>Warranty</TableHead>
-                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("parse_status")}>Parse Status {sortFieldQ==="parse_status"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
-                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("compliance_status")}>Compliance {sortFieldQ==="compliance_status"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                                    <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("compliance_status")}>Status {sortFieldQ==="compliance_status"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                                     <TableHead className="cursor-pointer select-none" onClick={() => toggleSortQ("received_at")}>Received {sortFieldQ==="received_at"?(sortDirQ==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                                     <TableHead className="text-right">Review</TableHead>
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                   {g.quotes.map((q) => {
-                                    const ps = parseStatusConfig[q.parse_status] ?? parseStatusConfig.pending;
-                                    const compBadge = complianceBadge(q.compliance_status);
+                                    const simple = simpleStatusConfig[simpleQuoteStatus(q)];
+                                    const ai = aiHint(q.parse_status);
                                     return (
                                       <TableRow key={q.id} className={(q.is_legacy || q.channel === "legacy") ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-muted/30"}>
                                         <TableCell className="font-mono text-primary">
@@ -1804,10 +1821,10 @@ Rules:
                                         <TableCell className="text-muted-foreground text-xs max-w-[150px] truncate">{q.payment_terms ?? "—"}</TableCell>
                                         <TableCell className="text-muted-foreground">{q.warranty_months ? `${q.warranty_months} mo` : "—"}</TableCell>
                                         <TableCell>
-                                          <Badge className={`text-xs border-0 ${ps.badge}`}>{ps.label}</Badge>
-                                        </TableCell>
-                                        <TableCell>
-                                          <Badge className={`text-xs border-0 ${compBadge}`}>{q.compliance_status}</Badge>
+                                          <div className="flex flex-col gap-0.5">
+                                            <Badge className={`text-xs border-0 w-fit ${simple.badge}`}>{simple.label}</Badge>
+                                            {ai && <span className="text-[10px] text-muted-foreground/70">{ai}</span>}
+                                          </div>
                                         </TableCell>
                                         <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{formatDateTime(q.received_at)}</TableCell>
                                         <TableCell className="text-right">
@@ -1845,7 +1862,8 @@ Rules:
         ) : (
           filteredQuotes.map((q) => {
             const rfq = rfqById[q.rfq_id];
-            const ps = parseStatusConfig[q.parse_status] ?? parseStatusConfig.pending;
+            const simple = simpleStatusConfig[simpleQuoteStatus(q)];
+            const ai = aiHint(q.parse_status);
             return (
               <Card key={q.id} className="p-4">
                 <div className="flex items-start justify-between gap-2">
@@ -1855,7 +1873,8 @@ Rules:
                     <div className="text-xs text-muted-foreground">{formatDateTime(q.received_at)}</div>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
-                    <Badge className={`text-xs border-0 ${ps.badge}`}>{ps.label}</Badge>
+                    <Badge className={`text-xs border-0 ${simple.badge}`}>{simple.label}</Badge>
+                    {ai && <span className="text-[10px] text-muted-foreground/70">{ai}</span>}
                     <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => openReview(q.id)}>Review</Button>
                   </div>
                 </div>

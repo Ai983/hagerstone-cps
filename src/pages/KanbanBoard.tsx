@@ -113,7 +113,7 @@ const STAGES: Array<{
   { key: "approval",      label: "5. Pending Approval",  icon: CheckCircle2,  color: "text-orange-700",  bg: "bg-orange-50",  border: "border-orange-200",  desc: "Awaiting founder" },
   { key: "finance",       label: "6. Sent to Finance",   icon: Landmark,      color: "text-teal-700",    bg: "bg-teal-50",    border: "border-teal-200",    desc: "Awaiting payment" },
   { key: "payment_done",  label: "7. Payment Done",      icon: Wallet,        color: "text-sky-700",     bg: "bg-sky-50",     border: "border-sky-200",     desc: "All payments complete" },
-  { key: "invoice_added", label: "8. Invoice Added",     icon: Receipt,       color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", desc: "Verify invoice & close" },
+  { key: "invoice_added", label: "8. Invoice Left for Review", icon: Receipt,       color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", desc: "Verify invoice & close" },
   { key: "closed",        label: "9. Closed",            icon: Archive,       color: "text-slate-700",   bg: "bg-slate-50",   border: "border-slate-200",   desc: "PR fully closed" },
   { key: "cancelled",     label: "Cancelled",            icon: XCircle,       color: "text-red-700",     bg: "bg-red-50",     border: "border-red-200",     desc: "Request cancelled" },
 ];
@@ -1091,7 +1091,7 @@ export default function KanbanBoard() {
                 break;
               case "finance":
                 currentlyWith = "Finance Team (payment kar rahi hai)";
-                stuckSince = c.finance_dispatch_sent_at;
+                stuckSince = c.finance_dispatch_sent_at ?? null;
                 break;
               case "payment_done":
                 currentlyWith = "Site Engineer (invoice upload pending)";
