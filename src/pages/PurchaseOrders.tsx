@@ -1337,6 +1337,19 @@ export default function PurchaseOrders() {
         }
       }
 
+      /* cumulative approved PO total for this project */
+      let totalProjectPoAmount: number | null = null;
+      if (viewPo.project_code) {
+        const { data: poTotals } = await supabase
+          .from("cps_purchase_orders")
+          .select("grand_total")
+          .eq("project_code", viewPo.project_code)
+          .in("status", ["approved", "sent", "acknowledged", "dispatched", "delivered", "closed"])
+          .neq("id", poId);
+        const sum = (poTotals ?? []).reduce((s: number, r: any) => s + (Number(r.grand_total) || 0), 0);
+        if (sum > 0) totalProjectPoAmount = sum;
+      }
+
       /* fire webhook */
       const resp = await fetch(webhookUrl, {
         method: "POST",
@@ -1346,6 +1359,9 @@ export default function PurchaseOrders() {
           po_id: poId,
           po_number: poNumber,
           supplier_name: supplierName,
+          site_name: viewPo.ship_to_address?.split("\n")[0] ?? null,
+          project_code: viewPo.project_code ?? null,
+          total_project_po_amount: totalProjectPoAmount,
           grand_total: viewPo.grand_total,
           gst_amount: viewPo.gst_amount,
           total_value: viewPo.total_value,

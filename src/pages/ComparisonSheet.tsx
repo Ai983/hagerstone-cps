@@ -3047,6 +3047,19 @@ Rules:
             comparisonPdfUrl = await uploadComparisonPdf(sheet!.id);
           } catch { /* non-fatal */ }
 
+          /* cumulative approved PO total for this project */
+          let totalProjectPoAmount: number | null = null;
+          if (prData?.project_code) {
+            const { data: poTotals } = await supabase
+              .from("cps_purchase_orders")
+              .select("grand_total")
+              .eq("project_code", prData.project_code)
+              .in("status", ["approved", "sent", "acknowledged", "dispatched", "delivered", "closed"])
+              .neq("id", poId);
+            const sum = (poTotals ?? []).reduce((s: number, r: any) => s + (Number(r.grand_total) || 0), 0);
+            if (sum > 0) totalProjectPoAmount = sum;
+          }
+
           /* fire webhook — financial values now always present, and BOTH founders
              receive their own approval links (the n8n workflow sends them
              separately, see CPS — Build 5 — Founder PO Approval JSON). */
@@ -3059,6 +3072,8 @@ Rules:
               po_number: poNumber,
               supplier_name: supplierName,
               site_name: shipToAddress?.split("\n")[0] ?? "",
+              project_code: prData?.project_code ?? null,
+              total_project_po_amount: totalProjectPoAmount,
               payment_terms: _paymentTerms,
               delivery_date: _deliveryDate,
               total_value: subTotal,

@@ -31,6 +31,8 @@ type PoSummary = {
   gst_amount: number | null;
   total_value: number | null;
   supplier_name: string | null;
+  project_code: string | null;
+  ship_to_address: string | null;
 };
 
 type PoLineItem = {
@@ -88,6 +90,7 @@ export default function ApprovePoPage() {
   const [tokenRow, setTokenRow] = useState<TokenRow | null>(null);
   const [po, setPo] = useState<PoSummary | null>(null);
   const [lineItems, setLineItems] = useState<PoLineItem[]>([]);
+  const [projectPoTotal, setProjectPoTotal] = useState<number | null>(null);
 
   /* form state */
   const [choice, setChoice] = useState<"approved" | "rejected" | null>(null);
@@ -116,7 +119,7 @@ export default function ApprovePoPage() {
       const [poRes, lineRes] = await Promise.all([
         supabase
           .from("cps_purchase_orders")
-          .select("po_number,payment_terms,delivery_date,grand_total,gst_amount,total_value,supplier_id")
+          .select("po_number,payment_terms,delivery_date,grand_total,gst_amount,total_value,supplier_id,project_code,ship_to_address")
           .eq("id", tok.po_id)
           .single(),
         supabase
@@ -140,8 +143,22 @@ export default function ApprovePoPage() {
         supplierName = (sup as { name: string } | null)?.name ?? null;
       }
 
-      setPo({ ...poData, supplier_name: supplierName });
+      const poSummary: PoSummary = { ...poData, supplier_name: supplierName };
+      setPo(poSummary);
       setLineItems((lineRes.data ?? []) as PoLineItem[]);
+
+      /* fetch cumulative approved PO total for this project */
+      if (poData.project_code) {
+        const { data: poTotals } = await supabase
+          .from("cps_purchase_orders")
+          .select("grand_total")
+          .eq("project_code", poData.project_code)
+          .in("status", ["approved", "sent", "acknowledged", "dispatched", "delivered", "closed"])
+          .neq("id", tok.po_id);
+        const total = (poTotals ?? []).reduce((s: number, r: any) => s + (Number(r.grand_total) || 0), 0);
+        if (total > 0) setProjectPoTotal(total);
+      }
+
       setLoading(false);
     })();
   }, [token]);
@@ -281,6 +298,8 @@ export default function ApprovePoPage() {
         {/* PO details */}
         <div className="rounded-xl border border-border bg-card p-5">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Order Details</p>
+          <InfoRow label="Project" value={po?.project_code} />
+          <InfoRow label="Site" value={po?.ship_to_address?.split("\n")[0] ?? null} />
           <InfoRow label="Supplier" value={po?.supplier_name} />
           <InfoRow label="Payment Terms" value={po?.payment_terms} />
           <InfoRow label="Delivery Date" value={po?.delivery_date} />
@@ -290,6 +309,12 @@ export default function ApprovePoPage() {
             <span className="text-sm font-semibold">Grand Total</span>
             <span className="text-base font-bold text-[hsl(20,50%,35%)]">{fmt(po?.grand_total)}</span>
           </div>
+          {projectPoTotal != null && (
+            <div className="flex justify-between items-baseline pt-2 mt-1 border-t border-dashed border-border/40">
+              <span className="text-xs text-muted-foreground">Previously approved POs (this project)</span>
+              <span className="text-sm font-semibold text-muted-foreground">{fmt(projectPoTotal)}</span>
+            </div>
+          )}
         </div>
 
         {/* Line items */}
