@@ -51,6 +51,8 @@ type LineItem = {
   colour_code: string;
   design_notes: string;
   sort_order: number;
+  source_type: 'boq' | 'consumable' | 'out_of_scope' | null;
+  out_of_scope_reason: string | null;
   _dirty: boolean;
   _deleted: boolean;
 };
@@ -140,6 +142,7 @@ export default function PRReview() {
   // edit dialog
   const [editOpen, setEditOpen] = useState(false);
   const [editPr, setEditPr] = useState<PR | null>(null);
+  const isEditable = editPr?.status === "pending" || editPr?.status === "duplicate_flagged";
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -243,7 +246,7 @@ export default function PRReview() {
     try {
       const { data, error } = await supabase
         .from("cps_pr_line_items")
-        .select("id,pr_id,item_id,description,quantity,unit,specs,preferred_brands,brand_make,colour_code,design_notes,sort_order")
+        .select("id,pr_id,item_id,description,quantity,unit,specs,preferred_brands,brand_make,colour_code,design_notes,sort_order,source_type,out_of_scope_reason")
         .eq("pr_id", pr.id)
         .order("sort_order", { ascending: true });
       if (error) throw error;
@@ -263,6 +266,8 @@ export default function PRReview() {
         colour_code: li.colour_code ?? "",
         design_notes: li.design_notes ?? "",
         sort_order: li.sort_order ?? 0,
+        source_type: li.source_type ?? null,
+        out_of_scope_reason: li.out_of_scope_reason ?? null,
         _dirty: false,
         _deleted: false,
       })));
@@ -300,6 +305,8 @@ export default function PRReview() {
         colour_code: "",
         design_notes: "",
         sort_order: prev.length,
+        source_type: null,
+        out_of_scope_reason: null,
         _dirty: true,
         _deleted: false,
       },
@@ -697,6 +704,11 @@ export default function PRReview() {
                   </Badge>
                 )}
               </DialogTitle>
+              {editPr && !isEditable && (
+                <div className="mt-3 px-3 py-2 rounded bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+                  This PR is <strong>{editPr.status.replace(/_/g, " ")}</strong> — line items are read-only and cannot be changed.
+                </div>
+              )}
               {editPr && (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-3 text-sm">
                   <div><span className="text-muted-foreground">Site:</span> <span className="font-medium">{editPr.project_site}</span></div>
@@ -745,15 +757,29 @@ export default function PRReview() {
                           visibleItems.map((li, visIdx) => {
                             const idx = lineItems.indexOf(li);
                             return (
-                              <TableRow key={idx} className={li._dirty ? "bg-amber-50/40" : ""}>
+                              <TableRow key={idx} className={li.source_type === 'out_of_scope' ? "bg-amber-50 border-l-4 border-l-amber-400" : li._dirty ? "bg-amber-50/40" : ""}>
                                 <TableCell className="text-xs text-muted-foreground font-mono">{visIdx + 1}</TableCell>
                                 <TableCell>
-                                  <Input
-                                    className="h-8 text-sm min-w-[160px]"
-                                    value={li.description}
-                                    onChange={(e) => updateItem(idx, { description: e.target.value })}
-                                    placeholder="Material name / description"
-                                  />
+                                  <div className="space-y-1">
+                                    {li.source_type && li.source_type !== 'out_of_scope' && (
+                                      <span className={`inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded ${li.source_type === 'boq' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700'}`}>
+                                        {li.source_type === 'boq' ? '✓ BOQ' : 'Basic'}
+                                      </span>
+                                    )}
+                                    {li.source_type === 'out_of_scope' && (
+                                      <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-100 text-orange-800">⚠ Out of Scope</span>
+                                    )}
+                                    <Input
+                                      className="h-8 text-sm min-w-[160px]"
+                                      value={li.description}
+                                      onChange={(e) => isEditable && updateItem(idx, { description: e.target.value })}
+                                      readOnly={!isEditable}
+                                      placeholder="Material name / description"
+                                    />
+                                    {li.source_type === 'out_of_scope' && li.out_of_scope_reason && (
+                                      <p className="text-[11px] text-amber-700 italic">{li.out_of_scope_reason}</p>
+                                    )}
+                                  </div>
                                 </TableCell>
                                 <TableCell>
                                   <Input
@@ -762,14 +788,16 @@ export default function PRReview() {
                                     step="0.01"
                                     className="h-8 text-sm w-20"
                                     value={li.quantity}
-                                    onChange={(e) => updateItem(idx, { quantity: e.target.value })}
+                                    onChange={(e) => isEditable && updateItem(idx, { quantity: e.target.value })}
+                                    readOnly={!isEditable}
                                   />
                                 </TableCell>
                                 <TableCell>
                                   <Input
                                     className="h-8 text-sm w-24"
                                     value={li.unit}
-                                    onChange={(e) => updateItem(idx, { unit: e.target.value })}
+                                    onChange={(e) => isEditable && updateItem(idx, { unit: e.target.value })}
+                                    readOnly={!isEditable}
                                     placeholder="Nos / Rft / Sqft"
                                   />
                                 </TableCell>
@@ -778,7 +806,8 @@ export default function PRReview() {
                                     rows={1}
                                     className="text-xs min-w-[130px] resize-none"
                                     value={li.specs}
-                                    onChange={(e) => updateItem(idx, { specs: e.target.value })}
+                                    onChange={(e) => isEditable && updateItem(idx, { specs: e.target.value })}
+                                    readOnly={!isEditable}
                                     placeholder="Size, grade, standard…"
                                   />
                                 </TableCell>
@@ -786,15 +815,17 @@ export default function PRReview() {
                                   <Input
                                     className="h-8 text-sm w-32"
                                     value={li.preferred_brands}
-                                    onChange={(e) => updateItem(idx, { preferred_brands: e.target.value })}
+                                    onChange={(e) => isEditable && updateItem(idx, { preferred_brands: e.target.value })}
+                                    readOnly={!isEditable}
                                     placeholder="Brand A, Brand B"
                                   />
                                 </TableCell>
                                 <TableCell>
                                   <Input
-                                    className={`h-8 text-sm w-32 ${!li.brand_make.trim() ? "border-destructive/60 focus-visible:border-destructive" : ""}`}
+                                    className={`h-8 text-sm w-32 ${isEditable && !li.brand_make.trim() ? "border-destructive/60 focus-visible:border-destructive" : ""}`}
                                     value={li.brand_make}
-                                    onChange={(e) => updateItem(idx, { brand_make: e.target.value })}
+                                    onChange={(e) => isEditable && updateItem(idx, { brand_make: e.target.value })}
+                                    readOnly={!isEditable}
                                     placeholder="Required"
                                   />
                                 </TableCell>
@@ -862,9 +893,11 @@ export default function PRReview() {
                     </Table>
                   </div>
 
-                  <Button variant="outline" size="sm" className="mt-3" onClick={addItem}>
-                    <Plus className="h-3.5 w-3.5 mr-1.5" /> Add Line Item
-                  </Button>
+                  {isEditable && (
+                    <Button variant="outline" size="sm" className="mt-3" onClick={addItem}>
+                      <Plus className="h-3.5 w-3.5 mr-1.5" /> Add Line Item
+                    </Button>
+                  )}
 
                   <p className="text-xs text-muted-foreground mt-3">
                     Note: Requestor details, project code, required-by date and PR status are read-only.
@@ -919,13 +952,15 @@ export default function PRReview() {
               <Button variant="outline" onClick={() => closeReviewDialog(false)} disabled={saving || creatingRfq}>
                 Close
               </Button>
-              <Button variant="outline" onClick={handleSave} disabled={saving || creatingRfq || loadingItems}>
-                {saving ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</>
-                ) : (
-                  <><Save className="h-4 w-4 mr-2" /> Save Changes</>
-                )}
-              </Button>
+              {isEditable && (
+                <Button variant="outline" onClick={handleSave} disabled={saving || creatingRfq || loadingItems}>
+                  {saving ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving…</>
+                  ) : (
+                    <><Save className="h-4 w-4 mr-2" /> Save Changes</>
+                  )}
+                </Button>
+              )}
             </DialogFooter>
           </div>
         </DialogContent>
