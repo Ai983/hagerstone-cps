@@ -1633,8 +1633,8 @@ Rules:
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Saare Status</SelectItem>
-            <SelectItem value="review_karna_hai">Quote Added</SelectItem>
             <SelectItem value="ok_hai">Approved</SelectItem>
+            <SelectItem value="review_karna_hai">Approve Karne Baaki</SelectItem>
             <SelectItem value="reject_kiya">Not Approved</SelectItem>
           </SelectContent>
         </Select>
