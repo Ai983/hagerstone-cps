@@ -986,7 +986,7 @@ export default function WorkOrders() {
               <div className="space-y-2">
                 <Label>Pick existing contractor / supplier</Label>
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <Select value={w_supplierId} onValueChange={onSelectExistingSupplier} disabled={w_isNewVendor}>
+                  <Select value={w_supplierId} onValueChange={onSelectExistingSupplier}>
                     <SelectTrigger className="flex-1"><SelectValue placeholder="Search and select..." /></SelectTrigger>
                     <SelectContent>
                       {suppliers.map((s) => (
