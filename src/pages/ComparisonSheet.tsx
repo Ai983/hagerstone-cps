@@ -2871,6 +2871,16 @@ Rules:
         if (poLiErr) throw poLiErr;
       }
 
+      // The winning quote(s) for this RFQ + supplier are now effectively approved —
+      // a PO has been generated from them. Mark them compliant so they no longer
+      // sit in "Approve Karne Baaki" on the Quotes page.
+      await supabase
+        .from("cps_quotes")
+        .update({ compliance_status: "compliant" })
+        .eq("rfq_id", rfq.id)
+        .eq("supplier_id", supplierId)
+        .neq("compliance_status", "compliant");
+
       await supabase.from("cps_audit_log").insert([
         {
           action_type: "PO_CREATED",
