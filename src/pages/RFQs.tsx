@@ -3,7 +3,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -146,6 +146,7 @@ const isoLocalDateTimeMin = (daysFromNow: number) => {
 export default function RFQs() {
   const { user, canCreateRFQ } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [loading, setLoading] = useState(true);
   const [rfqs, setRfqs] = useState<Rfq[]>([]);
@@ -462,6 +463,22 @@ export default function RFQs() {
     fetchRFQs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Deep-link support: if URL has ?id=X, auto-open the review dialog for that RFQ once data is loaded.
+  // Used by Kanban "Open RFQ" button so it lands on a specific record, not just the listing.
+  useEffect(() => {
+    const targetId = searchParams.get("id");
+    if (!targetId || rfqs.length === 0) return;
+    const match = rfqs.find((r) => r.id === targetId);
+    if (match) {
+      void openReview(match);
+      // Clear the param so refresh / navigation away doesn't re-trigger
+      const next = new URLSearchParams(searchParams);
+      next.delete("id");
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rfqs, searchParams]);
 
   const toggleSortRfq = (field: string) => {
     if (sortFieldRfq === field) setSortDirRfq((d) => (d === "asc" ? "desc" : "asc"));

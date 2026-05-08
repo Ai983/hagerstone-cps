@@ -363,12 +363,27 @@ export default function PurchaseOrders() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     const s = searchParams.get("status");
     if (s) setStatusFilter(s);
   }, [searchParams]);
+
+  // Deep-link support: if URL has ?id=X, auto-open the PO view dialog once rows are loaded.
+  // Used by Kanban "Open PO" button so it lands on a specific record, not just the listing.
+  useEffect(() => {
+    const targetId = searchParams.get("id");
+    if (!targetId || rows.length === 0) return;
+    const match = rows.find((r) => r.id === targetId);
+    if (match) {
+      void openView(match.id);
+      const next = new URLSearchParams(searchParams);
+      next.delete("id");
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, searchParams]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(0);

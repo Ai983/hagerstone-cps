@@ -51,8 +51,10 @@ type PRCard = {
   stage: StageKey;
   priority: Priority;
   is_duplicate: boolean;
+  rfq_id?: string;
   rfq_number?: string;
   rfq_status?: string;
+  rfq_created_by_name?: string | null;
   quotes_count?: number;
   comparison_status?: string | null;
   po_id?: string;
@@ -201,6 +203,17 @@ export default function KanbanBoard() {
   const [rejectMode, setRejectMode] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
 
+  // PR detail dialog (opens when any kanban card is clicked)
+  type PrLineItem = { description: string; quantity: number | null; unit: string | null; specs: string | null; brand_make?: string | null };
+  type StageEvent = { action_type: string; logged_at: string; user_name: string | null; description: string | null; entity_number: string | null };
+  const [detailCard, setDetailCard] = useState<PRCard | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailLineItems, setDetailLineItems] = useState<PrLineItem[]>([]);
+  const [detailStageEvents, setDetailStageEvents] = useState<StageEvent[]>([]);
+  const [detailReviewer, setDetailReviewer] = useState<{ name: string; status: string; at: string | null } | null>(null);
+  const [detailFounder, setDetailFounder] = useState<{ name: string; sentAt: string | null } | null>(null);
+  const [detailQuotesReceived, setDetailQuotesReceived] = useState<Array<{ supplier_name: string | null; submitted_at: string | null; total: number | null }>>([]);
+
   const canVerifyAndClose =
     user?.role === "procurement_head" ||
     user?.role === "procurement_executive" ||
@@ -326,7 +339,6 @@ export default function KanbanBoard() {
 
       const [
         { data: lineItems },
-        { data: usersData },
         { data: rfqsData },
         { data: quotesData },
         { data: compSheets },
@@ -335,14 +347,21 @@ export default function KanbanBoard() {
         { data: suppliersData },
       ] = await Promise.all([
         supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", prIds),
-        supabase.from("cps_users").select("id, name").in("id", Array.from(new Set(prRows.map((p) => p.requested_by).filter(Boolean)))),
-        supabase.from("cps_rfqs").select("id, rfq_number, pr_id, status").in("pr_id", prIds),
+        supabase.from("cps_rfqs").select("id, rfq_number, pr_id, status, created_by").in("pr_id", prIds),
         supabase.from("cps_quotes").select("id, rfq_id, parse_status"),
         supabase.from("cps_comparison_sheets").select("rfq_id, manual_review_status"),
         supabase.from("cps_purchase_orders").select("id, po_number, pr_id, supplier_id, status, grand_total, founder_approval_status, finance_dispatch_sent_at, sent_at, finance_paid_at"),
         supabase.from("cps_grns").select("po_id"),
         supabase.from("cps_suppliers").select("id, name"),
       ]);
+
+      // Resolve user names for both PR requesters AND RFQ creators in one query
+      const userIdsToFetch = new Set<string>();
+      prRows.forEach((p) => { if (p.requested_by) userIdsToFetch.add(p.requested_by); });
+      ((rfqsData ?? []) as any[]).forEach((r) => { if (r.created_by) userIdsToFetch.add(r.created_by); });
+      const { data: usersData } = userIdsToFetch.size > 0
+        ? await supabase.from("cps_users").select("id, name").in("id", Array.from(userIdsToFetch))
+        : { data: [] };
 
       // Fetch payment schedules + invoices per PO
       const poIdList = ((posData ?? []) as any[]).map((p) => p.id);
@@ -466,8 +485,10 @@ export default function KanbanBoard() {
           stage,
           priority: ((pr.priority as Priority) ?? "normal") as Priority,
           is_duplicate: !!pr.duplicate_of_pr_id,
+          rfq_id: rfq?.id,
           rfq_number: rfq?.rfq_number,
           rfq_status: rfq?.status,
+          rfq_created_by_name: rfq?.created_by ? (userMap[rfq.created_by] ?? null) : null,
           quotes_count: qCount,
           comparison_status: compStatus,
           po_id: po?.id,
@@ -554,10 +575,137 @@ export default function KanbanBoard() {
     return { totalActive, totalClosed, totalValue, avgAge };
   }, [filtered]);
 
-  const navigateCard = (c: PRCard) => {
-    if (c.po_number) navigate("/purchase-orders");
-    else if (c.rfq_number) navigate("/rfqs");
-    else navigate("/requisitions");
+  const closeDetailDialog = () => {
+    setDetailCard(null);
+    setDetailLineItems([]);
+    setDetailStageEvents([]);
+    setDetailReviewer(null);
+    setDetailFounder(null);
+    setDetailQuotesReceived([]);
+  };
+
+  const openDetailDialog = async (c: PRCard) => {
+    setDetailCard(c);
+    setDetailLoading(true);
+    setDetailLineItems([]);
+    setDetailStageEvents([]);
+    setDetailReviewer(null);
+    setDetailFounder(null);
+    setDetailQuotesReceived([]);
+
+    try {
+      // 1. PR line items
+      const { data: items } = await supabase
+        .from("cps_pr_line_items")
+        .select("description, quantity, unit, specs, brand_make, sort_order")
+        .eq("pr_id", c.pr_id)
+        .order("sort_order", { ascending: true });
+      setDetailLineItems(((items ?? []) as any[]) as PrLineItem[]);
+
+      // 2. Comparison reviewer (if RFQ exists)
+      let rfqId: string | null = null;
+      if (c.rfq_number) {
+        const { data: rfqRow } = await supabase
+          .from("cps_rfqs")
+          .select("id")
+          .eq("rfq_number", c.rfq_number)
+          .maybeSingle();
+        rfqId = rfqRow?.id ?? null;
+      }
+      if (rfqId) {
+        const { data: comp } = await supabase
+          .from("cps_comparison_sheets")
+          .select("id, manual_review_status, approved_by, approved_at, frozen_by, frozen_at")
+          .eq("rfq_id", rfqId)
+          .maybeSingle();
+        if (comp) {
+          const reviewerStatus = (comp as any).manual_review_status ?? "pending";
+          const reviewerAt = (comp as any).approved_at ?? (comp as any).frozen_at ?? null;
+          // approved_by is set when comparison was sent for approval; frozen_by is the last actor.
+          // For "review" stages, fall back to the most recent audit-log actor who touched this sheet.
+          let reviewerId = (comp as any).approved_by ?? (comp as any).frozen_by ?? null;
+          let reviewerAtAudit: string | null = null;
+          if (!reviewerId && (comp as any).id) {
+            const { data: lastEvt } = await supabase
+              .from("cps_audit_log")
+              .select("user_id, logged_at, user_name")
+              .eq("entity_id", (comp as any).id)
+              .in("action_type", ["COMPARISON_REVIEWED", "COMPARISON_REVERTED_TO_REVIEW", "COMPARISON_SHEET_GENERATED", "COMPARISON_SENT_TO_FOUNDER"])
+              .order("logged_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (lastEvt) {
+              reviewerId = (lastEvt as any).user_id ?? null;
+              reviewerAtAudit = (lastEvt as any).logged_at ?? null;
+              if (!reviewerId && (lastEvt as any).user_name) {
+                setDetailReviewer({ name: (lastEvt as any).user_name, status: reviewerStatus, at: reviewerAtAudit });
+              }
+            }
+          }
+          if (reviewerId) {
+            const { data: u } = await supabase.from("cps_users").select("name").eq("id", reviewerId).maybeSingle();
+            if (u?.name) setDetailReviewer({ name: u.name, status: reviewerStatus, at: reviewerAt ?? reviewerAtAudit });
+          }
+        }
+
+        // Quotes received for this RFQ
+        const { data: quoteRows } = await supabase
+          .from("cps_quotes")
+          .select("supplier_id, total_landed_value, total_quoted_value, created_at, blind_quote_ref")
+          .eq("rfq_id", rfqId)
+          .order("created_at", { ascending: true });
+        if (quoteRows && quoteRows.length > 0) {
+          const supIds = Array.from(new Set(quoteRows.map((q: any) => q.supplier_id).filter(Boolean)));
+          const supMap: Record<string, string> = {};
+          if (supIds.length > 0) {
+            const { data: sups } = await supabase.from("cps_suppliers").select("id, name").in("id", supIds);
+            (sups ?? []).forEach((s: any) => { supMap[s.id] = s.name; });
+          }
+          setDetailQuotesReceived(
+            (quoteRows as any[]).map((q) => ({
+              supplier_name: q.supplier_id ? (supMap[q.supplier_id] ?? null) : null,
+              submitted_at: q.created_at ?? null,
+              total: q.total_landed_value ?? q.total_quoted_value ?? null,
+            }))
+          );
+        }
+      }
+
+      // 3. Founder approval (if PO exists and approval has been sent)
+      if (c.po_id) {
+        const { data: tokens } = await supabase
+          .from("cps_po_founder_approval_tokens")
+          .select("founder_name, created_at, used_at, response")
+          .eq("po_id", c.po_id)
+          .order("created_at", { ascending: false })
+          .limit(1);
+        if (tokens && tokens.length > 0) {
+          setDetailFounder({ name: (tokens[0] as any).founder_name ?? "—", sentAt: (tokens[0] as any).created_at ?? null });
+        }
+      }
+
+      // 4. Stage timeline from audit log (PR + PO entity events)
+      const ids = [c.pr_id, c.po_id].filter(Boolean) as string[];
+      if (ids.length > 0) {
+        const { data: events } = await supabase
+          .from("cps_audit_log")
+          .select("action_type, logged_at, user_name, description, entity_number, entity_id")
+          .in("entity_id", ids)
+          .in("action_type", [
+            "PR_CREATED", "PR_VALIDATED", "RFQ_DISPATCHED", "QUOTE_REVIEWED",
+            "QUOTE_SUBMITTED_VIA_PORTAL", "COMPARISON_SENT_FOR_APPROVAL",
+            "PO_CREATED", "FOUNDER_APPROVAL_SENT", "PO_APPROVED",
+            "PO_PAYMENT_TERMS_SET", "INVOICE_UPLOADED", "INVOICE_VERIFIED_PR_CLOSED",
+            "PR_CANCELLED", "PO_REJECTED",
+          ])
+          .order("logged_at", { ascending: true });
+        setDetailStageEvents((events ?? []) as StageEvent[]);
+      }
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to load PR details");
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
   if (!user) return null;
@@ -665,7 +813,7 @@ export default function KanbanBoard() {
                       <button
                         key={c.pr_id}
                         type="button"
-                        onClick={() => navigateCard(c)}
+                        onClick={() => openDetailDialog(c)}
                         className="w-full text-left rounded-md border border-border bg-white hover:shadow-md hover:border-primary/50 transition-all p-3 space-y-1.5"
                       >
                         <div className="flex items-center justify-between gap-2">
@@ -716,13 +864,20 @@ export default function KanbanBoard() {
 
                         {/* Stage-specific details */}
                         {c.rfq_number && (
-                          <div className="text-[11px] text-muted-foreground flex items-center gap-1 pt-1 border-t border-dashed border-border/50">
-                            <Send className="h-2.5 w-2.5 shrink-0" />
-                            <span className="font-mono truncate">{c.rfq_number}</span>
-                            {c.quotes_count != null && c.quotes_count > 0 && (
-                              <span className="ml-auto bg-violet-100 text-violet-700 px-1 rounded text-[10px]">
-                                {c.quotes_count} qt
-                              </span>
+                          <div className="pt-1 border-t border-dashed border-border/50 space-y-0.5">
+                            <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+                              <Send className="h-2.5 w-2.5 shrink-0" />
+                              <span className="font-mono truncate">{c.rfq_number}</span>
+                              {c.quotes_count != null && c.quotes_count > 0 && (
+                                <span className="ml-auto bg-violet-100 text-violet-700 px-1 rounded text-[10px]">
+                                  {c.quotes_count} qt
+                                </span>
+                              )}
+                            </div>
+                            {c.rfq_created_by_name && (
+                              <div className="text-[10px] text-muted-foreground/80 pl-3.5 truncate">
+                                RFQ by {c.rfq_created_by_name}
+                              </div>
                             )}
                           </div>
                         )}
@@ -886,6 +1041,351 @@ export default function KanbanBoard() {
               </>
             )}
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* PR Detail Dialog — opens on Kanban card click. Shows full PR journey + who's responsible */}
+      <Dialog open={!!detailCard} onOpenChange={(open) => { if (!open) closeDetailDialog(); }}>
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-3xl max-h-[90vh] overflow-y-auto p-0 [&>button]:right-6 [&>button]:top-5 [&>button]:z-20 [&>button]:bg-background/80 [&>button]:rounded-full [&>button]:p-1">
+          {detailCard && (() => {
+            const c = detailCard;
+            const stageCfg = STAGES.find((s) => s.key === c.stage);
+            const StageIcon = stageCfg?.icon ?? FileText;
+            const fmtDt = (iso: string | null | undefined) => {
+              if (!iso) return "—";
+              const d = new Date(iso);
+              if (Number.isNaN(d.getTime())) return "—";
+              return d.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+            };
+            const fmtAgo = (iso: string | null | undefined) => {
+              if (!iso) return null;
+              const days = daysBetween(iso);
+              if (days === 0) return "today";
+              if (days === 1) return "1 day ago";
+              return `${days} days ago`;
+            };
+
+            // "Currently with" — who needs to act next
+            let currentlyWith = "—";
+            let stuckSince: string | null = null;
+            switch (c.stage) {
+              case "pr_raised":
+                currentlyWith = "Procurement Executive (RFQ banana baki hai)";
+                stuckSince = c.created_at;
+                break;
+              case "rfq_sent":
+                currentlyWith = `Vendors (${c.quotes_count ?? 0} quotes mile, baaki ka wait hai)`;
+                break;
+              case "quotes_in":
+                currentlyWith = "Procurement Executive (comparison sheet review karni hai)";
+                break;
+              case "review":
+                currentlyWith = detailReviewer
+                  ? `${detailReviewer.name} (Procurement Executive — review chal raha hai)`
+                  : "Procurement Executive (comparison review pending)";
+                break;
+              case "approval":
+                currentlyWith = detailFounder
+                  ? `${detailFounder.name} (Founder approval pending — sent ${fmtAgo(detailFounder.sentAt) ?? "recently"})`
+                  : "Founder (PO approval pending)";
+                break;
+              case "finance":
+                currentlyWith = "Finance Team (payment kar rahi hai)";
+                stuckSince = c.finance_dispatch_sent_at;
+                break;
+              case "payment_done":
+                currentlyWith = "Site Engineer (invoice upload pending)";
+                break;
+              case "invoice_added":
+                currentlyWith = "Procurement Executive (invoice verify karke close karna hai)";
+                break;
+              case "closed":
+                currentlyWith = "—  (PR fully closed)";
+                break;
+              case "cancelled":
+                currentlyWith = "—  (PR cancelled)";
+                break;
+            }
+
+            const currentStageIdx = STAGES.findIndex((s) => s.key === c.stage);
+
+            return (
+              <>
+                {/* Header */}
+                <DialogHeader className="pl-4 pr-12 lg:pl-6 lg:pr-14 pt-4 lg:pt-6 pb-3 border-b sticky top-0 bg-background z-10">
+                  <DialogTitle className="flex items-center gap-2 flex-wrap">
+                    <StageIcon className={`h-5 w-5 ${stageCfg?.color ?? "text-muted-foreground"}`} />
+                    <span className="font-mono text-primary">{c.pr_number}</span>
+                    <Badge className={`text-xs border-0 ${stageCfg?.bg ?? "bg-muted"} ${stageCfg?.color ?? "text-muted-foreground"}`}>
+                      {stageCfg?.label ?? c.stage}
+                    </Badge>
+                    {c.priority !== "normal" && (
+                      <Badge variant="outline" className={`text-xs ${priorityCardStyle[c.priority]}`}>
+                        {priorityLabel[c.priority]} {c.priority}
+                      </Badge>
+                    )}
+                    {c.is_duplicate && <Badge variant="outline" className="text-xs bg-amber-100 text-amber-700">⚠ Possible duplicate</Badge>}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {c.project_code ?? c.project_site} · {c.items_count} {c.items_count === 1 ? "item" : "items"} · raised {fmtAgo(c.created_at)}
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="px-4 lg:px-6 py-4 space-y-5">
+                  {/* Currently With */}
+                  <div className="rounded-lg border-2 border-primary/30 bg-primary/5 p-3 space-y-1">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-primary">Currently With</div>
+                    <div className="text-sm font-medium text-foreground">{currentlyWith}</div>
+                    {stuckSince && (
+                      <div className="text-xs text-muted-foreground">Stuck since {fmtDt(stuckSince)} ({fmtAgo(stuckSince)})</div>
+                    )}
+                    {detailReviewer && c.stage === "review" && (
+                      <div className="text-xs text-muted-foreground">
+                        Review status: <span className="font-medium">{detailReviewer.status.replace(/_/g, " ")}</span>
+                        {detailReviewer.at && <> · last update {fmtAgo(detailReviewer.at)}</>}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* PR Quick Info */}
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <div className="text-[11px] text-muted-foreground">Project Site</div>
+                      <div className="font-medium">{c.project_site}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-muted-foreground">Project Code</div>
+                      <div className="font-medium">{c.project_code ?? "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-muted-foreground">Raised By</div>
+                      <div className="font-medium">{c.requested_by_name}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-muted-foreground">Required By</div>
+                      <div className="font-medium">{c.required_by ? fmtDate(c.required_by) : "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-muted-foreground">Raised On</div>
+                      <div className="font-medium">{fmtDt(c.created_at)}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] text-muted-foreground">Age in Pipeline</div>
+                      <div className="font-medium">{c.age_days} days</div>
+                    </div>
+                  </div>
+
+                  {/* Stage Progress */}
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Pipeline Progress</div>
+                    <div className="rounded-md border bg-background p-3 space-y-1.5">
+                      {STAGES.filter((s) => s.key !== "cancelled").map((s, idx) => {
+                        const isPast = c.stage !== "cancelled" && idx < currentStageIdx;
+                        const isCurrent = s.key === c.stage;
+                        const isFuture = c.stage !== "cancelled" && idx > currentStageIdx;
+                        const Ico = s.icon;
+                        return (
+                          <div key={s.key} className="flex items-center gap-2 text-sm">
+                            {isPast && <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />}
+                            {isCurrent && <Ico className={`h-4 w-4 ${s.color} shrink-0`} />}
+                            {isFuture && <div className="h-4 w-4 rounded-full border-2 border-muted-foreground/20 shrink-0" />}
+                            <span className={isCurrent ? "font-semibold text-foreground" : isPast ? "text-muted-foreground" : "text-muted-foreground/50"}>
+                              {s.label}
+                            </span>
+                            {isCurrent && <Badge className={`ml-auto text-[10px] border-0 ${s.bg} ${s.color}`}>Current</Badge>}
+                          </div>
+                        );
+                      })}
+                      {c.stage === "cancelled" && (
+                        <div className="flex items-center gap-2 text-sm pt-2 border-t">
+                          <XCircle className="h-4 w-4 text-red-600" />
+                          <span className="font-semibold text-red-700">Cancelled</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Line Items */}
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Items Being Procured ({detailLineItems.length})</div>
+                    <div className="rounded-md border bg-background divide-y">
+                      {detailLoading ? (
+                        <div className="p-3 space-y-2">
+                          <Skeleton className="h-4 w-3/4" />
+                          <Skeleton className="h-4 w-1/2" />
+                        </div>
+                      ) : detailLineItems.length === 0 ? (
+                        <div className="p-3 text-xs text-muted-foreground">No line items</div>
+                      ) : (
+                        detailLineItems.map((li, i) => (
+                          <div key={i} className="p-2.5 text-sm">
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="font-medium flex-1 min-w-0">{i + 1}. {li.description}</span>
+                              <span className="text-muted-foreground shrink-0 font-mono text-xs">
+                                {li.quantity ?? "—"} {li.unit ?? ""}
+                              </span>
+                            </div>
+                            {(li.brand_make || li.specs) && (
+                              <div className="text-xs text-muted-foreground mt-0.5 ml-4">
+                                {li.brand_make && <span>Brand: {li.brand_make}</span>}
+                                {li.brand_make && li.specs && <span> · </span>}
+                                {li.specs && <span>{li.specs}</span>}
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* RFQ Section */}
+                  {c.rfq_number && (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">RFQ Status</div>
+                      <div className="rounded-md border bg-background p-3 space-y-2 text-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <div className="font-mono text-primary font-medium">{c.rfq_number}</div>
+                            <div className="text-xs text-muted-foreground capitalize">Status: {c.rfq_status?.replace(/_/g, " ") ?? "—"}</div>
+                            {c.rfq_created_by_name && (
+                              <div className="text-xs text-muted-foreground">
+                                Created by <span className="font-medium text-foreground">{c.rfq_created_by_name}</span>
+                              </div>
+                            )}
+                          </div>
+                          <Badge variant="outline" className="text-xs">{c.quotes_count ?? 0} quotes</Badge>
+                        </div>
+                        {c.comparison_status && (
+                          <div className="text-xs">
+                            <span className="text-muted-foreground">Comparison sheet: </span>
+                            <span className="font-medium capitalize">{c.comparison_status.replace(/_/g, " ")}</span>
+                          </div>
+                        )}
+                        {detailQuotesReceived.length > 0 && (
+                          <div className="space-y-1 pt-1 border-t">
+                            <div className="text-[11px] font-semibold text-muted-foreground">Quotes received:</div>
+                            {detailQuotesReceived.map((q, i) => (
+                              <div key={i} className="text-xs flex items-center justify-between gap-2">
+                                <span className="truncate">{q.supplier_name ?? "Unknown vendor"}</span>
+                                <span className="text-muted-foreground shrink-0">
+                                  {fmtAgo(q.submitted_at) ?? "—"}{q.total != null && ` · ${fmtCurrency(q.total)}`}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* PO Section */}
+                  {c.po_number && (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Purchase Order</div>
+                      <div className="rounded-md border bg-background p-3 space-y-1.5 text-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-mono text-primary font-medium">{c.po_number}</div>
+                          <span className="font-semibold">{fmtCurrency(c.po_grand_total)}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Supplier: <span className="font-medium text-foreground">{c.supplier_name ?? "—"}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground capitalize">
+                          PO status: <span className="font-medium text-foreground">{c.po_status?.replace(/_/g, " ") ?? "—"}</span>
+                        </div>
+                        {c.founder_approval_status && (
+                          <div className="text-xs text-muted-foreground">
+                            Founder approval: <span className="font-medium text-foreground capitalize">{c.founder_approval_status}</span>
+                            {detailFounder && <> · sent to {detailFounder.name} ({fmtAgo(detailFounder.sentAt)})</>}
+                          </div>
+                        )}
+                        {c.finance_dispatch_sent_at && (
+                          <div className="text-xs text-muted-foreground">
+                            Finance: sent {fmtAgo(c.finance_dispatch_sent_at)}
+                          </div>
+                        )}
+                        {(c.payments_total ?? 0) > 0 && (
+                          <div className="text-xs text-muted-foreground">
+                            Payments: <span className={`font-medium ${c.all_paid ? "text-green-700" : "text-foreground"}`}>
+                              {c.all_paid ? "All paid" : `${c.payments_paid}/${c.payments_total} paid`}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Invoice Section */}
+                  {c.invoice_number && (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Invoice</div>
+                      <div className="rounded-md border bg-background p-3 space-y-1 text-sm">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-mono font-medium">{c.invoice_number}</div>
+                          <span className="font-semibold">{fmtCurrency(c.invoice_amount)}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground capitalize">
+                          Status: <span className="font-medium text-foreground">{c.invoice_status?.replace(/_/g, " ") ?? "—"}</span>
+                        </div>
+                        {c.invoice_status === "rejected" && c.invoice_rejection_reason && (
+                          <div className="text-xs text-red-700">Rejected: {c.invoice_rejection_reason}</div>
+                        )}
+                        {c.invoice_file_url && (
+                          <a href={c.invoice_file_url} target="_blank" rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs text-primary hover:underline inline-flex items-center gap-1">
+                            View invoice file <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Activity Timeline (audit log) */}
+                  {detailStageEvents.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Activity Timeline</div>
+                      <div className="rounded-md border bg-background divide-y">
+                        {detailStageEvents.map((ev, i) => (
+                          <div key={i} className="p-2.5 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-medium capitalize">{ev.action_type.replace(/_/g, " ").toLowerCase()}</span>
+                              <span className="text-muted-foreground whitespace-nowrap">{fmtDt(ev.logged_at)}</span>
+                            </div>
+                            {ev.user_name && <div className="text-muted-foreground">by {ev.user_name}</div>}
+                            {ev.description && <div className="text-muted-foreground mt-0.5">{ev.description}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer with deep-link navigation buttons. Each opens the specific record, not just the listing. */}
+                <DialogFooter className="px-4 lg:px-6 py-3 border-t bg-muted/20 flex-wrap gap-2 sticky bottom-0">
+                  {c.rfq_id && (c.stage === "review" || c.stage === "quotes_in" || c.stage === "approval" || c.stage === "rfq_sent") && (
+                    <Button variant="outline" size="sm" onClick={() => { closeDetailDialog(); navigate(`/comparison/${c.rfq_id}`); }}>
+                      <BarChart3 className="h-3.5 w-3.5 mr-1.5" /> Open Comparison
+                    </Button>
+                  )}
+                  {c.rfq_id && (
+                    <Button variant="outline" size="sm" onClick={() => { closeDetailDialog(); navigate(`/rfqs?id=${c.rfq_id}`); }}>
+                      <Send className="h-3.5 w-3.5 mr-1.5" /> Open RFQ
+                    </Button>
+                  )}
+                  {c.po_id && (
+                    <Button variant="outline" size="sm" onClick={() => { closeDetailDialog(); navigate(`/purchase-orders?id=${c.po_id}`); }}>
+                      <ShoppingCart className="h-3.5 w-3.5 mr-1.5" /> Open PO
+                    </Button>
+                  )}
+                  <Button variant="outline" size="sm" onClick={() => { closeDetailDialog(); navigate(`/pr-review?pr=${c.pr_id}`); }}>
+                    <FileText className="h-3.5 w-3.5 mr-1.5" /> Open PR
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={closeDetailDialog} className="ml-auto">Close</Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>
