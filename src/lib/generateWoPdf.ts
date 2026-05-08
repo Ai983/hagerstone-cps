@@ -339,8 +339,9 @@ export function buildWoPdf(data: WoPdfData): Blob {
     "Rate",
     "Discount",
     "Total Value\nof Order",
-    "SGST\n%Rate",
-    "IGST",
+    "SGST\n%",
+    "CGST\n%",
+    "IGST\n%",
     ...customCols.map((c) => c.label),
   ];
 
@@ -356,6 +357,7 @@ export function buildWoPdf(data: WoPdfData): Blob {
       fmtPlainNum(li.discount),
       fmtPlainNum(li.total_value),
       li.sgst_percent != null && Number(li.sgst_percent) > 0 ? `${li.sgst_percent}%` : "",
+      li.cgst_percent != null && Number(li.cgst_percent) > 0 ? `${li.cgst_percent}%` : "",
       li.igst_percent != null && Number(li.igst_percent) > 0 ? `${li.igst_percent}%` : "",
     ];
     const customRow = customCols.map((c) => {
@@ -369,16 +371,21 @@ export function buildWoPdf(data: WoPdfData): Blob {
   const baseColStyles: Record<number, any> = {
     0: { cellWidth: 8, halign: "center" },
     1: { cellWidth: 14, halign: "center" },
-    2: { cellWidth: 50, halign: "left", overflow: "linebreak" },
+    2: { cellWidth: 46, halign: "left", overflow: "linebreak" },
     3: { cellWidth: 16, halign: "center" },
     4: { cellWidth: 10, halign: "right" },
     5: { cellWidth: 10, halign: "center" },
-    6: { cellWidth: 18, halign: "right" },
+    6: { cellWidth: 16, halign: "right" },
     7: { cellWidth: 14, halign: "right" },
-    8: { cellWidth: 22, halign: "right" },
-    9: { cellWidth: 10, halign: "center" },
-    10: { cellWidth: 10, halign: "center" },
+    8: { cellWidth: 20, halign: "right" },
+    9: { cellWidth: 9, halign: "center" },
+    10: { cellWidth: 9, halign: "center" },
+    11: { cellWidth: 9, halign: "center" },
   };
+  // Append default styles for any user-added custom columns (B2 fix)
+  customCols.forEach((_, idx) => {
+    baseColStyles[12 + idx] = { cellWidth: 18, halign: "left", overflow: "linebreak" };
+  });
 
   autoTable(doc, {
     startY: y,

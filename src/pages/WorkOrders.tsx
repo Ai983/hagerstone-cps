@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 import {
   Plus, Search, FileText, Trash2, Eye, ArrowLeft, ArrowRight,
-  Save, CheckCircle2, Upload, X as XIcon, Briefcase,
+  Save, CheckCircle2, X as XIcon, Briefcase,
 } from "lucide-react";
 
 import {
@@ -124,6 +124,7 @@ export default function WorkOrders() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
   const [wizardEditId, setWizardEditId] = useState<string | null>(null);
+  const [wizardEditWoNumber, setWizardEditWoNumber] = useState<string | null>(null);
 
   // Step 0
   const [w_projectSite, setProjectSite] = useState("");
@@ -274,6 +275,7 @@ export default function WorkOrders() {
   const resetWizard = () => {
     setWizardStep(0);
     setWizardEditId(null);
+    setWizardEditWoNumber(null);
     setProjectSite(""); setProjectCode(""); setCategory(""); setWorkAddress(""); setWorkAtName("");
     setSupplierId(""); setSupplierName(""); setSupplierGstin(""); setSupplierState("");
     setSupplierKindAttn(""); setSupplierContact(""); setSupplierEmail(""); setSupplierAddress("");
@@ -313,6 +315,7 @@ export default function WorkOrders() {
         .eq("id", row.id)
         .maybeSingle();
       if (!wo) throw new Error("Work order not found");
+      setWizardEditWoNumber((wo as any).wo_number ?? null);
       const { data: items } = await supabase
         .from("cps_wo_line_items")
         .select("*")
@@ -434,6 +437,10 @@ export default function WorkOrders() {
   const addCustomColumn = () => {
     const label = newColumnLabel.trim();
     if (!label) { toast.error("Column name cannot be empty"); return; }
+    if (label.length > 30) { toast.error("Column name must be 30 characters or fewer"); return; }
+    if (w_customColumns.some((c) => c.label.toLowerCase() === label.toLowerCase())) {
+      toast.error("A column with that name already exists"); return;
+    }
     const colKey = "col_" + label.toLowerCase().replace(/[^a-z0-9]+/g, "_") + "_" + Date.now().toString(36).slice(-4);
     setCustomColumns((prev) => [...prev, { key: colKey, label, type: "text" }]);
     setNewColumnLabel("");
@@ -453,9 +460,9 @@ export default function WorkOrders() {
   // ── PDF preview ──
   const renderPdfPreview = () => {
     const pdfData: WoPdfData = {
-      woNumber: wizardEditId
-        ? rows.find((r) => r.id === wizardEditId)?.wo_number ?? "DRAFT"
-        : `HSIPL/${w_category || "MISC"}/preview`,
+      woNumber: wizardEditWoNumber
+        ?? (wizardEditId ? rows.find((r) => r.id === wizardEditId)?.wo_number : null)
+        ?? `HSIPL/${w_category || "MISC"}/preview`,
       category: w_category,
       supplierName: w_supplierName,
       supplierGstin: w_supplierGstin,
@@ -531,8 +538,8 @@ export default function WorkOrders() {
         if (numErr || !numData) throw new Error(numErr?.message || "Failed to generate WO number");
         woNumber = String(numData);
       } else {
-        const r = rows.find((x) => x.id === woId);
-        woNumber = r?.wo_number ?? "";
+        // Prefer state captured during openEdit; fall back to rows lookup if absent
+        woNumber = wizardEditWoNumber ?? rows.find((x) => x.id === woId)?.wo_number ?? "";
       }
 
       // Resolve supplier — if new, insert into cps_suppliers
@@ -640,7 +647,9 @@ export default function WorkOrders() {
         if (liErr) throw liErr;
       }
 
-      // Upload rate list if a new file was selected
+      // Rate list handling:
+      //  - if a new file was selected, upload it and overwrite the DB URL
+      //  - else if user cleared the existing URL via the X button, null it out
       if (w_rateListFile) {
         const { url, filename } = await uploadWoRateList(supabase, woId, w_rateListFile);
         if (url) {
@@ -649,6 +658,11 @@ export default function WorkOrders() {
             .update({ vendor_rate_list_url: url, vendor_rate_list_filename: filename })
             .eq("id", woId);
         }
+      } else if (wizardEditId && !w_existingRateListUrl) {
+        await supabase
+          .from("cps_work_orders")
+          .update({ vendor_rate_list_url: null, vendor_rate_list_filename: null })
+          .eq("id", woId);
       }
 
       // Generate + upload PDF
@@ -1025,6 +1039,14 @@ export default function WorkOrders() {
                     <a href={w_existingRateListUrl} target="_blank" rel="noopener noreferrer" className="underline">
                       {w_existingRateListFilename ?? "View existing rate list"}
                     </a>
+                    <button
+                      type="button"
+                      onClick={() => { setExistingRateListUrl(null); setExistingRateListFilename(null); }}
+                      className="text-destructive hover:text-destructive/70 ml-1"
+                      title="Remove this rate list"
+                    >
+                      <XIcon className="h-3 w-3" />
+                    </button>
                   </div>
                 )}
                 <Input
@@ -1295,7 +1317,7 @@ export default function WorkOrders() {
           </DialogHeader>
           <div className="space-y-2 py-2">
             <Label>Column name</Label>
-            <Input value={newColumnLabel} onChange={(e) => setNewColumnLabel(e.target.value)} placeholder="e.g. Notes, Cess %" autoFocus />
+            <Input value={newColumnLabel} onChange={(e) => setNewColumnLabel(e.target.value)} placeholder="e.g. Notes, Cess %" maxLength={30} autoFocus />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setNewColumnLabel(""); setAddColumnOpen(false); }}>Cancel</Button>
