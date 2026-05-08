@@ -83,7 +83,7 @@ type QuoteLineItem = {
   correction_log: any[] | null;
 };
 
-type Rfq = { id: string; rfq_number: string; title: string | null; pr_id: string | null };
+type Rfq = { id: string; rfq_number: string; title: string | null; pr_id: string | null; status: string | null };
 
 type PrInfo = {
   id: string;
@@ -325,7 +325,7 @@ export default function Quotes() {
   const [savingReview, setSavingReview] = useState(false);
 
   const fetchRfqs = async () => {
-    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,title,pr_id").order("created_at", { ascending: false });
+    const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,title,pr_id,status").order("created_at", { ascending: false });
     if (error) throw error;
     return (data ?? []) as Rfq[];
   };
@@ -709,15 +709,16 @@ export default function Quotes() {
     if (!user || !reviewQuote) return;
     if (!isProcurementTeam) { toast.error("Only procurement team can delete quotes"); return; }
 
-    // 1. Check RFQ status — must be active
+    // 1. Check RFQ status — block only when RFQ is closed normally (likely has a PO downstream).
+    // Cancelled RFQs are explicitly killed, so their quotes are safe to clean up.
     const { data: rfqRow } = await supabase
       .from("cps_rfqs")
       .select("status")
       .eq("id", reviewQuote.rfq_id)
       .maybeSingle();
     const rfqStatus = (rfqRow as { status?: string } | null)?.status ?? "";
-    if (["closed", "cancelled"].includes(rfqStatus)) {
-      toast.error("Cannot delete — RFQ is already closed/cancelled");
+    if (rfqStatus === "closed") {
+      toast.error("Cannot delete — RFQ is already closed");
       return;
     }
 
@@ -1768,6 +1769,7 @@ Rules:
                                   {g.quotes.map((q) => {
                                     const simple = simpleStatusConfig[simpleQuoteStatus(q)];
                                     const ai = aiHint(q.parse_status);
+                                    const rfqCancelled = rfqById[q.rfq_id]?.status === "cancelled";
                                     return (
                                       <TableRow key={q.id} className={(q.is_legacy || q.channel === "legacy") ? "bg-amber-50/40 hover:bg-amber-50/60" : "hover:bg-muted/30"}>
                                         <TableCell className="font-mono text-primary">
@@ -1794,6 +1796,9 @@ Rules:
                                               )}
                                               {Number(q.total_quoted_value ?? 0) === 0 && Number(q.total_landed_value ?? 0) === 0 && q.parse_status !== "failed" && (
                                                 <Badge className="text-xs border bg-red-100 text-red-800 border-red-300" title="Quote has no extracted items or totals — click Review to parse with AI">⚠️ NO DATA</Badge>
+                                              )}
+                                              {rfqCancelled && (
+                                                <Badge className="text-xs border bg-red-100 text-red-800 border-red-300" title="Parent RFQ was cancelled — this quote can be safely deleted">🚫 RFQ CANCELLED</Badge>
                                               )}
                                             </div>
                                           </div>
@@ -1848,6 +1853,7 @@ Rules:
             const rfq = rfqById[q.rfq_id];
             const simple = simpleStatusConfig[simpleQuoteStatus(q)];
             const ai = aiHint(q.parse_status);
+            const rfqCancelled = rfq?.status === "cancelled";
             return (
               <Card key={q.id} className="p-4">
                 <div className="flex items-start justify-between gap-2">
@@ -1855,6 +1861,9 @@ Rules:
                     <div className="font-mono text-primary text-sm">{q.blind_quote_ref}</div>
                     <div className="text-xs text-muted-foreground mt-0.5">{rfq?.rfq_number ?? "—"} · {q.channel}</div>
                     <div className="text-xs text-muted-foreground">{formatDateTime(q.received_at)}</div>
+                    {rfqCancelled && (
+                      <Badge className="mt-1 text-[10px] border bg-red-100 text-red-800 border-red-300">🚫 RFQ CANCELLED</Badge>
+                    )}
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
                     <Badge className={`text-xs border-0 ${simple.badge}`}>{simple.label}</Badge>
