@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FileText, Send, ShoppingCart, Truck, MessageSquare,
-  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, Boxes, ListChecks, Trophy, KanbanSquare, LineChart, ShieldCheck,
+  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, Boxes, ListChecks, Trophy, KanbanSquare, LineChart, ShieldCheck, Briefcase,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,7 @@ const ADMIN_PRIMARY = [
 const ADMIN_MORE = [
   { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor"] },
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive", "procurement_head", "it_head", "management"] },
+  { title: "Work Orders", url: "/work-orders", icon: Briefcase, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
   { title: "Kanban", url: "/kanban", icon: KanbanSquare, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor", "finance"] },
   { title: "Analytics", url: "/analytics", icon: LineChart, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
   { title: "Delivery", url: "/delivery", icon: Truck, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },

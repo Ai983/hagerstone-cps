@@ -57,6 +57,7 @@ const RFQs = lazyWithRetry(() => import("@/pages/RFQs"));
 const Quotes = lazyWithRetry(() => import("@/pages/Quotes"));
 const ComparisonSheet = lazyWithRetry(() => import("@/pages/ComparisonSheet"));
 const PurchaseOrders = lazyWithRetry(() => import("@/pages/PurchaseOrders"));
+const WorkOrders = lazyWithRetry(() => import("@/pages/WorkOrders"));
 const DeliveryTracker = lazyWithRetry(() => import("@/pages/DeliveryTracker"));
 const AuditLog = lazyWithRetry(() => import("@/pages/AuditLog"));
 const VendorRegister = lazyWithRetry(() => import("@/pages/VendorRegister"));
@@ -115,6 +116,7 @@ const App = () => (
                 </Protected>
               } />
               <Route path="/purchase-orders" element={<Protected><PurchaseOrders /></Protected>} />
+              <Route path="/work-orders" element={<Protected><WorkOrders /></Protected>} />
               <Route path="/delivery" element={<Protected><DeliveryTracker /></Protected>} />
               <Route path="/audit" element={<Protected><AuditLog /></Protected>} />
               <Route path="/invoices/upload" element={<Protected><InvoiceUpload /></Protected>} />
