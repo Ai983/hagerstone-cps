@@ -472,14 +472,10 @@ For any field not found on the card, use empty string. For phone, if the card sh
       toast.error("Supplier name is required");
       return;
     }
-    if (!form.gstin.trim()) {
-      toast.error("GSTIN is required");
-      return;
-    }
-    // GSTIN format: 2 digits + 5 alpha + 4 digits + 1 alpha + 1 alphanum + Z + 1 alphanum
+    // GSTIN is optional — but if entered, must match the standard 15-char format
     const gstinRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/;
-    if (!gstinRegex.test(form.gstin.trim().toUpperCase())) {
-      toast.error("Invalid GSTIN format — must be 15 characters (e.g. 09AAECH3768B1ZM)");
+    if (form.gstin.trim() && !gstinRegex.test(form.gstin.trim().toUpperCase())) {
+      toast.error("Invalid GSTIN format — must be 15 characters (e.g. 09AAECH3768B1ZM) or leave blank");
       return;
     }
     // PAN: optional — but if entered, must be valid 10-char format
@@ -957,7 +953,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
               <Label>Supplier name *</Label>
               <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Full company name" />
             </div>
-            <div className="space-y-1"><Label>GSTIN <span className="text-destructive">*</span></Label><Input value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value })} placeholder="15-digit GSTIN" required /></div>
+            <div className="space-y-1"><Label>GSTIN</Label><Input value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value })} placeholder="15-digit GSTIN (optional)" /></div>
             <div className="space-y-1"><Label>PAN</Label><Input value={form.pan} onChange={(e) => setForm({ ...form, pan: e.target.value })} placeholder="Optional — e.g. ABCDE1234F" /></div>
             <div className="space-y-1"><Label>Email</Label><Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="contact@supplier.com" /></div>
             <div className="space-y-1"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 XXXXX XXXXX" /></div>

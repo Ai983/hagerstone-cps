@@ -63,8 +63,10 @@ export default function VendorRegister() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { toast.error("Invalid email address format"); return; }
     if (!phone.trim()) { toast.error("Phone is required"); return; }
     if (!/^(\+91)?[6-9]\d{9}$/.test(phone.trim().replace(/[\s-]/g, ""))) { toast.error("Invalid phone — enter 10-digit Indian mobile number"); return; }
-    if (!gstin.trim()) { toast.error("GSTIN is required"); return; }
-    if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/.test(gstin.trim().toUpperCase())) { toast.error("Invalid GSTIN format — must be 15 characters (e.g. 09AAECH3768B1ZM)"); return; }
+    // GSTIN is optional — but if entered, must match the standard 15-char format
+    if (gstin.trim() && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/.test(gstin.trim().toUpperCase())) {
+      toast.error("Invalid GSTIN format — must be 15 characters (e.g. 09AAECH3768B1ZM) or leave blank"); return;
+    }
     // PAN is optional — but if entered, must be valid format
     if (pan.trim() && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.trim().toUpperCase())) { toast.error("Invalid PAN format — must be 10 characters (e.g. ABCDE1234F) or leave blank"); return; }
     if (!declaration) { toast.error("Please confirm the declaration"); return; }
@@ -146,8 +148,8 @@ export default function VendorRegister() {
               <Input value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>GSTIN <span className="text-destructive">*</span></Label>
-              <Input value={gstin} onChange={(e) => setGstin(e.target.value)} placeholder="15-digit GSTIN" required />
+              <Label>GSTIN</Label>
+              <Input value={gstin} onChange={(e) => setGstin(e.target.value)} placeholder="15-digit GSTIN (optional)" />
             </div>
             <div className="space-y-2">
               <Label>PAN</Label>
