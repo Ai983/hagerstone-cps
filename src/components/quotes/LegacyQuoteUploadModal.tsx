@@ -390,8 +390,9 @@ export function LegacyQuoteUploadModal({
       toast.error("Vendor Name and Phone are required");
       return;
     }
-    if (!newVendorForm.gstin.trim()) {
-      toast.error("GSTIN is required");
+    // GSTIN is optional — only validate format if a value was entered
+    if (newVendorForm.gstin.trim() && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/.test(newVendorForm.gstin.trim().toUpperCase())) {
+      toast.error("Invalid GSTIN format — must be 15 characters or leave blank");
       return;
     }
     if (!selectedRfqId) {
@@ -1030,10 +1031,9 @@ export function LegacyQuoteUploadModal({
                           />
                         </div>
                         <div className="space-y-2">
-                          <Label>GSTIN <span className="text-destructive">*</span></Label>
+                          <Label>GSTIN</Label>
                           <Input
-                            placeholder="15-digit GSTIN"
-                            required
+                            placeholder="15-digit GSTIN (optional)"
                             value={newVendorForm.gstin}
                             onChange={(e) =>
                               setNewVendorForm((p) => ({
