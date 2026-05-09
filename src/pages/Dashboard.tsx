@@ -282,7 +282,8 @@ export default function Dashboard() {
           .select("project_code, item_description, unit, planned_quantity");
         let stockQ = supabase
           .from("cps_stock")
-          .select("project_code, item_description, current_qty");
+          .select("project_code, item_description, current_qty")
+          .eq("approval_status", "approved");
         if (restrictedCodes !== null) {
           if (restrictedCodes.length === 0) {
             setLowStockItems([]);
@@ -457,36 +458,36 @@ export default function Dashboard() {
 
       {/* KPI Cards — admin only */}
       {!hideValues && (
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 lg:gap-5">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 lg:gap-4">
         {kpis.map((k) => (
-          <Card key={k.title} className="shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{k.title}</CardTitle>
-              <div className={`h-9 w-9 rounded-lg ${k.bg} flex items-center justify-center`}>
-                <k.icon className={`h-5 w-5 ${k.color}`} />
+          <Card key={k.title} className="shadow-sm min-w-0">
+            <CardHeader className="flex flex-row items-start justify-between pb-2 space-y-0 gap-2">
+              <CardTitle className="text-xs sm:text-sm font-medium text-muted-foreground leading-tight">{k.title}</CardTitle>
+              <div className={`h-8 w-8 rounded-lg ${k.bg} flex items-center justify-center flex-shrink-0`}>
+                <k.icon className={`h-4 w-4 ${k.color}`} />
               </div>
             </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold text-foreground">
+            <CardContent className="pt-0">
+              <div className="text-2xl sm:text-3xl font-bold text-foreground">
                 {loading ? <Skeleton className="h-8 w-20" /> : (hideValues && k.title.includes("\u20B9") ? "***" : k.value.toLocaleString("en-IN"))}
               </div>
-              <p className="text-xs text-muted-foreground mt-1">{k.note}</p>
+              <p className="text-[10px] sm:text-xs text-muted-foreground mt-1">{k.note}</p>
             </CardContent>
           </Card>
         ))}
         {priceKpis.map((k) => (
-          <Card key={k.title} className="shadow-sm">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{k.title}</CardTitle>
-              <div className={`h-9 w-9 rounded-lg ${k.bg} flex items-center justify-center`}>
-                <k.icon className={`h-5 w-5 ${k.color}`} />
+          <Card key={k.title} className="shadow-sm min-w-0">
+            <CardHeader className="flex flex-row items-start justify-between pb-2 space-y-0 gap-2">
+              <CardTitle className="text-xs sm:text-sm font-medium text-muted-foreground leading-tight">{k.title}</CardTitle>
+              <div className={`h-8 w-8 rounded-lg ${k.bg} flex items-center justify-center flex-shrink-0`}>
+                <k.icon className={`h-4 w-4 ${k.color}`} />
               </div>
             </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold text-foreground">
+            <CardContent className="pt-0">
+              <div className="text-lg sm:text-xl lg:text-2xl font-bold text-foreground">
                 {loading ? <Skeleton className="h-8 w-20" /> : k.value}
               </div>
-              <p className="text-xs text-muted-foreground mt-1">{k.note}</p>
+              <p className="text-[10px] sm:text-xs text-muted-foreground mt-1">{k.note}</p>
             </CardContent>
           </Card>
         ))}

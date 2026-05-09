@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
@@ -16,7 +17,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Boxes, Plus, Edit2, Search, Check, X, Eye, UserCheck } from "lucide-react";
 
 type BoqRow = { id: string; item_description: string; unit: string | null; planned_quantity: number | null; notes: string | null };
-type StockRow = { id: string; item_description: string; current_qty: number; unit: string | null; updated_at: string | null; last_movement_at: string | null };
+type StockRow = {
+  id: string;
+  item_description: string;
+  current_qty: number;
+  unit: string | null;
+  updated_at: string | null;
+  last_movement_at: string | null;
+  approval_status?: string | null;
+  stock_origin?: string | null;
+  invoice_note?: string | null;
+};
 
 type UnifiedRow = {
   key: string;                    // lower(item_description)
@@ -27,6 +38,9 @@ type UnifiedRow = {
   last_updated: string | null;
   stock_id: string | null;
   from_boq: boolean;
+  approval_status: string | null;
+  stock_origin: string | null;
+  invoice_note: string | null;
 };
 
 type Assignment = { project_code: string; assigned_to_user_id: string };
@@ -72,7 +86,7 @@ export default function SiteStock() {
     if (projectCode) void loadAll(projectCode);
     else { setBoq([]); setStock([]); }
     setEditingKey(null);
-  }, [projectCode]);
+  }, [projectCode, isProcurement]);
 
   const loadProjects = async () => {
     const [prRes, boqRes] = await Promise.all([
@@ -108,15 +122,19 @@ export default function SiteStock() {
   const loadAll = async (code: string) => {
     setLoading(true);
     try {
+      let stockReq = supabase
+        .from("cps_stock")
+        .select("id,item_description,current_qty,unit,updated_at,last_movement_at,category,approval_status,stock_origin,invoice_note")
+        .eq("project_code", code);
+      if (!isProcurement) {
+        stockReq = stockReq.eq("approval_status", "approved");
+      }
       const [boqRes, stockRes] = await Promise.all([
         supabase
           .from("cps_project_boqs")
           .select("id,item_description,unit,planned_quantity,notes")
           .eq("project_code", code),
-        supabase
-          .from("cps_stock")
-          .select("id,item_description,current_qty,unit,updated_at,last_movement_at")
-          .eq("project_code", code),
+        stockReq,
       ]);
       if (boqRes.error) throw boqRes.error;
       if (stockRes.error) throw stockRes.error;
@@ -130,40 +148,25 @@ export default function SiteStock() {
   };
 
   const unified: UnifiedRow[] = useMemo(() => {
-    const stockByKey = new Map<string, StockRow>();
-    stock.forEach((s) => stockByKey.set(norm(s.item_description), s));
+    const boqByKey = new Map<string, BoqRow>();
+    boq.forEach((b) => boqByKey.set(norm(b.item_description), b));
 
     const rows: UnifiedRow[] = [];
-    const seen = new Set<string>();
-
-    boq.forEach((b) => {
-      const k = norm(b.item_description);
-      const s = stockByKey.get(k);
-      rows.push({
-        key: k,
-        item_description: b.item_description,
-        unit: b.unit ?? s?.unit ?? null,
-        planned_qty: b.planned_quantity != null ? Number(b.planned_quantity) : null,
-        current_qty: s ? Number(s.current_qty) : 0,
-        last_updated: s?.last_movement_at ?? s?.updated_at ?? null,
-        stock_id: s?.id ?? null,
-        from_boq: true,
-      });
-      seen.add(k);
-    });
-
     stock.forEach((s) => {
       const k = norm(s.item_description);
-      if (seen.has(k)) return;
+      const b = boqByKey.get(k);
       rows.push({
         key: k,
         item_description: s.item_description,
-        unit: s.unit ?? null,
-        planned_qty: null,
+        unit: s.unit ?? b?.unit ?? null,
+        planned_qty: b?.planned_quantity != null ? Number(b.planned_quantity) : null,
         current_qty: Number(s.current_qty),
         last_updated: s.last_movement_at ?? s.updated_at ?? null,
         stock_id: s.id,
-        from_boq: false,
+        from_boq: !!b,
+        approval_status: s.approval_status ?? "approved",
+        stock_origin: s.stock_origin ?? null,
+        invoice_note: s.invoice_note ?? null,
       });
     });
 
@@ -178,6 +181,11 @@ export default function SiteStock() {
     if (!q) return unified;
     return unified.filter((r) => r.item_description.toLowerCase().includes(q));
   }, [unified, search]);
+
+  const pendingOnProject = useMemo(
+    () => (isProcurement ? unified.filter((r) => r.approval_status === "pending").length : 0),
+    [unified, isProcurement],
+  );
 
   const stats = useMemo(() => {
     const total = unified.length;
@@ -220,6 +228,8 @@ export default function SiteStock() {
             unit: row.unit,
             current_qty: qty,
             last_movement_at: new Date().toISOString(),
+            approval_status: "approved",
+            stock_origin: row.stock_origin ?? "manual_site",
           } as any)
           .select("id").single();
         if (insErr) throw insErr;
@@ -283,6 +293,8 @@ export default function SiteStock() {
           unit: extraUnit.trim() || null,
           current_qty: qty,
           last_movement_at: new Date().toISOString(),
+          approval_status: "approved",
+          stock_origin: "manual_site",
         } as any)
         .select("id").single();
       if (insErr) {
@@ -331,7 +343,12 @@ export default function SiteStock() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Site Stock</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Project chuno, BOQ items dikhenge — pencil click karke seedha row mein quantity update karo. BOQ mein nahi hai to "Add Extra Item" se add kar do.
+          Project chuno, BOQ items dikhenge — pencil click karke seedha row mein quantity update karo. BOQ mein nahi hai to &quot;Add Extra Item&quot; se add kar do.
+          {isProcurement && (
+            <span className="block mt-1 text-xs">
+              Invoice se seed kiye gaye lines pehle <strong className="text-foreground font-medium">Stock Overview</strong> se approve honi chahiye — tab hi site engineer ko dikhengi (yahan pending rows procurement ko dikhti hain).
+            </span>
+          )}
         </p>
       </div>
 
@@ -371,6 +388,19 @@ export default function SiteStock() {
                   : "Is project ko abhi tak kisi bhi site engineer ko assign nahi kiya gaya. Procurement team se assign karne ko kaho."}
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {projectCode && isProcurement && pendingOnProject > 0 && (
+        <Card className="border-amber-300 bg-amber-50/60">
+          <CardContent className="p-3 sm:p-4 text-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <span className="text-amber-950">
+              Is project par <strong>{pendingOnProject}</strong> stock line(s) abhi &quot;pending approval&quot; hain — site team ko nahi dikhengi.
+            </span>
+            <Button asChild variant="outline" size="sm" className="border-amber-400 shrink-0">
+              <Link to="/stock-overview">Stock Overview kholen</Link>
+            </Button>
           </CardContent>
         </Card>
       )}
@@ -428,6 +458,12 @@ export default function SiteStock() {
                           <span className="text-[10px] font-mono text-muted-foreground bg-muted/40 rounded px-1">#{idx + 1}</span>
                           <span className="font-medium text-sm">{r.item_description}</span>
                           {!r.from_boq && <Badge variant="outline" className="text-[9px] bg-amber-100 text-amber-800 border-amber-300 h-4 px-1">EXTRA</Badge>}
+                          {isProcurement && r.approval_status === "pending" && (
+                            <Badge variant="outline" className="text-[9px] bg-orange-100 text-orange-900 border-orange-300 h-4 px-1">PENDING</Badge>
+                          )}
+                          {isProcurement && r.approval_status === "rejected" && (
+                            <Badge variant="outline" className="text-[9px] bg-muted text-muted-foreground h-4 px-1">REJECTED</Badge>
+                          )}
                         </div>
                         <div className="text-[11px] text-muted-foreground">{r.unit ?? "—"} · {fmtDate(r.last_updated)}</div>
                       </div>
@@ -545,6 +581,12 @@ export default function SiteStock() {
                             <div className="flex items-center gap-2">
                               <span className="font-medium">{r.item_description}</span>
                               {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">EXTRA</Badge>}
+                              {isProcurement && r.approval_status === "pending" && (
+                                <Badge variant="outline" className="text-[10px] bg-orange-100 text-orange-900 border-orange-300">PENDING</Badge>
+                              )}
+                              {isProcurement && r.approval_status === "rejected" && (
+                                <Badge variant="outline" className="text-[10px] bg-muted text-muted-foreground">REJECTED</Badge>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell className="text-muted-foreground">{r.unit ?? "—"}</TableCell>

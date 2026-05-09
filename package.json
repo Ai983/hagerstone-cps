@@ -58,6 +58,7 @@
     "tailwindcss-animate": "^1.0.7",
     "tslib": "^2.8.1",
     "vaul": "^1.1.2",
+    "xlsx": "^0.18.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {
