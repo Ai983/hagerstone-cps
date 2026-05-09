@@ -29,6 +29,8 @@ import {
   type WoPdfData, type WoPdfLineItem, type WoPdfCustomColumn,
 } from "@/lib/generateWoPdf";
 
+import logoUrl from "@/assets/optimisedlogo.png";
+
 // ─── types ──────────────────────────────────────────────────────────
 
 type WoStatus = "draft" | "issued" | "in_progress" | "completed" | "closed" | "cancelled";
@@ -119,6 +121,7 @@ export default function WorkOrders() {
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [projectSiteSuggestions, setProjectSiteSuggestions] = useState<string[]>([]);
+  const [logoBase64, setLogoBase64] = useState<string | null>(null);
 
   // Wizard state
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -225,6 +228,23 @@ export default function WorkOrders() {
     fetchAll();
     fetchSuppliers();
     fetchProjectSites();
+    // Load Hagerstone logo once into base64 for embedding in WO PDFs (same approach as PO PDFs)
+    (async () => {
+      try {
+        const resp = await fetch(logoUrl);
+        const blob = await resp.blob();
+        const b64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = reader.result as string;
+            resolve(result.split(",")[1] ?? result);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        setLogoBase64(b64);
+      } catch { /* logo is optional — PDF renders without it */ }
+    })();
   }, []);
 
   // ── derived ──
@@ -497,6 +517,7 @@ export default function WorkOrders() {
       preparedByName: w_preparedBy,
       checkedByName: w_checkedBy,
       authorisedSignatory: w_authorisedSignatory,
+      logoBase64,
       lineItems: w_lineItems
         .filter((li) => li.description.trim())
         .map<WoPdfLineItem>((li) => ({
@@ -732,6 +753,7 @@ export default function WorkOrders() {
     preparedByName: w_preparedBy,
     checkedByName: w_checkedBy,
     authorisedSignatory: w_authorisedSignatory,
+    logoBase64,
     lineItems: w_lineItems
       .filter((li) => li.description.trim())
       .map<WoPdfLineItem>((li) => ({
