@@ -678,14 +678,19 @@ export const WO_DEFAULT_WORK_REMARKS: string[] = [
 ];
 
 export const WO_CATEGORIES: { value: string; label: string }[] = [
-  { value: "MEP", label: "MEP" },
-  { value: "ELEC", label: "Electrical" },
-  { value: "CIVIL", label: "Civil" },
+  { value: "MEP",   label: "MEP" },
+  { value: "HVAC",  label: "HVAC" },
+  { value: "FIRE",  label: "Firefighting" },
+  { value: "PA",    label: "PA System" },
+  { value: "IT",    label: "IT Work" },
+  { value: "ELEC",  label: "Electrical" },
+  { value: "MS",    label: "MS Work" },
   { value: "PLUMB", label: "Plumbing" },
+  { value: "CIVIL", label: "Civil" },
   { value: "PAINT", label: "Painting" },
-  { value: "CARP", label: "Carpentry" },
-  { value: "INT", label: "Interiors" },
-  { value: "MISC", label: "Miscellaneous" },
+  { value: "CARP",  label: "Carpentry" },
+  { value: "INT",   label: "Interiors" },
+  { value: "MISC",  label: "Miscellaneous" },
 ];
 
 // Re-export type used by consumers — keeps the import surface stable.
