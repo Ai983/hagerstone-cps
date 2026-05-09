@@ -163,19 +163,16 @@ export function buildWoPdf(data: WoPdfData): Blob {
   const cellRight = 60;         // logo cell width (top-right)
   const cellMid  = CW - cellLeft - cellRight;
 
-  // Left cell: FIXED QUANTITY label
+  // Left cell: empty (FIXED QUANTITY label removed per request)
   doc.setLineWidth(0.3);
   doc.setDrawColor(0);
   doc.rect(ML, y, cellLeft, HDR_H);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(20, 20, 20);
-  doc.text("FIXED QUANTITY", ML + cellLeft / 2, y + HDR_H / 2 + 1, { align: "center" });
 
   // Middle cell: company name + GST in one line
   doc.rect(ML + cellLeft, y, cellMid, HDR_H);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
+  doc.setTextColor(20, 20, 20);
   doc.text(headerLine, ML + cellLeft + cellMid / 2, y + HDR_H / 2 + 1, { align: "center" });
 
   // Right cell: empty grid cell (logo will overlay)
@@ -202,70 +199,63 @@ export function buildWoPdf(data: WoPdfData): Blob {
 
   y += HDR_H;
 
-  /* ── 3. Supplier label column (left) + Supplier values (mid) + Logo gutter (right)
-     Single bordered grid row matching the new template. ── */
-  // Pre-compute the height needed for supplier values
-  doc.setFontSize(7.5);
-  const supValueLines: string[] = [];
-  supValueLines.push((data.supplierName ?? "").toUpperCase());
-  if (data.supplierAddress) {
-    const addr = doc.splitTextToSize(data.supplierAddress, cellMid - 4);
-    supValueLines.push(...addr);
-  }
-  if (data.supplierContact || data.supplierEmail) {
-    const tel = data.supplierContact ? `Tel: ${data.supplierContact}` : "";
-    const em  = data.supplierEmail   ? `Email: ${data.supplierEmail}` : "";
-    supValueLines.push([tel, em].filter(Boolean).join("; "));
-  }
-  const supBlockH = Math.max(LOGO_H + 2, supValueLines.length * 3.6 + 4);
+  /* ── 3. Supplier block — proper label/value 2-column inside the left+mid area.
+     Right column stays empty (logo gutter). Each supplier field goes
+     "Label:" in a narrow inner-left col, value in a wider inner-right col so
+     long emails/addresses wrap inside their own cell instead of bleeding off. */
 
-  // Left column: labels
+  const supLabelW = 24;                        // narrow label column inside the left block
+  const supValueW = (cellLeft - supLabelW) + cellMid;  // everything else from labelW to logo gutter
+
+  const supRows: { label: string; value: string; bold?: boolean }[] = [
+    { label: "Details of Supplier :", value: (data.supplierName ?? "").toUpperCase(), bold: true },
+    { label: "GSTIN:",     value: data.supplierGstin ?? "" },
+    { label: "State:",     value: data.supplierState ?? "" },
+    { label: "Kind Attn:", value: data.supplierKindAttn ?? "" },
+    { label: "Contact:",   value: data.supplierContact ?? "" },
+    { label: "Email:",     value: data.supplierEmail ?? "" },
+    { label: "Address:",   value: data.supplierAddress ?? "" },
+  ];
+
+  // Compute total height needed by wrapping each value once and summing line counts
+  doc.setFontSize(7);
+  let supBlockH = 4;
+  const supRowHeights: number[] = [];
+  for (const r of supRows) {
+    const wrapped = doc.splitTextToSize(r.value, supValueW - 4);
+    const lines = Math.max(1, wrapped.length);
+    const rowH = Math.max(4, lines * 3.6 + 1);
+    supRowHeights.push(rowH);
+    supBlockH += rowH;
+  }
+  supBlockH = Math.max(supBlockH, LOGO_H + 4);
+
   doc.setLineWidth(0.3);
   doc.setDrawColor(0);
-  doc.rect(ML, y, cellLeft, supBlockH);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(20, 20, 20);
-  let labelY = y + 4;
-  const supLabels = [
-    "Details of Supplier :",
-    "GSTIN: " + (data.supplierGstin ?? ""),
-    "State: " + (data.supplierState ?? ""),
-    "Kind Attn: " + (data.supplierKindAttn ?? ""),
-    "Contact: " + (data.supplierContact ?? ""),
-    "Email: " + (data.supplierEmail ?? ""),
-    "Address:",
-  ];
-  doc.setFontSize(7);
-  for (const line of supLabels) {
-    const wrapped = doc.splitTextToSize(line, cellLeft - 2);
-    doc.text(wrapped, ML + 1.5, labelY);
-    labelY += wrapped.length * 3.4 + 0.5;
-  }
 
-  // Middle column: bold supplier name + address
-  doc.rect(ML + cellLeft, y, cellMid, supBlockH);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.text((data.supplierName ?? "").toUpperCase(), ML + cellLeft + 1.5, y + 4);
+  // Outer cell borders: label col, value col, logo gutter
+  doc.rect(ML, y, supLabelW, supBlockH);                                    // label
+  doc.rect(ML + supLabelW, y, supValueW, supBlockH);                        // value
+  doc.rect(ML + supLabelW + supValueW, y, cellRight, supBlockH);            // logo gutter
 
-  // Address + contacts in plain font below
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7);
-  let valY = y + 8;
-  if (data.supplierAddress) {
-    const addrLines = doc.splitTextToSize(data.supplierAddress, cellMid - 3);
-    doc.text(addrLines, ML + cellLeft + 1.5, valY);
-    valY += addrLines.length * 3.6;
-  }
-  if (data.supplierContact || data.supplierEmail) {
-    const tel = data.supplierContact ? `Tel: ${data.supplierContact}` : "";
-    const em  = data.supplierEmail   ? `Email: ${data.supplierEmail}` : "";
-    doc.text([tel, em].filter(Boolean).join("; "), ML + cellLeft + 1.5, valY);
-  }
+  // Render each row inside the two columns
+  let rowY = y + 3;
+  for (let i = 0; i < supRows.length; i++) {
+    const r = supRows[i];
+    const rowH = supRowHeights[i];
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7);
+    doc.setTextColor(20, 20, 20);
+    doc.text(r.label, ML + 1.5, rowY + 2);
 
-  // Right column: empty (logo lives here, drawn earlier)
-  doc.rect(ML + cellLeft + cellMid, y, cellRight, supBlockH);
+    doc.setFont("helvetica", r.bold ? "bold" : "normal");
+    doc.setFontSize(r.bold ? 8 : 7);
+    doc.setTextColor(20, 20, 20);
+    const wrapped = doc.splitTextToSize(r.value, supValueW - 3);
+    doc.text(wrapped, ML + supLabelW + 1.5, rowY + 2);
+
+    rowY += rowH;
+  }
 
   y += supBlockH;
 
@@ -338,7 +328,12 @@ export function buildWoPdf(data: WoPdfData): Blob {
     doc.rect(ML + cellLeft, y + metaLeftPairs.length * metaRowH, cellMid * 0.45, midSplit - metaLeftPairs.length * metaRowH);
   }
 
-  // Work Address column — right portion of mid
+  // Work Address column — right portion of mid.
+  // Layout requested by user:
+  //   1. WORK ADDRESS title (centered)
+  //   2. Project name (workAtName) prominently at top — no "Work At:" prefix
+  //   3. Full address below
+  //   4. "Work At:" label as a footer line at the bottom of the box
   const waX = ML + cellLeft + cellMid * 0.45;
   const waW = cellMid * 0.55;
   doc.rect(waX, y, waW, metaBlockH);
@@ -346,18 +341,19 @@ export function buildWoPdf(data: WoPdfData): Blob {
   doc.setFontSize(8);
   doc.setTextColor(0, 80, 160);
   doc.text("WORK ADDRESS", waX + waW / 2, y + 4, { align: "center" });
+
+  // Top: project name in bold, prominent
   let waY = y + 9;
   if (data.workAtName) {
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(7);
-    doc.setTextColor(60, 60, 60);
-    doc.text("Work At:", waX + 2, waY);
-    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
     doc.setTextColor(20, 20, 20);
-    const atLines = doc.splitTextToSize(data.workAtName, waW - 22);
-    doc.text(atLines, waX + 22, waY);
-    waY += Math.max(atLines.length * 3.6, 4) + 2;
+    const atLines = doc.splitTextToSize(data.workAtName, waW - 4);
+    doc.text(atLines, waX + waW / 2, waY, { align: "center" });
+    waY += Math.max(atLines.length * 3.8, 4) + 2;
   }
+
+  // Middle: full address
   if (data.workAddress) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
@@ -365,6 +361,12 @@ export function buildWoPdf(data: WoPdfData): Blob {
     const addrLines = doc.splitTextToSize(data.workAddress, waW - 4);
     doc.text(addrLines, waX + 2, waY);
   }
+
+  // Bottom: "Work At:" footer label inside the same box
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7);
+  doc.setTextColor(60, 60, 60);
+  doc.text("Work At:", waX + 2, y + metaBlockH - 2);
 
   // Right column: PO meta — each row in its own cell, label | value
   const rightX = ML + cellLeft + cellMid;
@@ -538,41 +540,52 @@ export function buildWoPdf(data: WoPdfData): Blob {
 
   y += trBlockH;
 
-  /* ── 8. Total Order Value (in words) + signatory row ── */
-  const footH = 8;
-  doc.rect(ML, y, CW * 0.65, footH);
+  /* ── 8. Total Order Value (in words) + signature block ──
+     Layout (matches Hagerstone reference template):
+       LEFT COLUMN (top): Total Order Value (In Words) + computed words
+       LEFT COLUMN (bottom): Prepared By: <name>  |  Chkd By: <name>
+       RIGHT COLUMN: 2-row signature block — name on top, "Authorised Signatory" label below
+  */
+  const sigBlockH = 14;        // total height of signature block (right column = 2 rows)
+  const sigW = CW * 0.30;
+  const leftColW = CW - sigW;
+  const sigX = ML + leftColW;
+
+  // Right column — name on top, label below
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(0);
+  doc.rect(sigX, y, sigW, sigBlockH / 2);                       // top half: name
+  doc.rect(sigX, y + sigBlockH / 2, sigW, sigBlockH / 2);       // bottom half: label
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(20, 20, 20);
+  doc.text(data.authorisedSignatory ?? "", sigX + sigW / 2, y + sigBlockH / 4 + 1.5, { align: "center" });
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7);
-  doc.setTextColor(20, 20, 20);
-  doc.text("Total Order Value (In Words):", ML + 1.5, y + 3.5);
+  doc.text("Authorised Signatory", sigX + sigW / 2, y + (3 * sigBlockH) / 4 + 1.5, { align: "center" });
+
+  // Left column top half: Total Order Value (in words)
+  doc.rect(ML, y, leftColW, sigBlockH / 2);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7);
+  doc.text("Total Order Value (In Words):", ML + 1.5, y + 4);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7);
   const words = data.totalInWords || ("Rupees " + amountInWords(data.grandTotal) + " Only");
-  const wordsLines = doc.splitTextToSize(words, CW * 0.65 - 4);
-  doc.text(wordsLines[0] ?? "", ML + 50, y + 3.5);
-  if (wordsLines.length > 1) doc.text(wordsLines[1] ?? "", ML + 1.5, y + 7);
+  const wordsLines = doc.splitTextToSize(words, leftColW - 50);
+  doc.text(wordsLines[0] ?? "", ML + 48, y + 4);
 
-  // Right cell: Authorised Signatory
-  const sigX = ML + CW * 0.65;
-  const sigW = CW * 0.35;
-  doc.rect(sigX, y, sigW, footH);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.text(data.authorisedSignatory ?? "", sigX + sigW / 2, y + footH / 2 + 1, { align: "center" });
-
-  y += footH;
-
-  /* ── 9. Prepared / Checked row ── */
-  const sigRowH = 6;
-  const halfW = CW / 2;
-  doc.rect(ML, y, halfW, sigRowH);
-  doc.rect(ML + halfW, y, halfW, sigRowH);
+  // Left column bottom half — split into Prepared By | Chkd By
+  const halfLeft = leftColW / 2;
+  doc.rect(ML, y + sigBlockH / 2, halfLeft, sigBlockH / 2);
+  doc.rect(ML + halfLeft, y + sigBlockH / 2, halfLeft, sigBlockH / 2);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7);
   doc.setTextColor(60, 60, 60);
-  doc.text("Prepared By: " + (data.preparedByName ?? ""), ML + 2, y + sigRowH / 2 + 1);
-  doc.text("Chkd By: " + (data.checkedByName ?? ""), ML + halfW + 2, y + sigRowH / 2 + 1);
-  y += sigRowH;
+  doc.text("Prepared By: " + (data.preparedByName ?? ""), ML + 2, y + sigBlockH / 2 + 4);
+  doc.text("Chkd By: " + (data.checkedByName ?? ""), ML + halfLeft + 2, y + sigBlockH / 2 + 4);
+
+  y += sigBlockH;
 
   /* ── 10. Footer notice ── */
   y = H - 10;

@@ -149,6 +149,7 @@ export default function WorkOrders() {
   const [w_supplierAddress, setSupplierAddress] = useState("");
   const [w_isNewVendor, setIsNewVendor] = useState(false);
   const [w_rateListFile, setRateListFile] = useState<File | null>(null);
+  const [parsingRateList, setParsingRateList] = useState(false);
   const [w_existingRateListUrl, setExistingRateListUrl] = useState<string | null>(null);
   const [w_existingRateListFilename, setExistingRateListFilename] = useState<string | null>(null);
 
@@ -427,6 +428,123 @@ export default function WorkOrders() {
     setSupplierId("");
     setSupplierName(""); setSupplierGstin(""); setSupplierState("");
     setSupplierKindAttn(""); setSupplierContact(""); setSupplierEmail(""); setSupplierAddress("");
+  };
+
+  // Read a File into a base64 string (without the data: prefix) for sending to claude-proxy.
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result.split(",")[1] ?? result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  // Send the uploaded vendor rate list (PDF/image) to Claude and get back structured
+  // line items, then pre-populate the line items table. User can still edit afterwards.
+  const parseRateListWithAi = async () => {
+    if (!w_rateListFile) {
+      toast.error("Pehle rate list file upload karo");
+      return;
+    }
+    setParsingRateList(true);
+    try {
+      const base64 = await fileToBase64(w_rateListFile);
+      const mediaType = w_rateListFile.type;
+      if (!/^(application\/pdf|image\/(jpeg|png|webp))$/.test(mediaType)) {
+        toast.error("Sirf PDF / JPEG / PNG / WebP rate lists supported hain");
+        setParsingRateList(false);
+        return;
+      }
+
+      const contentBlock = mediaType === "application/pdf"
+        ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
+        : { type: "image",    source: { type: "base64", media_type: mediaType, data: base64 } };
+
+      const { data, error } = await supabase.functions.invoke("claude-proxy", {
+        body: {
+          model: "claude-sonnet-4-5",
+          max_tokens: 8000,
+          messages: [
+            {
+              role: "user",
+              content: [
+                contentBlock,
+                {
+                  type: "text",
+                  text: `Extract every line item from this contractor / vendor rate list document.
+
+Return ONLY a valid JSON object (no markdown, no commentary) with this shape:
+{
+  "items": [
+    {
+      "item": "short item code or short name (e.g. 'Gypsum Partition' or SKU code)",
+      "hsn_code": "HSN/SAC code if visible, else empty string",
+      "description": "full description of the work or material as written",
+      "quantity": number (use 1 if not specified),
+      "unit": "unit (SQFT, RFT, NOS, etc.); empty if not specified",
+      "rate": number (per-unit rate, plain number — no currency symbols, no commas),
+      "discount": number (use 0 if no discount),
+      "total_value": number (line total = quantity * rate - discount; compute if missing),
+      "sgst_percent": number (use 0 if not specified),
+      "cgst_percent": number (use 0 if not specified),
+      "igst_percent": number (use 0 if not specified — common values are 5, 12, 18)
+    }
+  ]
+}
+
+Rules:
+- Every numeric field MUST be a plain number (not a string). If unknown, use 0 (NOT null).
+- "items" must be an array; if you find no items, return an empty array.
+- Do not invent data. Only extract what's actually visible in the document.`,
+                },
+              ],
+            },
+          ],
+        },
+      });
+
+      if (error) throw error;
+
+      // claude-proxy returns the Anthropic message envelope; find the text block and parse JSON
+      const textBlock = (data?.content ?? []).find((b: any) => b.type === "text");
+      const raw = textBlock?.text ?? "";
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("AI response me JSON nahi mila");
+      const parsed = JSON.parse(jsonMatch[0]) as { items?: any[] };
+      const aiItems = Array.isArray(parsed.items) ? parsed.items : [];
+
+      if (aiItems.length === 0) {
+        toast.error("AI ko koi line items nahi mile — manually fill karo");
+        return;
+      }
+
+      // Map AI items to LineItem state
+      const newRows: LineItem[] = aiItems.map((it) => ({
+        _key: crypto.randomUUID(),
+        item: String(it.item ?? "").trim(),
+        hsn_code: String(it.hsn_code ?? "").trim(),
+        description: String(it.description ?? "").trim(),
+        delivery_date: "",
+        quantity: it.quantity != null ? String(it.quantity) : "",
+        unit: String(it.unit ?? "").trim(),
+        rate: it.rate != null ? String(it.rate) : "",
+        discount: it.discount != null ? String(it.discount) : "",
+        total_value: it.total_value != null ? String(it.total_value) : "",
+        sgst_percent: it.sgst_percent != null ? String(it.sgst_percent) : "",
+        cgst_percent: it.cgst_percent != null ? String(it.cgst_percent) : "",
+        igst_percent: it.igst_percent != null ? String(it.igst_percent) : "",
+        custom_data: {},
+      }));
+      setLineItems(newRows);
+      toast.success(`${newRows.length} items extract ho gaye — step 3 me jaake edit karo`);
+    } catch (e: any) {
+      toast.error("AI parse fail: " + (e?.message || "Unknown"));
+    } finally {
+      setParsingRateList(false);
+    }
   };
 
   const updateLineItem = (key: string, patch: Partial<LineItem>) => {
@@ -1082,16 +1200,28 @@ export default function WorkOrders() {
                   onChange={(e) => setRateListFile(e.target.files?.[0] ?? null)}
                 />
                 {w_rateListFile && (
-                  <div className="text-xs flex items-center gap-2">
-                    <FileText className="h-3.5 w-3.5" />
-                    <span>{w_rateListFile.name}</span>
-                    <button type="button" onClick={() => setRateListFile(null)} className="text-destructive">
-                      <XIcon className="h-3 w-3" />
-                    </button>
+                  <div className="space-y-2">
+                    <div className="text-xs flex items-center gap-2">
+                      <FileText className="h-3.5 w-3.5" />
+                      <span>{w_rateListFile.name}</span>
+                      <button type="button" onClick={() => setRateListFile(null)} className="text-destructive">
+                        <XIcon className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={parseRateListWithAi}
+                      disabled={parsingRateList}
+                      className="border-primary/40 text-primary hover:bg-primary/5"
+                    >
+                      {parsingRateList ? "AI parse ho raha hai…" : "✨ Parse with AI (line items auto-fill)"}
+                    </Button>
                   </div>
                 )}
                 <p className="text-[11px] text-muted-foreground">
-                  Just attached for reference. Line items in step 3 are filled manually.
+                  Click "Parse with AI" to auto-fill line items from this file. You can still edit afterwards.
                 </p>
               </div>
             </div>
