@@ -1283,12 +1283,17 @@ export default function ComparisonSheetPage() {
       }
 
       const nowIso = new Date().toISOString();
+      // Clear previous denial fields so the new request lands clean — IT team
+      // sees this as a fresh "requested" row, not a stale denied one.
       const { error } = await supabase.from("cps_rfqs").update({
         min_quotes_override_status: "requested",
         min_quotes_override_reason: reason,
         min_quotes_override_requested_by: user.id,
         min_quotes_override_requested_at: nowIso,
         min_quotes_override_attachment_url: attachmentUrl,
+        min_quotes_override_allowed_by: null,
+        min_quotes_override_allowed_at: null,
+        min_quotes_override_admin_note: null,
       } as any).eq("id", rfqId);
       if (error) throw error;
 
@@ -3200,14 +3205,15 @@ Rules:
               {generating ? "Ban rahi hai..." : "Comparison Sheet Banao"}
             </Button>
 
-            {/* Request override button — only when blocked and not already requested/decided */}
-            {approvedQuoteCount < 3 && overrideStatus === "none" && canCreateRFQ && (
+            {/* Request override button — show when no request yet OR after a previous denial.
+                Procurement can re-request after being denied, with a fresh reason. */}
+            {approvedQuoteCount < 3 && (overrideStatus === "none" || overrideStatus === "denied") && canCreateRFQ && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => { setOverrideReason(""); setOverrideRequestOpen(true); }}
               >
-                Request Override from IT Team
+                {overrideStatus === "denied" ? "Re-request Override (Naya Reason De)" : "Request Override from IT Team"}
               </Button>
             )}
           </CardContent>
