@@ -507,7 +507,7 @@ export default function WorkOrders() {
 
       const { data, error } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-sonnet-4-5",
+          model: "claude-sonnet-4-6",
           max_tokens: 8000,
           messages: [
             {
