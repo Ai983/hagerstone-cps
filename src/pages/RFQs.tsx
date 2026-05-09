@@ -509,6 +509,23 @@ export default function RFQs() {
   const totalPagesRfq = Math.max(1, Math.ceil(rfqTable.length / PAGE_SIZE));
   const paginatedRfqs = rfqTable.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: rfqs.length };
+    rfqs.forEach((r) => {
+      counts[r.status] = (counts[r.status] ?? 0) + 1;
+    });
+    return counts;
+  }, [rfqs]);
+
+  const statusTabs: Array<{ key: RfqStatus | "all"; label: string; labelHi: string; color: string }> = [
+    { key: "all", label: "All", labelHi: "Sab", color: "bg-muted text-foreground" },
+    { key: "draft", label: "Draft", labelHi: "Draft", color: "bg-gray-100 text-gray-700" },
+    { key: "sent", label: "Sent", labelHi: "Bheja Gaya", color: "bg-blue-100 text-blue-700" },
+    { key: "closed", label: "Quotes In", labelHi: "Quotes Aaye", color: "bg-purple-100 text-purple-700" },
+    { key: "comparison_ready", label: "Compare Ready", labelHi: "Compare Karo", color: "bg-green-100 text-green-700" },
+    { key: "cancelled", label: "Cancelled", labelHi: "Cancel", color: "bg-red-100 text-red-700" },
+  ];
+
   const openDialog = async () => {
     setDialogOpen(true);
     setSubmitError(null);
@@ -1060,6 +1077,41 @@ export default function RFQs() {
             Naya RFQ Banao
           </Button>
         )}
+      </div>
+
+      {/* Status Summary Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+        {statusTabs.map((tab) => (
+          <Card
+            key={tab.key}
+            className={`cursor-pointer transition-all hover:shadow-md ${statusFilter === tab.key ? "ring-2 ring-primary ring-offset-2" : ""}`}
+            onClick={() => setStatusFilter(tab.key)}
+          >
+            <CardContent className="p-4">
+              <p className={`text-xs font-medium ${tab.color.includes("text-") ? "" : "text-muted-foreground"}`} style={{ color: tab.key === "draft" ? "#374151" : tab.key === "sent" ? "#1d4ed8" : tab.key === "closed" ? "#7c3aed" : tab.key === "comparison_ready" ? "#15803d" : tab.key === "cancelled" ? "#b91c1c" : undefined }}>
+                {tab.labelHi}
+              </p>
+              <p className="text-2xl font-bold text-foreground mt-1">{statusCounts[tab.key] ?? 0}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Status Tabs */}
+      <div className="flex flex-wrap items-center gap-2 border-b pb-2">
+        {statusTabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setStatusFilter(tab.key)}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              statusFilter === tab.key
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}
+          >
+            {tab.label} <span className="ml-1 opacity-70">{statusCounts[tab.key] ?? 0}</span>
+          </button>
+        ))}
       </div>
 
       {/* Filters */}
