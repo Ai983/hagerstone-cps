@@ -30,6 +30,9 @@ import {
 } from "@/lib/generateWoPdf";
 
 import logoUrl from "@/assets/wo-logo.jpeg";
+// xlsx ships without bundled TS types in this repo; runtime works (Vite resolves it).
+// @ts-ignore
+import * as XLSX from "xlsx";
 
 // ─── types ──────────────────────────────────────────────────────────
 
@@ -442,8 +445,25 @@ export default function WorkOrders() {
       reader.readAsDataURL(file);
     });
 
-  // Send the uploaded vendor rate list (PDF/image) to Claude and get back structured
-  // line items, then pre-populate the line items table. User can still edit afterwards.
+  // Convert an uploaded Excel file (.xlsx / .xls) into a plain-text CSV-like dump
+  // of every sheet. This is what we send to Claude when the rate list is a spreadsheet
+  // (Anthropic doesn't accept Excel directly as a document/image content block).
+  const excelToText = async (file: File): Promise<string> => {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const out: string[] = [];
+    for (const sheetName of wb.SheetNames) {
+      const sheet = wb.Sheets[sheetName];
+      const csv = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+      if (csv.trim()) {
+        out.push(`=== Sheet: ${sheetName} ===\n${csv}`);
+      }
+    }
+    return out.join("\n\n");
+  };
+
+  // Send the uploaded vendor rate list (PDF / image / Excel) to Claude and get back
+  // structured line items, then pre-populate the line items table. User can still edit.
   const parseRateListWithAi = async () => {
     if (!w_rateListFile) {
       toast.error("Pehle rate list file upload karo");
@@ -451,17 +471,39 @@ export default function WorkOrders() {
     }
     setParsingRateList(true);
     try {
-      const base64 = await fileToBase64(w_rateListFile);
-      const mediaType = w_rateListFile.type;
-      if (!/^(application\/pdf|image\/(jpeg|png|webp))$/.test(mediaType)) {
-        toast.error("Sirf PDF / JPEG / PNG / WebP rate lists supported hain");
+      const file = w_rateListFile;
+      const mediaType = file.type;
+      const filename = file.name.toLowerCase();
+      const isExcel =
+        /\.(xlsx|xls|xlsm|xlsb|csv)$/i.test(filename) ||
+        mediaType === "application/vnd.ms-excel" ||
+        mediaType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+        mediaType === "text/csv";
+
+      let contentBlock: any;
+      if (isExcel) {
+        // Convert Excel to plain CSV text and send as a text block.
+        const sheetText = await excelToText(file);
+        if (!sheetText.trim()) {
+          toast.error("Excel file empty hai ya read nahi ho payi");
+          setParsingRateList(false);
+          return;
+        }
+        contentBlock = {
+          type: "text",
+          text: `Below is the contents of an Excel rate list (each sheet shown as CSV):\n\n${sheetText}`,
+        };
+      } else if (mediaType === "application/pdf") {
+        const base64 = await fileToBase64(file);
+        contentBlock = { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } };
+      } else if (/^image\/(jpeg|png|webp)$/.test(mediaType)) {
+        const base64 = await fileToBase64(file);
+        contentBlock = { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
+      } else {
+        toast.error("Supported types: PDF, JPG, PNG, WebP, Excel (xlsx/xls), CSV");
         setParsingRateList(false);
         return;
       }
-
-      const contentBlock = mediaType === "application/pdf"
-        ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
-        : { type: "image",    source: { type: "base64", media_type: mediaType, data: base64 } };
 
       const { data, error } = await supabase.functions.invoke("claude-proxy", {
         body: {
@@ -1177,7 +1219,7 @@ Rules:
               </div>
 
               <div className="border-t pt-4 space-y-2">
-                <Label>Vendor rate list (PDF/Image, optional)</Label>
+                <Label>Vendor rate list (PDF / Image / Excel / CSV, optional)</Label>
                 {w_existingRateListUrl && !w_rateListFile && (
                   <div className="text-xs flex items-center gap-2 text-muted-foreground">
                     <FileText className="h-3.5 w-3.5" />
@@ -1196,7 +1238,7 @@ Rules:
                 )}
                 <Input
                   type="file"
-                  accept=".pdf,image/*"
+                  accept=".pdf,image/*,.xlsx,.xls,.xlsm,.xlsb,.csv"
                   onChange={(e) => setRateListFile(e.target.files?.[0] ?? null)}
                 />
                 {w_rateListFile && (
