@@ -29,7 +29,7 @@ import {
   type WoPdfData, type WoPdfLineItem, type WoPdfCustomColumn,
 } from "@/lib/generateWoPdf";
 
-import logoUrl from "@/assets/optimisedlogo.png";
+import logoUrl from "@/assets/wo-logo.jpeg";
 
 // ─── types ──────────────────────────────────────────────────────────
 
@@ -62,6 +62,7 @@ type Supplier = {
 type LineItem = {
   // sentinel field — only used in UI
   _key: string;
+  item: string;
   hsn_code: string;
   description: string;
   delivery_date: string;
@@ -78,6 +79,7 @@ type LineItem = {
 
 const newLineItem = (): LineItem => ({
   _key: crypto.randomUUID(),
+  item: "",
   hsn_code: "",
   description: "",
   delivery_date: "",
@@ -382,6 +384,7 @@ export default function WorkOrders() {
       setLineItems(
         ((items ?? []) as any[]).map((it) => ({
           _key: crypto.randomUUID(),
+          item: it.item ?? "",
           hsn_code: it.hsn_code ?? "",
           description: it.description ?? "",
           delivery_date: it.delivery_date ?? "",
@@ -521,6 +524,7 @@ export default function WorkOrders() {
       lineItems: w_lineItems
         .filter((li) => li.description.trim())
         .map<WoPdfLineItem>((li) => ({
+          item: li.item,
           hsn_code: li.hsn_code,
           description: li.description,
           delivery_date: li.delivery_date || null,
@@ -650,6 +654,7 @@ export default function WorkOrders() {
         .map((li, idx) => ({
           wo_id: woId,
           sort_order: idx,
+          item: li.item || null,
           hsn_code: li.hsn_code || null,
           description: li.description,
           delivery_date: li.delivery_date || null,
@@ -1150,6 +1155,7 @@ export default function WorkOrders() {
                     <thead className="bg-muted/40">
                       <tr>
                         <th className="p-1.5 text-left w-8">#</th>
+                        <th className="p-1.5 text-left">Item</th>
                         <th className="p-1.5 text-left">HSN</th>
                         <th className="p-1.5 text-left min-w-[200px]">Description *</th>
                         <th className="p-1.5 text-left">Delivery</th>
@@ -1178,6 +1184,7 @@ export default function WorkOrders() {
                       {w_lineItems.map((li, i) => (
                         <tr key={li._key} className="border-t">
                           <td className="p-1 text-center text-muted-foreground">{i + 1}</td>
+                          <td className="p-1"><Input className="h-7 text-xs w-24" value={li.item} onChange={(e) => updateLineItem(li._key, { item: e.target.value })} placeholder="Item code" /></td>
                           <td className="p-1"><Input className="h-7 text-xs w-20" value={li.hsn_code} onChange={(e) => updateLineItem(li._key, { hsn_code: e.target.value })} /></td>
                           <td className="p-1"><Textarea rows={1} className="text-xs min-w-[200px] resize-none" value={li.description} onChange={(e) => updateLineItem(li._key, { description: e.target.value })} placeholder="Work description" /></td>
                           <td className="p-1"><Input type="date" className="h-7 text-xs w-32" value={li.delivery_date} onChange={(e) => updateLineItem(li._key, { delivery_date: e.target.value })} /></td>

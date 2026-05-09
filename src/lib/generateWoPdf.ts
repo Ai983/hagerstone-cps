@@ -11,6 +11,7 @@ export interface WoPdfCustomColumn {
 }
 
 export interface WoPdfLineItem {
+  item?: string | null;
   hsn_code?: string | null;
   description: string;
   delivery_date?: string | null;
@@ -39,8 +40,8 @@ export interface WoPdfData {
   supplierAddress?: string | null;
 
   /* Work Address — where the work happens */
-  workAtName?: string | null;          // first line: "Work At: ..."
-  workAddress?: string | null;         // multi-line full address
+  workAtName?: string | null;
+  workAddress?: string | null;
 
   /* Meta grid */
   priceBasis?: string | null;
@@ -73,7 +74,7 @@ export interface WoPdfData {
   /* Custom columns user added */
   customColumns?: WoPdfCustomColumn[];
 
-  /* Standard T&Cs (left) and work remarks (right, red) — both editable lists */
+  /* Standard T&Cs (left) and work remarks (right) — both editable lists */
   standardTerms: string[];
   workRemarks: string[];
 
@@ -102,6 +103,11 @@ const fmtPlainNum = (n: number | null | undefined): string => {
   return Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
+const fmtMoney = (n: number | null | undefined): string => {
+  if (n == null || isNaN(Number(n))) return "";
+  return "Rs." + Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
 const amountInWords = (amount: number): string => {
   const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
     "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
@@ -127,220 +133,289 @@ const amountInWords = (amount: number): string => {
   return w.trim();
 };
 
-/* Company defaults — these mirror generatePoPdf companyConfig defaults */
+/* Company defaults */
 const CO_NAME  = "Hagerstone International Pvt. Ltd";
-const CO_ADDR  = "D-107, 91 Springboard Hub, Red FM Road, Sector-2, Noida, (U.P)";
-const CO_TEL   = "Tel: +91 9811596660";
-const CO_EMAIL = "Email: procurement@hagerstone.com";
 
 /* ─────────────────────────────────────────────────────── builder ── */
 
+/**
+ * Renders a Work Order PDF in the cell-bordered grid layout matching the
+ * Hagerstone reference template. Every visible block is a bordered
+ * `autoTable` so the document looks like the offline printed form.
+ */
 export function buildWoPdf(data: WoPdfData): Blob {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-  const W = doc.internal.pageSize.getWidth();
-  const H = doc.internal.pageSize.getHeight();
+  const W = doc.internal.pageSize.getWidth();   // 210
+  const H = doc.internal.pageSize.getHeight();  // 297
   const ML = 6;
   const MR = 6;
-  const CW = W - ML - MR;
+  const CW = W - ML - MR;                       // 198
 
   const hagerstoneGstin = data.hagerstoneGstin ?? "09AAECH3768B1ZM";
-  const hagerstoneGstLine = "GST NO: " + hagerstoneGstin;
+  const headerLine = "Hagerstone International Pvt. Ltd GST NO: " + hagerstoneGstin;
 
   let y = ML;
 
-  /* ── 1. Header ── */
-  const LOGO_W = 60;
-  const LOGO_H = 22;
+  /* ── 1. Top header strip — three bordered cells ────────────────────────
+     Layout: [FIXED QUANTITY] [empty for logo space] [Hagerstone .. GST NO] */
+  const HDR_H = 8;
+  const cellLeft = 36;          // "FIXED QUANTITY" cell width
+  const cellRight = 60;         // logo cell width (top-right)
+  const cellMid  = CW - cellLeft - cellRight;
 
-  // FIXED QUANTITY label (top-left, mirrors image)
+  // Left cell: FIXED QUANTITY label
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(0);
+  doc.rect(ML, y, cellLeft, HDR_H);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
   doc.setTextColor(20, 20, 20);
-  doc.text("FIXED QUANTITY", ML, y + 4);
+  doc.text("FIXED QUANTITY", ML + cellLeft / 2, y + HDR_H / 2 + 1, { align: "center" });
 
+  // Middle cell: company name + GST in one line
+  doc.rect(ML + cellLeft, y, cellMid, HDR_H);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.text(headerLine, ML + cellLeft + cellMid / 2, y + HDR_H / 2 + 1, { align: "center" });
+
+  // Right cell: empty grid cell (logo will overlay)
+  doc.rect(ML + cellLeft + cellMid, y, cellRight, HDR_H);
+
+  /* ── 2. Logo block — fits in the right header column band, top-right ── */
+  const LOGO_H = 24;
+  const LOGO_W = 50;
   if (data.logoBase64) {
     try {
-      doc.addImage(data.logoBase64, "JPEG", W - MR - LOGO_W, y, LOGO_W, LOGO_H, "wo-logo", "FAST");
+      // Asset is a JPEG (no alpha) — declare JPEG so jsPDF embeds it directly
+      doc.addImage(
+        data.logoBase64,
+        "JPEG",
+        W - MR - LOGO_W - 4,
+        y + HDR_H + 1,
+        LOGO_W,
+        LOGO_H,
+        "wo-logo",
+        "FAST"
+      );
     } catch (_) { /* logo optional */ }
   }
 
-  // Company name + GST in centre
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.setTextColor(180, 90, 0);
-  doc.text(CO_NAME, W / 2, y + 6, { align: "center" });
+  y += HDR_H;
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(60, 60, 60);
-  doc.text(hagerstoneGstLine, W / 2, y + 11, { align: "center" });
-
-  doc.setFontSize(7);
-  doc.setTextColor(80, 80, 80);
-  doc.text(CO_ADDR, W / 2, y + 15, { align: "center" });
-  doc.text(CO_TEL + "    " + CO_EMAIL, W / 2, y + 18.5, { align: "center" });
-
-  y += LOGO_H + 4;
-  doc.setLineWidth(0.4);
-  doc.setDrawColor(0);
-  doc.line(ML, y, W - MR, y);
-  y += 1.5;
-
-  /* ── 2. Supplier (left) + WO Meta (right) ── */
-  const leftW = CW * 0.55;
-  const rightW = CW * 0.45;
-  const rightX = ML + leftW + 2;
-
-  // LEFT: Supplier
-  doc.setFont("helvetica", "bold");
+  /* ── 3. Supplier label column (left) + Supplier values (mid) + Logo gutter (right)
+     Single bordered grid row matching the new template. ── */
+  // Pre-compute the height needed for supplier values
   doc.setFontSize(7.5);
+  const supValueLines: string[] = [];
+  supValueLines.push((data.supplierName ?? "").toUpperCase());
+  if (data.supplierAddress) {
+    const addr = doc.splitTextToSize(data.supplierAddress, cellMid - 4);
+    supValueLines.push(...addr);
+  }
+  if (data.supplierContact || data.supplierEmail) {
+    const tel = data.supplierContact ? `Tel: ${data.supplierContact}` : "";
+    const em  = data.supplierEmail   ? `Email: ${data.supplierEmail}` : "";
+    supValueLines.push([tel, em].filter(Boolean).join("; "));
+  }
+  const supBlockH = Math.max(LOGO_H + 2, supValueLines.length * 3.6 + 4);
+
+  // Left column: labels
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(0);
+  doc.rect(ML, y, cellLeft, supBlockH);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
   doc.setTextColor(20, 20, 20);
-  doc.text("Details of Supplier   :   " + data.supplierName.toUpperCase(), ML, y + 5);
-
-  const supLines: [string, string][] = [
-    ["GSTIN", data.supplierGstin ?? ""],
-    ["State", data.supplierState ?? ""],
-    ["Kind Attn", data.supplierKindAttn ?? ""],
-    ["Contact", data.supplierContact ?? ""],
-    ["Email", data.supplierEmail ?? ""],
-    ["Address", data.supplierAddress ?? ""],
+  let labelY = y + 4;
+  const supLabels = [
+    "Details of Supplier :",
+    "GSTIN: " + (data.supplierGstin ?? ""),
+    "State: " + (data.supplierState ?? ""),
+    "Kind Attn: " + (data.supplierKindAttn ?? ""),
+    "Contact: " + (data.supplierContact ?? ""),
+    "Email: " + (data.supplierEmail ?? ""),
+    "Address:",
   ];
-
-  let sy = y + 10;
   doc.setFontSize(7);
-  for (const [label, val] of supLines) {
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(60, 60, 60);
-    doc.text(label + ":", ML, sy);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(20, 20, 20);
-    const wrapped = doc.splitTextToSize(val || "", leftW - 22);
-    doc.text(wrapped, ML + 22, sy);
-    sy += wrapped.length > 1 ? wrapped.length * 3.6 : 4;
+  for (const line of supLabels) {
+    const wrapped = doc.splitTextToSize(line, cellLeft - 2);
+    doc.text(wrapped, ML + 1.5, labelY);
+    labelY += wrapped.length * 3.4 + 0.5;
   }
 
-  // RIGHT: WO Number + dates + payment terms
-  let ry = y + 3;
-  const metaRows: [string, string][] = [
+  // Middle column: bold supplier name + address
+  doc.rect(ML + cellLeft, y, cellMid, supBlockH);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.text((data.supplierName ?? "").toUpperCase(), ML + cellLeft + 1.5, y + 4);
+
+  // Address + contacts in plain font below
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
+  let valY = y + 8;
+  if (data.supplierAddress) {
+    const addrLines = doc.splitTextToSize(data.supplierAddress, cellMid - 3);
+    doc.text(addrLines, ML + cellLeft + 1.5, valY);
+    valY += addrLines.length * 3.6;
+  }
+  if (data.supplierContact || data.supplierEmail) {
+    const tel = data.supplierContact ? `Tel: ${data.supplierContact}` : "";
+    const em  = data.supplierEmail   ? `Email: ${data.supplierEmail}` : "";
+    doc.text([tel, em].filter(Boolean).join("; "), ML + cellLeft + 1.5, valY);
+  }
+
+  // Right column: empty (logo lives here, drawn earlier)
+  doc.rect(ML + cellLeft + cellMid, y, cellRight, supBlockH);
+
+  y += supBlockH;
+
+  /* ── 4. Order meta grid + Work Address + PO No block — combined row ──
+     Three columns:
+     LEFT  (cellLeft):  meta labels (Price Basis, Dispatch By, ...)
+     MID   (cellMid):   meta values + Work Address block
+     RIGHT (cellRight): PO No / dates / payment terms
+  */
+  const metaLeftPairs: [string, string][] = [
+    ["Price Basis", data.priceBasis ?? ""],
+    ["Dispatch By", data.dispatchBy ?? ""],
+    ["Freight & Labour", data.freightLabour ?? ""],
+    ["Insurance", data.insurance ?? ""],
+    ["Packing Terms", data.packingTerms ?? ""],
+    ["Warranty", data.warranty ?? ""],
+    ["Test Certificate", data.testCertificate ?? ""],
+    ["Transporter", data.transporter ?? ""],
+    ["Delivery Sch", fmtDate(data.deliverySchedule)],
+  ];
+
+  const metaRightRows: [string, string][] = [
     ["Purchase Order No", data.woNumber],
     ["Po Issue Date", fmtDate(data.poIssueDate)],
     ["Po upto", fmtDate(data.poUptoDate)],
     ["Valid Upto", fmtDate(data.validUpto)],
-    ["Mode of Payment", data.modeOfPayment ?? "NEFT/RTGS"],
+    ["Mode of Payment", data.modeOfPayment ?? ""],
     ["Payment Terms", data.paymentTerms ?? ""],
     ["Eff.Dt", fmtDate(data.effectiveDate)],
   ];
 
-  doc.setFontSize(7);
-  const valueMaxW = rightW - 32;
-  for (const [label, val] of metaRows) {
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(60, 60, 60);
-    doc.text(label + ":", rightX, ry);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(20, 20, 20);
-    const wrapped = doc.splitTextToSize(String(val || ""), valueMaxW);
-    doc.text(wrapped, rightX + 32, ry);
-    ry += wrapped.length > 1 ? wrapped.length * 3.5 + 0.5 : 4;
-  }
+  const metaRowH = 6;
+  const metaBlockH = Math.max(
+    metaLeftPairs.length * metaRowH,
+    metaRightRows.length * metaRowH
+  );
 
-  y = Math.max(sy, ry) + 2;
+  // Borders
   doc.setLineWidth(0.3);
-  doc.line(ML, y, W - MR, y);
-  y += 1.5;
+  doc.setDrawColor(0);
 
-  /* ── 3. Meta grid (Price Basis, Dispatch, Freight, etc.) on left + Work Address on right ── */
-  // Left side: 2-col grid of meta fields
-  const metaLeftW = CW * 0.55;
-  const workRightW = CW * 0.45;
-  const workRightX = ML + metaLeftW + 2;
-
-  const metaPairs: [string, string][] = [
-    ["Price Basis", data.priceBasis ?? ""],
-    ["Dispatch By", data.dispatchBy ?? "Road"],
-    ["Freight & Labour", data.freightLabour ?? "INCLUSIVE"],
-    ["Insurance", data.insurance ?? "SUPPLIER SCOPE"],
-    ["Packing Terms", data.packingTerms ?? "STANDARD"],
-    ["Warranty", data.warranty ?? "AS PER PI"],
-    ["Test Certificate", data.testCertificate ?? "REQUIRED"],
-    ["Transporter", data.transporter ?? "SUPPLIER SCOPE"],
-    ["Delivery Sch", fmtDate(data.deliverySchedule)],
-  ];
-
-  let my = y;
-  doc.setFontSize(6.8);
-  for (const [label, val] of metaPairs) {
+  // Left meta labels column — each row is its own bordered cell
+  for (let i = 0; i < metaLeftPairs.length; i++) {
+    const cellY = y + i * metaRowH;
+    doc.rect(ML, cellY, cellLeft, metaRowH);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(60, 60, 60);
-    doc.text(label + " :", ML, my + 3.5);
-    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
     doc.setTextColor(20, 20, 20);
-    const wrapped = doc.splitTextToSize(String(val), metaLeftW - 32);
-    doc.text(wrapped, ML + 32, my + 3.5);
-    my += wrapped.length > 1 ? wrapped.length * 3.5 + 0.5 : 4;
-    doc.setLineWidth(0.15);
-    doc.setDrawColor(220);
-    doc.line(ML, my + 0.5, ML + metaLeftW, my + 0.5);
-    doc.setDrawColor(0);
-    my += 0.5;
+    doc.text(metaLeftPairs[i][0] + " :", ML + 1.5, cellY + metaRowH / 2 + 1);
+  }
+  // Pad remaining cells if right column is taller
+  if (metaLeftPairs.length * metaRowH < metaBlockH) {
+    doc.rect(ML, y + metaLeftPairs.length * metaRowH, cellLeft, metaBlockH - metaLeftPairs.length * metaRowH);
   }
 
-  // Right: Work Address block
-  let wy = y;
+  // Middle column: meta values (top portion) + Work Address (bottom)
+  // Meta values land in roughly the top half; Work Address in bottom half.
+  const midSplit = Math.min(8 * metaRowH, metaBlockH);  // first 8 rows for values
+  for (let i = 0; i < metaLeftPairs.length; i++) {
+    const cellY = y + i * metaRowH;
+    doc.rect(ML + cellLeft, cellY, cellMid * 0.45, metaRowH);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(20, 20, 20);
+    const val = metaLeftPairs[i][1];
+    const wrapped = doc.splitTextToSize(val, cellMid * 0.45 - 4);
+    doc.text(wrapped[0] ?? "", ML + cellLeft + 2, cellY + metaRowH / 2 + 1);
+  }
+  if (metaLeftPairs.length * metaRowH < midSplit) {
+    doc.rect(ML + cellLeft, y + metaLeftPairs.length * metaRowH, cellMid * 0.45, midSplit - metaLeftPairs.length * metaRowH);
+  }
+
+  // Work Address column — right portion of mid
+  const waX = ML + cellLeft + cellMid * 0.45;
+  const waW = cellMid * 0.55;
+  doc.rect(waX, y, waW, metaBlockH);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
   doc.setTextColor(0, 80, 160);
-  doc.text("WORK ADDRESS:", workRightX, wy + 4);
-  wy += 6;
-
+  doc.text("WORK ADDRESS", waX + waW / 2, y + 4, { align: "center" });
+  let waY = y + 9;
   if (data.workAtName) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(7);
     doc.setTextColor(60, 60, 60);
-    doc.text("Work At:", workRightX, wy);
+    doc.text("Work At:", waX + 2, waY);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(20, 20, 20);
-    const atLines = doc.splitTextToSize(data.workAtName, workRightW - 18);
-    doc.text(atLines, workRightX + 18, wy);
-    wy += Math.max(atLines.length * 3.6, 4) + 2;
+    const atLines = doc.splitTextToSize(data.workAtName, waW - 22);
+    doc.text(atLines, waX + 22, waY);
+    waY += Math.max(atLines.length * 3.6, 4) + 2;
   }
   if (data.workAddress) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
     doc.setTextColor(20, 20, 20);
-    const addrLines = doc.splitTextToSize(data.workAddress, workRightW - 4);
-    doc.text(addrLines, workRightX, wy);
-    wy += addrLines.length * 3.6 + 2;
+    const addrLines = doc.splitTextToSize(data.workAddress, waW - 4);
+    doc.text(addrLines, waX + 2, waY);
   }
 
-  y = Math.max(my, wy) + 2;
-  doc.setLineWidth(0.3);
-  doc.setDrawColor(0);
-  doc.line(ML, y, W - MR, y);
-  y += 2;
+  // Right column: PO meta — each row in its own cell, label | value
+  const rightX = ML + cellLeft + cellMid;
+  const rightLabelW = 22;
+  const rightValueW = cellRight - rightLabelW;
+  for (let i = 0; i < metaRightRows.length; i++) {
+    const cellY = y + i * metaRowH;
+    // label cell
+    doc.rect(rightX, cellY, rightLabelW, metaRowH);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(6.5);
+    doc.setTextColor(60, 60, 60);
+    const labelWrapped = doc.splitTextToSize(metaRightRows[i][0] + " :", rightLabelW - 2);
+    doc.text(labelWrapped[0] ?? "", rightX + 1.5, cellY + metaRowH / 2 + 1);
+    // value cell
+    doc.rect(rightX + rightLabelW, cellY, rightValueW, metaRowH);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(20, 20, 20);
+    const valWrapped = doc.splitTextToSize(String(metaRightRows[i][1] ?? ""), rightValueW - 3);
+    doc.text(valWrapped[0] ?? "", rightX + rightLabelW + 2, cellY + metaRowH / 2 + 1);
+  }
+  // Pad right column if shorter than left
+  if (metaRightRows.length * metaRowH < metaBlockH) {
+    doc.rect(rightX, y + metaRightRows.length * metaRowH, cellRight, metaBlockH - metaRightRows.length * metaRowH);
+  }
 
-  /* "Dear Sir, ..." line */
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(7.5);
-  doc.setTextColor(30, 30, 30);
-  doc.text("Dear Sir, We are pleased to place an order for the following items:-", ML, y);
-  y += 4;
+  y += metaBlockH;
 
-  /* ── 4. Line items table ── */
+  /* ── 5. "Dear Sir..." line in its own bordered strip ── */
+  const introH = 5;
+  doc.rect(ML, y, CW, introH);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7);
+  doc.setTextColor(20, 20, 20);
+  doc.text("Dear Sir, We are pleased to place an order for the following items:-", ML + 1.5, y + introH / 2 + 1);
+  y += introH;
+
+  /* ── 6. Line items table ── */
   const customCols = data.customColumns ?? [];
 
   const tableHead: string[] = [
     "Sr.\nNo.",
-    "HSN /\nSAC\nCode",
+    "Item",
     "Description of Goods or Services",
-    "Delivery\nDate",
-    "Qty",
+    "Quantity",
     "Unit",
     "Rate",
     "Discount",
     "Total Value\nof Order",
     "SGST\n%",
-    "CGST\n%",
     "IGST\n%",
     ...customCols.map((c) => c.label),
   ];
@@ -348,16 +423,14 @@ export function buildWoPdf(data: WoPdfData): Blob {
   const tableBody = data.lineItems.map((li, i) => {
     const baseRow: (string | number)[] = [
       i + 1,
-      li.hsn_code ?? "",
+      li.item ?? "",
       li.description,
-      fmtDate(li.delivery_date),
       li.quantity != null ? Number(li.quantity).toString() : "",
       li.unit ?? "",
-      fmtPlainNum(li.rate),
-      fmtPlainNum(li.discount),
-      fmtPlainNum(li.total_value),
+      fmtMoney(li.rate),
+      li.discount != null && Number(li.discount) > 0 ? fmtPlainNum(li.discount) : "",
+      fmtMoney(li.total_value),
       li.sgst_percent != null && Number(li.sgst_percent) > 0 ? `${li.sgst_percent}%` : "",
-      li.cgst_percent != null && Number(li.cgst_percent) > 0 ? `${li.cgst_percent}%` : "",
       li.igst_percent != null && Number(li.igst_percent) > 0 ? `${li.igst_percent}%` : "",
     ];
     const customRow = customCols.map((c) => {
@@ -369,22 +442,19 @@ export function buildWoPdf(data: WoPdfData): Blob {
   });
 
   const baseColStyles: Record<number, any> = {
-    0: { cellWidth: 8, halign: "center" },
-    1: { cellWidth: 14, halign: "center" },
-    2: { cellWidth: 46, halign: "left", overflow: "linebreak" },
-    3: { cellWidth: 16, halign: "center" },
-    4: { cellWidth: 10, halign: "right" },
-    5: { cellWidth: 10, halign: "center" },
-    6: { cellWidth: 16, halign: "right" },
-    7: { cellWidth: 14, halign: "right" },
-    8: { cellWidth: 20, halign: "right" },
-    9: { cellWidth: 9, halign: "center" },
-    10: { cellWidth: 9, halign: "center" },
-    11: { cellWidth: 9, halign: "center" },
+    0: { cellWidth: 8,  halign: "center" },
+    1: { cellWidth: 18, halign: "left" },
+    2: { cellWidth: 60, halign: "left", overflow: "linebreak" },
+    3: { cellWidth: 13, halign: "right" },
+    4: { cellWidth: 11, halign: "center" },
+    5: { cellWidth: 18, halign: "right" },
+    6: { cellWidth: 14, halign: "right" },
+    7: { cellWidth: 22, halign: "right" },
+    8: { cellWidth: 9,  halign: "center" },
+    9: { cellWidth: 9,  halign: "center" },
   };
-  // Append default styles for any user-added custom columns (B2 fix)
   customCols.forEach((_, idx) => {
-    baseColStyles[12 + idx] = { cellWidth: 18, halign: "left", overflow: "linebreak" };
+    baseColStyles[10 + idx] = { cellWidth: 18, halign: "left", overflow: "linebreak" };
   });
 
   autoTable(doc, {
@@ -392,9 +462,10 @@ export function buildWoPdf(data: WoPdfData): Blob {
     margin: { left: ML, right: MR },
     head: [tableHead],
     body: tableBody,
+    theme: "grid",
     styles: { fontSize: 6.5, cellPadding: 1.5, lineColor: [0, 0, 0], lineWidth: 0.2, overflow: "linebreak" },
     headStyles: {
-      fillColor: [220, 230, 241],
+      fillColor: [255, 220, 196],   // light peach matching reference
       textColor: [20, 20, 20],
       fontStyle: "bold",
       fontSize: 6,
@@ -404,110 +475,106 @@ export function buildWoPdf(data: WoPdfData): Blob {
     columnStyles: baseColStyles,
   });
 
-  y = (doc as any).lastAutoTable.finalY + 2;
+  y = (doc as any).lastAutoTable.finalY;
 
-  /* ── 5. Standard Terms (left) + Work Remarks (right, red) ── */
-  const tcW = CW * 0.50;
-  const remarksW = CW * 0.48;
-  const remarksX = ML + tcW + 2;
-  const startY5 = y;
+  /* ── 7. Two-column block: Terms (left) + Work Remarks (right) ── */
+  const termsW = CW * 0.50;
+  const remarksW = CW - termsW;
 
-  // Left: Standard Terms & Conditions
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(7);
-  doc.setTextColor(20, 20, 20);
-  doc.text("Terms & Conditions", ML, y + 4);
-  let lyTC = y + 7;
+  const termsLines: string[] = ["Terms & Conditions"];
+  data.standardTerms.forEach((t, i) => termsLines.push((i + 1) + ". " + t));
+  const remarksLines: string[] = ["Remarks"];
+  data.workRemarks.forEach((r) => remarksLines.push(r));
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(6.5);
-  doc.setTextColor(20, 20, 20);
-  for (let i = 0; i < data.standardTerms.length; i++) {
-    const lines = doc.splitTextToSize((i + 1) + ". " + data.standardTerms[i], tcW - 2);
-    doc.text(lines, ML, lyTC);
-    lyTC += lines.length * 3.4 + 0.6;
-  }
+  // Compute box height — wrap and count lines
+  const computeWrappedLines = (lines: string[], w: number, fontSize: number) => {
+    doc.setFontSize(fontSize);
+    let total = 0;
+    for (const ln of lines) {
+      const wrapped = doc.splitTextToSize(ln, w - 4);
+      total += wrapped.length;
+    }
+    return total;
+  };
+  const termsLineCount = computeWrappedLines(termsLines, termsW, 6.8);
+  const remarksLineCount = computeWrappedLines(remarksLines, remarksW, 6.8);
+  const lineH = 3.5;
+  const trBlockH = Math.max(termsLineCount, remarksLineCount) * lineH + 6;
 
-  // Right: Work Remarks in red
-  let lyRem = startY5;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(7);
-  doc.setTextColor(180, 0, 0);
-  doc.text("Remarks (Work Specific)", remarksX, lyRem + 4);
-  lyRem += 7;
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(6.3);
-  for (const rem of data.workRemarks) {
-    const lines = doc.splitTextToSize(rem, remarksW - 2);
-    doc.text(lines, remarksX, lyRem);
-    lyRem += lines.length * 3.3 + 0.4;
-  }
-
-  y = Math.max(lyTC, lyRem) + 2;
-
-  /* ── 6. Total Order Value + Total in Words ── */
+  // Left box: Terms
   doc.setLineWidth(0.3);
   doc.setDrawColor(0);
-  doc.line(ML, y, W - MR, y);
-  y += 4;
-
-  // Totals box (right) — small summary
-  const totalsX = W - MR - 60;
-  const totalsW = 60;
-  let tyT = y;
-  const drawTotalRow = (label: string, val: string, bold = false) => {
-    if (bold) {
-      doc.setFont("helvetica", "bold");
-      doc.setFillColor(230, 230, 230);
-      doc.rect(totalsX, tyT, totalsW, 5, "F");
-    } else {
-      doc.setFont("helvetica", "normal");
-    }
-    doc.setFontSize(7);
-    doc.setTextColor(20, 20, 20);
-    doc.text(label, totalsX + 2, tyT + 3.5);
-    doc.text(val, totalsX + totalsW - 2, tyT + 3.5, { align: "right" });
-    doc.setDrawColor(180);
-    doc.setLineWidth(0.2);
-    doc.rect(totalsX, tyT, totalsW, 5);
-    tyT += 5;
-  };
-  drawTotalRow("Subtotal", fmtPlainNum(data.subtotal));
-  drawTotalRow("GST", fmtPlainNum(data.gstAmount));
-  drawTotalRow("Grand Total", fmtPlainNum(data.grandTotal), true);
-
-  // Total in Words (left of totals)
+  doc.rect(ML, y, termsW, trBlockH);
+  let txtY = y + 3.5;
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(7.5);
+  doc.setFontSize(7);
   doc.setTextColor(20, 20, 20);
-  doc.text("Total Order Value (In Words):", ML, y + 4);
+  doc.text("Terms & Conditions", ML + 1.5, txtY);
+  txtY += 4;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(6.8);
+  for (let i = 0; i < data.standardTerms.length; i++) {
+    const wrapped = doc.splitTextToSize((i + 1) + ". " + data.standardTerms[i], termsW - 4);
+    doc.text(wrapped, ML + 1.5, txtY);
+    txtY += wrapped.length * lineH + 0.3;
+  }
+
+  // Right box: Remarks
+  const remX = ML + termsW;
+  doc.rect(remX, y, remarksW, trBlockH);
+  let remY = y + 3.5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7);
+  doc.setTextColor(20, 20, 20);
+  doc.text("Remarks", remX + 1.5, remY);
+  remY += 4;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(6.8);
+  for (const rem of data.workRemarks) {
+    const wrapped = doc.splitTextToSize(rem, remarksW - 4);
+    doc.text(wrapped, remX + 1.5, remY);
+    remY += wrapped.length * lineH + 0.3;
+  }
+
+  y += trBlockH;
+
+  /* ── 8. Total Order Value (in words) + signatory row ── */
+  const footH = 8;
+  doc.rect(ML, y, CW * 0.65, footH);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(7);
+  doc.setTextColor(20, 20, 20);
+  doc.text("Total Order Value (In Words):", ML + 1.5, y + 3.5);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7);
   const words = data.totalInWords || ("Rupees " + amountInWords(data.grandTotal) + " Only");
-  const wordsLines = doc.splitTextToSize(words, totalsX - ML - 4);
-  doc.text(wordsLines, ML, y + 9);
+  const wordsLines = doc.splitTextToSize(words, CW * 0.65 - 4);
+  doc.text(wordsLines[0] ?? "", ML + 50, y + 3.5);
+  if (wordsLines.length > 1) doc.text(wordsLines[1] ?? "", ML + 1.5, y + 7);
 
-  y = Math.max(tyT, y + 9 + wordsLines.length * 3.5) + 4;
-  doc.setLineWidth(0.3);
-  doc.line(ML, y, W - MR, y);
-  y += 5;
+  // Right cell: Authorised Signatory
+  const sigX = ML + CW * 0.65;
+  const sigW = CW * 0.35;
+  doc.rect(sigX, y, sigW, footH);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.text(data.authorisedSignatory ?? "", sigX + sigW / 2, y + footH / 2 + 1, { align: "center" });
 
-  /* ── 7. Signatures ── */
-  const sigCols = [ML, ML + CW * 0.4, ML + CW * 0.75];
+  y += footH;
+
+  /* ── 9. Prepared / Checked row ── */
+  const sigRowH = 6;
+  const halfW = CW / 2;
+  doc.rect(ML, y, halfW, sigRowH);
+  doc.rect(ML + halfW, y, halfW, sigRowH);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7);
   doc.setTextColor(60, 60, 60);
-  doc.text("Prepared By : " + (data.preparedByName ?? ""), sigCols[0], y);
-  doc.text("Chkd By : " + (data.checkedByName ?? ""), sigCols[1], y);
-  doc.text("Authorised Signatory", sigCols[2], y);
-  y += 5;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(7.5);
-  doc.setTextColor(20, 20, 20);
-  doc.text(data.authorisedSignatory ?? "", sigCols[2], y);
+  doc.text("Prepared By: " + (data.preparedByName ?? ""), ML + 2, y + sigRowH / 2 + 1);
+  doc.text("Chkd By: " + (data.checkedByName ?? ""), ML + halfW + 2, y + sigRowH / 2 + 1);
+  y += sigRowH;
 
-  /* ── 8. Footer ── */
+  /* ── 10. Footer notice ── */
   y = H - 10;
   doc.setLineWidth(0.2);
   doc.setDrawColor(150);
@@ -607,3 +674,7 @@ export const WO_CATEGORIES: { value: string; label: string }[] = [
   { value: "INT", label: "Interiors" },
   { value: "MISC", label: "Miscellaneous" },
 ];
+
+// Re-export type used by consumers — keeps the import surface stable.
+// (The CO_NAME constant intentionally stays internal.)
+export const _internal = { CO_NAME };
