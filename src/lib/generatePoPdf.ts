@@ -548,6 +548,13 @@ export function buildPoPdf(data: PoPdfData): Blob {
   let ty = startY5;
 
   const drawTotalRow = (label: string, val: string, bold = false) => {
+    // Page-break guard: if drawing this row would clip below the page edge, jump
+    // to a new page and continue. Prevents the Grand Total from being cut off
+    // when line items push the totals box near the bottom margin.
+    if (ty + rowH > H - 14) {
+      doc.addPage();
+      ty = ML + 4;
+    }
     if (bold) {
       doc.setFont("helvetica", "bold");
       doc.setFillColor(230, 230, 230);
