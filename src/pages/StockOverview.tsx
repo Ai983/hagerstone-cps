@@ -17,7 +17,16 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -69,6 +78,13 @@ export default function StockOverview() {
   const [approvalTab, setApprovalTab] = useState<ApprovalTab>("live");
   const [actingId, setActingId] = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<OverviewRow | null>(null);
+  const [editTarget, setEditTarget] = useState<OverviewRow | null>(null);
+  const [editForm, setEditForm] = useState<{
+    project_code: string;
+    item_description: string;
+    unit: string;
+    current_qty: string;
+  }>({ project_code: "", item_description: "", unit: "", current_qty: "" });
 
   const canReviewStock = !!user && REVIEW_STOCK_ROLES.has(user.role);
 
@@ -174,22 +190,48 @@ export default function StockOverview() {
     return dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
   };
 
-  const approveRow = async (r: OverviewRow) => {
-    if (!user) return;
-    setActingId(r.stock_id);
+  const openApproveDialog = (r: OverviewRow) => {
+    setEditForm({
+      project_code: r.project_code ?? "",
+      item_description: r.item_description ?? "",
+      unit: r.unit ?? "",
+      current_qty: String(r.current_qty ?? ""),
+    });
+    setEditTarget(r);
+  };
+
+  const saveAndApprove = async () => {
+    if (!user || !editTarget) return;
+    const trimmedDesc = editForm.item_description.trim();
+    if (!trimmedDesc) {
+      toast.error("Item description khaali nahi ho sakta");
+      return;
+    }
+    const qty = Number(editForm.current_qty);
+    if (!Number.isFinite(qty) || qty < 0) {
+      toast.error("Current qty valid number honi chahiye");
+      return;
+    }
+
+    setActingId(editTarget.stock_id);
     try {
       const { error } = await supabase
         .from("cps_stock")
         .update({
+          project_code: editForm.project_code.trim() || null,
+          item_description: trimmedDesc,
+          unit: editForm.unit.trim() || null,
+          current_qty: qty,
           approval_status: "approved",
           approved_at: new Date().toISOString(),
           approved_by: user.id,
           updated_at: new Date().toISOString(),
         } as any)
-        .eq("id", r.stock_id)
+        .eq("id", editTarget.stock_id)
         .eq("approval_status", "pending");
       if (error) throw error;
       toast.success("Stock line approved — ab site / live views par dikhegi");
+      setEditTarget(null);
       await loadAll();
     } catch (e: any) {
       toast.error(e?.message || "Approve fail");
@@ -378,7 +420,7 @@ export default function StockOverview() {
                                 variant="default"
                                 className="h-8"
                                 disabled={actingId === r.stock_id}
-                                onClick={() => void approveRow(r)}
+                                onClick={() => openApproveDialog(r)}
                               >
                                 {actingId === r.stock_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Approve"}
                               </Button>
@@ -438,6 +480,77 @@ export default function StockOverview() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={!!editTarget} onOpenChange={(o) => { if (!o && actingId === null) setEditTarget(null); }}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Review &amp; Approve Stock Line</DialogTitle>
+            <DialogDescription>
+              Fields edit karke approve karo. Changes approval ke saath save honge.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="ap_project">Project</Label>
+                <Input
+                  id="ap_project"
+                  value={editForm.project_code}
+                  onChange={(e) => setEditForm((f) => ({ ...f, project_code: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ap_unit">Unit</Label>
+                <Input
+                  id="ap_unit"
+                  value={editForm.unit}
+                  onChange={(e) => setEditForm((f) => ({ ...f, unit: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ap_desc">Item description</Label>
+              <Input
+                id="ap_desc"
+                value={editForm.item_description}
+                onChange={(e) => setEditForm((f) => ({ ...f, item_description: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ap_qty">Current qty</Label>
+              <Input
+                id="ap_qty"
+                type="number"
+                step="any"
+                min="0"
+                value={editForm.current_qty}
+                onChange={(e) => setEditForm((f) => ({ ...f, current_qty: e.target.value }))}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setEditTarget(null)}
+              disabled={actingId !== null}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void saveAndApprove()}
+              disabled={actingId !== null}
+            >
+              {actingId !== null ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> Saving…
+                </>
+              ) : (
+                "Save & Approve"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
