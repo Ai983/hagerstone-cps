@@ -1592,8 +1592,18 @@ export default function PurchaseOrders() {
 
         const newPoId = (newPoData as any).id as string;
 
-        // Clone line items
-        const clonedItems = viewPoLineItems.map((li) => ({
+        // Clone line items — fetch fresh from DB instead of trusting React state.
+        // (Previously read viewPoLineItems, which is empty during the brief window
+        // between PO header render and line items Promise resolving. A user clicking
+        // "Revise PO" in that window produced an empty revision — confirmed in prod.)
+        const { data: freshLineItems, error: liFetchErr } = await supabase
+          .from("cps_po_line_items")
+          .select("description, brand, quantity, unit, rate, gst_percent, gst_amount, total_value, hsn_code, sort_order")
+          .eq("po_id", viewPo.id)
+          .order("sort_order", { ascending: true });
+        if (liFetchErr) throw liFetchErr;
+
+        const clonedItems = (freshLineItems ?? []).map((li: any) => ({
           po_id: newPoId,
           description: li.description,
           brand: li.brand,
