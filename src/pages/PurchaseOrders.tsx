@@ -432,6 +432,10 @@ export default function PurchaseOrders() {
   const [viewOpen, setViewOpen] = useState(false);
   const [viewLoading, setViewLoading] = useState(false);
   const [viewPo, setViewPo] = useState<PoRow | null>(null);
+  // When the current PO is a revision (has parent_po_id), we fetch the parent PO's
+  // founder_approval_reason so users can see WHY the original was rejected without
+  // having to navigate away to open the superseded PO.
+  const [viewPoParent, setViewPoParent] = useState<{ po_number: string; founder_approval_reason: string | null } | null>(null);
 
   const [viewSupplier, setViewSupplier] = useState<SupplierRow | null>(null);
   const [viewRfq, setViewRfq] = useState<RfqRow | null>(null);
@@ -1145,6 +1149,7 @@ export default function PurchaseOrders() {
     setViewOpen(true);
     setViewLoading(true);
     setViewPo(null);
+    setViewPoParent(null);
     setViewSupplier(null);
     setViewRfq(null);
     setViewPr(null);
@@ -1178,6 +1183,19 @@ export default function PurchaseOrders() {
           .maybeSingle()
           .then(({ data }) => {
             if (data) setRevisedByPo(data as { id: string; po_number: string });
+          });
+      }
+
+      // If this PO is a revision (has parent_po_id), fetch the parent's rejection reason
+      // so we can show it inline in the "Revision of Earlier PO" banner.
+      if (po.parent_po_id) {
+        supabase
+          .from("cps_purchase_orders")
+          .select("po_number, founder_approval_reason")
+          .eq("id", po.parent_po_id)
+          .maybeSingle()
+          .then(({ data }) => {
+            if (data) setViewPoParent(data as { po_number: string; founder_approval_reason: string | null });
           });
       }
 
@@ -3530,15 +3548,26 @@ export default function PurchaseOrders() {
                   )}
 
                   {/* Revision history — shown if this PO is a revision of another */}
-                  {viewPo.parent_po_id && viewPo.revision_reason && (
+                  {viewPo.parent_po_id && (viewPo.revision_reason || viewPoParent) && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-1">
                       <div className="text-sm font-semibold text-blue-900">📋 Revision of Earlier PO</div>
                       <div className="text-xs text-blue-700">
-                        This is <strong>v{viewPo.version ?? 2}</strong> — a revised version of an earlier PO.
+                        This is <strong>v{viewPo.version ?? 2}</strong>
+                        {viewPoParent?.po_number && (
+                          <> — revised from <strong className="font-mono">{viewPoParent.po_number}</strong></>
+                        )}
+                        .
                       </div>
-                      <div className="text-xs text-blue-700">
-                        <strong>Reason for revision:</strong> {viewPo.revision_reason}
-                      </div>
+                      {viewPo.revision_reason && (
+                        <div className="text-xs text-blue-700">
+                          <strong>Reason for revision:</strong> {viewPo.revision_reason}
+                        </div>
+                      )}
+                      {viewPoParent?.founder_approval_reason && (
+                        <div className="text-xs text-red-700 mt-1 pt-1 border-t border-blue-200/60">
+                          <strong>Original founder rejection reason:</strong> "{viewPoParent.founder_approval_reason}"
+                        </div>
+                      )}
                     </div>
                   )}
 
