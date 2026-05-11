@@ -810,6 +810,39 @@ export default function Quotes() {
     }
   };
 
+  // Re-sum cps_quote_line_items for a quote and write the totals back to its
+  // cps_quotes header. Call this after ANY line-item insert/update/delete so the
+  // comparison sheet (which prefers header values) never shows stale numbers.
+  const recomputeQuoteHeaderTotals = async (quoteId: string) => {
+    const { data: rows } = await supabase
+      .from("cps_quote_line_items")
+      .select("quantity, rate, gst_percent, freight, packing, total_landed_rate")
+      .eq("quote_id", quoteId);
+    const items = (rows ?? []) as Array<{
+      quantity: number | string | null;
+      rate: number | string | null;
+      gst_percent: number | string | null;
+      freight: number | string | null;
+      packing: number | string | null;
+      total_landed_rate: number | string | null;
+    }>;
+    const subtotal = items.reduce(
+      (s, li) => s + (Number(li.quantity) || 0) * (Number(li.rate) || 0),
+      0,
+    );
+    const landed = items.reduce(
+      (s, li) => s + (Number(li.quantity) || 0) * (Number(li.total_landed_rate) || 0),
+      0,
+    );
+    await supabase
+      .from("cps_quotes")
+      .update({
+        total_quoted_value: Number(subtotal.toFixed(2)),
+        total_landed_value: Number(landed.toFixed(2)),
+      })
+      .eq("id", quoteId);
+  };
+
   const saveLineItemCorrections = async (item: QuoteLineItem) => {
     if (!user) {
       toast.error("Please sign in");
@@ -852,6 +885,8 @@ export default function Quotes() {
       toast.error("Failed to save corrections");
       return;
     }
+    // Header totals depend on this line — keep them in sync for the comparison sheet.
+    if (reviewQuoteId) await recomputeQuoteHeaderTotals(reviewQuoteId);
     setCorrectedByItemId((prev) => ({ ...prev, [item.id]: true }));
     toast.success("✓ Corrected");
   };
@@ -1140,6 +1175,8 @@ Rules:
         const { error: liErr } = await supabase.from("cps_quote_line_items").insert(lineItems);
         if (liErr) toast.error("Failed to insert line items");
       }
+      // Keep quote header totals in sync with the just-replaced line items.
+      await recomputeQuoteHeaderTotals(reviewQuote.id);
 
       if (reviewQuote.supplier_id) {
         await supabase.from("cps_rfq_suppliers")
@@ -1514,6 +1551,8 @@ Rules:
       });
       const { error: liErr } = await supabase.from("cps_quote_line_items").insert(linePayload);
       if (liErr) toast.error("Failed to insert line items");
+      // Sync header totals so the comparison sheet shows the right numbers.
+      await recomputeQuoteHeaderTotals(quoteId);
     }
 
     toast.success(`Quote ${(quoteInsert as { id: string; blind_quote_ref: string }).blind_quote_ref} logged — ${logRfqItems.length} items`);
