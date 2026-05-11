@@ -49,6 +49,7 @@ type WoRow = {
   supplier_name_text: string | null;
   grand_total: number | null;
   created_at: string;
+  created_by: string | null;
   wo_pdf_url: string | null;
 };
 
@@ -120,6 +121,7 @@ export default function WorkOrders() {
   const { user, canViewPrices } = useAuth();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<WoRow[]>([]);
+  const [userNameMap, setUserNameMap] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -196,10 +198,24 @@ export default function WorkOrders() {
     try {
       const { data, error } = await supabase
         .from("cps_work_orders")
-        .select("id, wo_number, category, status, project_site, project_code, supplier_id, supplier_name_text, grand_total, created_at, wo_pdf_url")
+        .select("id, wo_number, category, status, project_site, project_code, supplier_id, supplier_name_text, grand_total, created_at, created_by, wo_pdf_url")
         .order("created_at", { ascending: false });
       if (error) throw error;
-      setRows((data ?? []) as WoRow[]);
+      const woRows = (data ?? []) as WoRow[];
+      setRows(woRows);
+
+      const creatorIds = Array.from(new Set(woRows.map((r) => r.created_by).filter(Boolean) as string[]));
+      if (creatorIds.length > 0) {
+        const { data: usersData } = await supabase
+          .from("cps_users")
+          .select("id, name")
+          .in("id", creatorIds);
+        const map: Record<string, string> = {};
+        (usersData ?? []).forEach((u: any) => { map[u.id] = u.name; });
+        setUserNameMap(map);
+      } else {
+        setUserNameMap({});
+      }
     } catch (e: any) {
       toast.error(e?.message || "Failed to load work orders");
     } finally {
@@ -1053,6 +1069,7 @@ Rules:
                 <TableHead>Site</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="text-right">Total</TableHead>
+                <TableHead>Created By</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -1061,12 +1078,12 @@ Rules:
               {loading ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 8 }).map((__, j) => <TableCell key={j}><Skeleton className="h-4 w-24" /></TableCell>)}
+                    {Array.from({ length: 9 }).map((__, j) => <TableCell key={j}><Skeleton className="h-4 w-24" /></TableCell>)}
                   </TableRow>
                 ))
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-12">
+                  <TableCell colSpan={9} className="text-center py-12">
                     <div className="space-y-3">
                       <Briefcase className="h-10 w-10 mx-auto text-muted-foreground/30" />
                       <div className="text-muted-foreground">No work orders yet</div>
@@ -1083,6 +1100,7 @@ Rules:
                     <TableCell className="text-sm text-muted-foreground">{r.project_site ?? "—"}</TableCell>
                     <TableCell><Badge className={`text-[10px] border-0 ${STATUS_BADGE[r.status]}`}>{r.status.replace(/_/g, " ")}</Badge></TableCell>
                     <TableCell className="text-right text-sm font-medium">{canViewPrices ? fmtINR(r.grand_total) : "***"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{r.created_by ? (userNameMap[r.created_by] ?? "—") : "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{fmtDate(r.created_at)}</TableCell>
                     <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
