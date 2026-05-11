@@ -96,7 +96,7 @@ const extractQuoteWithAI = async (file: File, rfqItems: LineItem[]) => {
   const { supabase } = await import("@/integrations/supabase/client");
   const { data, error } = await supabase.functions.invoke("claude-proxy", {
     body: {
-      model: "claude-sonnet-4-5",
+      model: "claude-sonnet-4-6",
       max_tokens: 1500,
       messages: [{
         role: "user",
