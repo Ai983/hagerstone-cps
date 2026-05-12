@@ -26,7 +26,7 @@ import {
 import {
   buildWoPdf, uploadWoPdf, uploadWoRateList,
   WO_CATEGORIES, WO_DEFAULT_STANDARD_TERMS, WO_DEFAULT_WORK_REMARKS,
-  type WoPdfData, type WoPdfLineItem, type WoPdfCustomColumn,
+  type WoPdfData, type WoPdfLineItem, type WoPdfCustomColumn, type WoPdfCustomTotalRow,
 } from "@/lib/generateWoPdf";
 
 import logoUrl from "@/assets/wo-logo.jpeg";
@@ -177,6 +177,8 @@ export default function WorkOrders() {
 
   const [w_lineItems, setLineItems] = useState<LineItem[]>([newLineItem()]);
   const [w_customColumns, setCustomColumns] = useState<WoPdfCustomColumn[]>([]);
+  const [w_customTotalRows, setCustomTotalRows] = useState<WoPdfCustomTotalRow[]>([]);
+  const [w_grandTotalOverride, setGrandTotalOverride] = useState<string>("");  // empty = auto
   const [w_standardTerms, setStandardTerms] = useState<string[]>([...WO_DEFAULT_STANDARD_TERMS]);
   const [w_workRemarks, setWorkRemarks] = useState<string[]>([...WO_DEFAULT_WORK_REMARKS]);
 
@@ -296,22 +298,40 @@ export default function WorkOrders() {
   }, [rows]);
 
   // ── computed totals during editing ──
+  // Subtotal = sum of per-line Total Value. Extra charges (CGST/SGST/IGST/Freight/
+  // Discount, etc.) are user-added rows in the totals block — see w_customTotalRows.
+  // Grand Total: auto = Subtotal + sum(custom rows), rounded to whole rupees.
+  //              If w_grandTotalOverride is set, that wins and Round Off is whatever
+  //              balances the box.
   const computedTotals = useMemo(() => {
     let subtotal = 0;
-    let gstAmount = 0;
     for (const li of w_lineItems) {
       const qty = parseFloat(li.quantity) || 0;
       const rate = parseFloat(li.rate) || 0;
-      const disc = parseFloat(li.discount) || 0;
-      const lineTotal = parseFloat(li.total_value) || (qty * rate - disc);
+      const lineTotal = parseFloat(li.total_value) || (qty * rate);
       subtotal += lineTotal;
-      const sgst = (parseFloat(li.sgst_percent) || 0) / 100;
-      const cgst = (parseFloat(li.cgst_percent) || 0) / 100;
-      const igst = (parseFloat(li.igst_percent) || 0) / 100;
-      gstAmount += lineTotal * (sgst + cgst + igst);
     }
-    return { subtotal, gstAmount, grandTotal: subtotal + gstAmount };
-  }, [w_lineItems]);
+    const parseCustomVal = (s: string): number => {
+      if (!s) return 0;
+      const trimmed = String(s).trim();
+      const negParen = /^\(.*\)$/.test(trimmed);
+      const cleaned = trimmed.replace(/[(),\s₹Rs.]/gi, "").replace(/(?<=\d)-/g, "");
+      const n = parseFloat(cleaned);
+      if (!isFinite(n)) return 0;
+      return negParen ? -Math.abs(n) : n;
+    };
+    const customSum = (w_customTotalRows ?? []).reduce(
+      (s, r) => s + parseCustomVal(r?.value || ""),
+      0,
+    );
+    const autoGrand = Math.round(subtotal + customSum);
+    const overrideRaw = (w_grandTotalOverride ?? "").trim();
+    const overrideNum = overrideRaw === "" ? null : parseCustomVal(overrideRaw);
+    const grandTotal = overrideNum != null && isFinite(overrideNum) ? overrideNum : autoGrand;
+    const roundOff = grandTotal - subtotal - customSum;
+    const isManualGrand = overrideNum != null && isFinite(overrideNum);
+    return { subtotal, customSum, roundOff, autoGrand, grandTotal, isManualGrand, gstAmount: 0 };
+  }, [w_lineItems, w_customTotalRows, w_grandTotalOverride]);
 
   // ── wizard helpers ──
   const resetWizard = () => {
@@ -331,6 +351,8 @@ export default function WorkOrders() {
     setModeOfPayment("NEFT/RTGS"); setPaymentTerms("");
     setLineItems([newLineItem()]);
     setCustomColumns([]);
+    setCustomTotalRows([]);
+    setGrandTotalOverride("");
     setStandardTerms([...WO_DEFAULT_STANDARD_TERMS]);
     setWorkRemarks([...WO_DEFAULT_WORK_REMARKS]);
     setPreparedBy(user?.name ?? "");
@@ -398,6 +420,10 @@ export default function WorkOrders() {
       setStandardTerms(((wo as any).standard_terms as string[]) ?? [...WO_DEFAULT_STANDARD_TERMS]);
       setWorkRemarks(((wo as any).work_remarks as string[]) ?? [...WO_DEFAULT_WORK_REMARKS]);
       setCustomColumns(((wo as any).custom_columns as WoPdfCustomColumn[]) ?? []);
+      setCustomTotalRows(((wo as any).custom_total_rows as WoPdfCustomTotalRow[]) ?? []);
+      setGrandTotalOverride(
+        (wo as any).grand_total_override != null ? String((wo as any).grand_total_override) : ""
+      );
       setPreparedBy((wo as any).prepared_by_name ?? "");
       setCheckedBy((wo as any).checked_by_name ?? "");
       setAuthorisedSignatory((wo as any).authorised_signatory ?? "MR.DHRUV AGARWAL");
@@ -691,6 +717,7 @@ Rules:
       gstAmount: computedTotals.gstAmount,
       grandTotal: computedTotals.grandTotal,
       customColumns: w_customColumns,
+      customTotalRows: w_customTotalRows,
       standardTerms: w_standardTerms,
       workRemarks: w_workRemarks,
       preparedByName: w_preparedBy,
@@ -798,7 +825,9 @@ Rules:
         subtotal: computedTotals.subtotal,
         gst_amount: computedTotals.gstAmount,
         grand_total: computedTotals.grandTotal,
+        grand_total_override: computedTotals.isManualGrand ? computedTotals.grandTotal : null,
         custom_columns: w_customColumns,
+        custom_total_rows: w_customTotalRows,
         standard_terms: w_standardTerms,
         work_remarks: w_workRemarks,
         prepared_by_name: w_preparedBy || null,
@@ -1321,7 +1350,7 @@ Rules:
                     <div className="space-y-0.5"><Label className="text-[11px] text-muted-foreground">Valid Upto</Label><Input type="date" className="h-8 text-xs" value={w_validUpto} onChange={(e) => setValidUpto(e.target.value)} /></div>
                     <div className="space-y-0.5"><Label className="text-[11px] text-muted-foreground">Effective Date</Label><Input type="date" className="h-8 text-xs" value={w_effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} /></div>
                     <div className="space-y-0.5"><Label className="text-[11px] text-muted-foreground">Mode of Payment</Label><Input className="h-8 text-xs" value={w_modeOfPayment} onChange={(e) => setModeOfPayment(e.target.value)} /></div>
-                    <div className="space-y-0.5 col-span-2"><Label className="text-[11px] text-muted-foreground">Payment Terms</Label><Textarea rows={2} className="text-xs" value={w_paymentTerms} onChange={(e) => setPaymentTerms(e.target.value)} placeholder="e.g. 20% Advance Along with Work Order Quoted Price..." /></div>
+                    <div className="space-y-0.5 col-span-2"><Label className="text-[11px] text-muted-foreground">Payment Terms (multi-line OK — full text appears on PDF)</Label><Textarea rows={5} className="text-xs" value={w_paymentTerms} onChange={(e) => setPaymentTerms(e.target.value)} placeholder={"e.g.\nMachine: 100% advance before delivery.\nInstallation: 50% advance with WO, 20% after copper pipes, 20% after connection, 10% after commissioning."} /></div>
                   </div>
                 </div>
               </div>
@@ -1352,11 +1381,7 @@ Rules:
                         <th className="p-1.5 text-right">Qty</th>
                         <th className="p-1.5 text-left">Unit</th>
                         <th className="p-1.5 text-right">Rate</th>
-                        <th className="p-1.5 text-right">Disc</th>
                         <th className="p-1.5 text-right">Total</th>
-                        <th className="p-1.5 text-right">SGST%</th>
-                        <th className="p-1.5 text-right">CGST%</th>
-                        <th className="p-1.5 text-right">IGST%</th>
                         {w_customColumns.map((c) => (
                           <th key={c.key} className="p-1.5 text-left whitespace-nowrap">
                             <span className="inline-flex items-center gap-1">
@@ -1381,11 +1406,7 @@ Rules:
                           <td className="p-1"><Input type="number" step="0.01" className="h-7 text-xs w-20 text-right" value={li.quantity} onChange={(e) => updateLineItem(li._key, { quantity: e.target.value })} /></td>
                           <td className="p-1"><Input className="h-7 text-xs w-16" value={li.unit} onChange={(e) => updateLineItem(li._key, { unit: e.target.value })} placeholder="SQFT" /></td>
                           <td className="p-1"><Input type="number" step="0.01" className="h-7 text-xs w-24 text-right" value={li.rate} onChange={(e) => updateLineItem(li._key, { rate: e.target.value })} /></td>
-                          <td className="p-1"><Input type="number" step="0.01" className="h-7 text-xs w-20 text-right" value={li.discount} onChange={(e) => updateLineItem(li._key, { discount: e.target.value })} /></td>
                           <td className="p-1"><Input type="number" step="0.01" className="h-7 text-xs w-24 text-right font-medium" value={li.total_value} onChange={(e) => updateLineItem(li._key, { total_value: e.target.value })} /></td>
-                          <td className="p-1"><Input type="number" step="0.01" className="h-7 text-xs w-16 text-right" value={li.sgst_percent} onChange={(e) => updateLineItem(li._key, { sgst_percent: e.target.value })} /></td>
-                          <td className="p-1"><Input type="number" step="0.01" className="h-7 text-xs w-16 text-right" value={li.cgst_percent} onChange={(e) => updateLineItem(li._key, { cgst_percent: e.target.value })} /></td>
-                          <td className="p-1"><Input type="number" step="0.01" className="h-7 text-xs w-16 text-right" value={li.igst_percent} onChange={(e) => updateLineItem(li._key, { igst_percent: e.target.value })} /></td>
                           {w_customColumns.map((c) => (
                             <td key={c.key} className="p-1">
                               <Input className="h-7 text-xs min-w-[100px]" value={li.custom_data[c.key] ?? ""} onChange={(e) => setCustomCellValue(li._key, c.key, e.target.value)} />
@@ -1404,8 +1425,97 @@ Rules:
 
                 <div className="flex items-center justify-end gap-4 text-sm pt-2">
                   <span>Subtotal: <span className="font-medium">{fmtINR(computedTotals.subtotal)}</span></span>
-                  <span>GST: <span className="font-medium">{fmtINR(computedTotals.gstAmount)}</span></span>
+                  {computedTotals.customSum !== 0 && (
+                    <span>Extras: <span className="font-medium">{fmtINR(computedTotals.customSum)}</span></span>
+                  )}
                   <span className="text-base">Grand Total: <span className="font-bold text-primary">{fmtINR(computedTotals.grandTotal)}</span></span>
+                </div>
+
+                {/* Custom totals rows — show on PDF between IGST and Round Off */}
+                <div className="border-t pt-3 mt-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      Extra Totals Rows
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setCustomTotalRows((p) => [...p, { label: "", value: "" }])}
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" /> Add Row
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground -mt-1">
+                    Add charges that should appear after Subtotal — e.g. <span className="font-mono">CGST 9% = 4,95,000</span>, <span className="font-mono">SGST 9% = 4,95,000</span>, <span className="font-mono">Freight = 5,000</span>, <span className="font-mono">Discount = -2,000</span>. Each value is added to Grand Total. Use parentheses or a leading minus for negative amounts.
+                  </p>
+                  {w_customTotalRows.length === 0 ? (
+                    <div className="text-[11px] text-muted-foreground italic">No extra charges. Click "Add Row" to add CGST, SGST, IGST, Freight, Discount, etc.</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {w_customTotalRows.map((row, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <Input
+                            className="h-8 text-xs flex-1"
+                            placeholder="Label (e.g. Freight)"
+                            value={row.label}
+                            onChange={(e) =>
+                              setCustomTotalRows((p) => p.map((x, idx) => (idx === i ? { ...x, label: e.target.value } : x)))
+                            }
+                          />
+                          <Input
+                            className="h-8 text-xs w-40 text-right font-mono"
+                            placeholder="Value (e.g. 5,000.00)"
+                            value={row.value}
+                            onChange={(e) =>
+                              setCustomTotalRows((p) => p.map((x, idx) => (idx === i ? { ...x, value: e.target.value } : x)))
+                            }
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setCustomTotalRows((p) => p.filter((_, idx) => idx !== i))}
+                            className="text-destructive hover:text-destructive/70"
+                            title="Remove row"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Grand Total override — leave blank for auto (Subtotal + extras, rounded) */}
+                  <div className="border-t pt-2 mt-2 flex items-center justify-end gap-3">
+                    <Label className="text-xs text-muted-foreground shrink-0">
+                      Grand Total{" "}
+                      <span className="text-[10px] italic">
+                        (auto: {fmtINR(computedTotals.autoGrand)} — leave blank to use)
+                      </span>
+                    </Label>
+                    <Input
+                      className="h-9 text-sm w-44 text-right font-mono font-semibold"
+                      placeholder={String(computedTotals.autoGrand)}
+                      value={w_grandTotalOverride}
+                      onChange={(e) => setGrandTotalOverride(e.target.value)}
+                    />
+                    {w_grandTotalOverride && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 px-2 text-xs"
+                        onClick={() => setGrandTotalOverride("")}
+                        title="Clear override"
+                      >
+                        Reset
+                      </Button>
+                    )}
+                  </div>
+                  {computedTotals.isManualGrand && (
+                    <div className="text-[11px] text-amber-700 text-right">
+                      Manual Grand Total — Round Off A/c will show {fmtINR(computedTotals.roundOff)} to balance the box.
+                    </div>
+                  )}
                 </div>
               </div>
 

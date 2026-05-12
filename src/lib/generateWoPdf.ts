@@ -10,6 +10,11 @@ export interface WoPdfCustomColumn {
   type?: "text" | "number" | "date";
 }
 
+export interface WoPdfCustomTotalRow {
+  label: string;
+  value: string;
+}
+
 export interface WoPdfLineItem {
   item?: string | null;
   hsn_code?: string | null;
@@ -73,6 +78,9 @@ export interface WoPdfData {
 
   /* Custom columns user added */
   customColumns?: WoPdfCustomColumn[];
+
+  /* Custom totals-block rows added by user (e.g. Freight, Handling) — rendered between IGST and Round Off */
+  customTotalRows?: WoPdfCustomTotalRow[];
 
   /* Standard T&Cs (left) and work remarks (right) — both editable lists */
   standardTerms: string[];
@@ -288,9 +296,24 @@ export function buildWoPdf(data: WoPdfData): Blob {
   ];
 
   const metaRowH = 6;
+  const metaLineH = 3.2;          // line height inside a wrapped multi-line cell
+  const rightLabelW = 22;
+  const rightValueW = cellRight - rightLabelW;
+
+  // Pre-compute each right row's height — expand to fit wrapped text so multi-line
+  // values like Payment Terms ("Machine: 100% advance / Installation: 50%…") aren't
+  // clipped to a single line.
+  doc.setFontSize(7);
+  const rightRowHeights = metaRightRows.map(([_, val]) => {
+    const wrapped = doc.splitTextToSize(String(val ?? ""), rightValueW - 3);
+    const needed = wrapped.length * metaLineH + 2;
+    return Math.max(metaRowH, needed);
+  });
+  const rightTotalH = rightRowHeights.reduce((s, h) => s + h, 0);
+
   const metaBlockH = Math.max(
     metaLeftPairs.length * metaRowH,
-    metaRightRows.length * metaRowH
+    rightTotalH
   );
 
   // Borders
@@ -369,29 +392,40 @@ export function buildWoPdf(data: WoPdfData): Blob {
   doc.text("Work At:", waX + 2, y + metaBlockH - 2);
 
   // Right column: PO meta — each row in its own cell, label | value
+  // Row heights are pre-computed (rightRowHeights) so multi-line values like
+  // Payment Terms expand vertically instead of getting clipped.
   const rightX = ML + cellLeft + cellMid;
-  const rightLabelW = 22;
-  const rightValueW = cellRight - rightLabelW;
+  let rightCellY = y;
   for (let i = 0; i < metaRightRows.length; i++) {
-    const cellY = y + i * metaRowH;
+    const rowH = rightRowHeights[i];
     // label cell
-    doc.rect(rightX, cellY, rightLabelW, metaRowH);
+    doc.rect(rightX, rightCellY, rightLabelW, rowH);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(6.5);
     doc.setTextColor(60, 60, 60);
     const labelWrapped = doc.splitTextToSize(metaRightRows[i][0] + " :", rightLabelW - 2);
-    doc.text(labelWrapped[0] ?? "", rightX + 1.5, cellY + metaRowH / 2 + 1);
-    // value cell
-    doc.rect(rightX + rightLabelW, cellY, rightValueW, metaRowH);
+    doc.text(labelWrapped[0] ?? "", rightX + 1.5, rightCellY + Math.min(rowH / 2, metaRowH / 2) + 1);
+    // value cell — render ALL wrapped lines, not just the first
+    doc.rect(rightX + rightLabelW, rightCellY, rightValueW, rowH);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
     doc.setTextColor(20, 20, 20);
     const valWrapped = doc.splitTextToSize(String(metaRightRows[i][1] ?? ""), rightValueW - 3);
-    doc.text(valWrapped[0] ?? "", rightX + rightLabelW + 2, cellY + metaRowH / 2 + 1);
+    if (valWrapped.length <= 1) {
+      doc.text(valWrapped[0] ?? "", rightX + rightLabelW + 2, rightCellY + rowH / 2 + 1);
+    } else {
+      // Multi-line value: top-aligned with small offset
+      let txtY = rightCellY + metaLineH;
+      for (const ln of valWrapped) {
+        doc.text(ln, rightX + rightLabelW + 2, txtY);
+        txtY += metaLineH;
+      }
+    }
+    rightCellY += rowH;
   }
   // Pad right column if shorter than left
-  if (metaRightRows.length * metaRowH < metaBlockH) {
-    doc.rect(rightX, y + metaRightRows.length * metaRowH, cellRight, metaBlockH - metaRightRows.length * metaRowH);
+  if (rightTotalH < metaBlockH) {
+    doc.rect(rightX, y + rightTotalH, cellRight, metaBlockH - rightTotalH);
   }
 
   y += metaBlockH;
@@ -415,10 +449,7 @@ export function buildWoPdf(data: WoPdfData): Blob {
     "Quantity",
     "Unit",
     "Rate",
-    "Discount",
     "Total Value\nof Order",
-    "SGST\n%",
-    "IGST\n%",
     ...customCols.map((c) => c.label),
   ];
 
@@ -430,10 +461,7 @@ export function buildWoPdf(data: WoPdfData): Blob {
       li.quantity != null ? Number(li.quantity).toString() : "",
       li.unit ?? "",
       fmtMoney(li.rate),
-      li.discount != null && Number(li.discount) > 0 ? fmtPlainNum(li.discount) : "",
       fmtMoney(li.total_value),
-      li.sgst_percent != null && Number(li.sgst_percent) > 0 ? `${li.sgst_percent}%` : "",
-      li.igst_percent != null && Number(li.igst_percent) > 0 ? `${li.igst_percent}%` : "",
     ];
     const customRow = customCols.map((c) => {
       const v = li.custom_data?.[c.key];
@@ -443,20 +471,19 @@ export function buildWoPdf(data: WoPdfData): Blob {
     return [...baseRow, ...customRow];
   });
 
+  // Column widths sum to CW (198mm) so the items table spans the full content
+  // width and lines up cleanly with the right-aligned totals box below.
   const baseColStyles: Record<number, any> = {
-    0: { cellWidth: 8,  halign: "center" },
-    1: { cellWidth: 18, halign: "left" },
-    2: { cellWidth: 60, halign: "left", overflow: "linebreak" },
-    3: { cellWidth: 13, halign: "right" },
-    4: { cellWidth: 11, halign: "center" },
-    5: { cellWidth: 18, halign: "right" },
-    6: { cellWidth: 14, halign: "right" },
-    7: { cellWidth: 22, halign: "right" },
-    8: { cellWidth: 9,  halign: "center" },
-    9: { cellWidth: 9,  halign: "center" },
+    0: { cellWidth: 10, halign: "center" },
+    1: { cellWidth: 22, halign: "left" },
+    2: { cellWidth: 86, halign: "left", overflow: "linebreak" },
+    3: { cellWidth: 16, halign: "right" },
+    4: { cellWidth: 14, halign: "center" },
+    5: { cellWidth: 22, halign: "right" },
+    6: { cellWidth: 28, halign: "right" },
   };
   customCols.forEach((_, idx) => {
-    baseColStyles[10 + idx] = { cellWidth: 18, halign: "left", overflow: "linebreak" };
+    baseColStyles[7 + idx] = { cellWidth: 18, halign: "left", overflow: "linebreak" };
   });
 
   autoTable(doc, {
@@ -478,6 +505,85 @@ export function buildWoPdf(data: WoPdfData): Blob {
   });
 
   y = (doc as any).lastAutoTable.finalY;
+
+  /* ── 6b. Totals block (right-aligned) ──
+     Summary rows under the line items: Total Qty / CGST / SGST / IGST /
+     [user-added custom rows] / Round Off / Grand Total.
+     The block is right-aligned so the labels and amounts line up with the
+     Total Value column of the items table above.
+  */
+  {
+    const totW = 80;                  // width of totals box
+    const totX = ML + CW - totW;      // right-aligned to content margin
+    const totLabelW = 50;
+    const totValueW = totW - totLabelW;
+    const totRowH = 5;
+
+    // Parse custom row values into numbers so they roll into the grand total.
+    // Strips currency symbols, commas, and accepts "(1,200)" as negative.
+    const parseCustomVal = (s: string): number => {
+      if (!s) return 0;
+      const trimmed = String(s).trim();
+      const negParen = /^\(.*\)$/.test(trimmed);
+      const cleaned = trimmed.replace(/[(),\s₹Rs.]/gi, "").replace(/(?<=\d)-/g, "");
+      const n = parseFloat(cleaned);
+      if (!isFinite(n)) return 0;
+      return negParen ? -Math.abs(n) : n;
+    };
+
+    const validCustomRows = (data.customTotalRows ?? [])
+      .filter((r) => r && (r.label || r.value));
+    const customSum = validCustomRows.reduce((s, r) => s + parseCustomVal(r.value || ""), 0);
+
+    // Grand total comes from the caller (data.grandTotal). When the user has not
+    // overridden it, the caller passes the auto value: subtotal + customSum
+    // rounded to whole rupees. When overridden, the caller passes the manual
+    // value. Either way, Round Off is whatever makes the box balance.
+    const grandFinal = data.grandTotal;
+    const roundOff = grandFinal - data.subtotal - customSum;
+
+    const fmtPlain2 = (n: number) =>
+      n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtSignedPlain2 = (n: number) => (n < 0 ? "(" + fmtPlain2(Math.abs(n)) + ")" : fmtPlain2(n));
+
+    const totalRows: { label: string; value: string; bold?: boolean }[] = [
+      { label: "Subtotal", value: fmtPlain2(data.subtotal) },
+      ...validCustomRows.map((r) => ({ label: r.label || "", value: r.value || "" })),
+      { label: "Round Off A/c", value: fmtSignedPlain2(roundOff) },
+      { label: "Grand Total", value: fmtPlain2(grandFinal), bold: true },
+    ];
+
+    // Page-break guard — total height needed (plus a little for the Terms block
+    // that follows so we don't strand the grand total on its own page).
+    const blockH = totalRows.length * totRowH;
+    if (y + blockH > H - 20) {
+      doc.addPage();
+      y = 12;
+    }
+
+    doc.setLineWidth(0.3);
+    doc.setDrawColor(0);
+    let trY = y;
+    for (const row of totalRows) {
+      // Label cell
+      doc.rect(totX, trY, totLabelW, totRowH);
+      // Value cell
+      if (row.bold) {
+        doc.setFillColor(255, 220, 196);
+        doc.rect(totX + totLabelW, trY, totValueW, totRowH, "F");
+      }
+      doc.rect(totX + totLabelW, trY, totValueW, totRowH);
+
+      doc.setFont("helvetica", row.bold ? "bold" : "normal");
+      doc.setFontSize(row.bold ? 7.5 : 7);
+      doc.setTextColor(20, 20, 20);
+      doc.text(row.label, totX + 2, trY + totRowH / 2 + 1.2);
+      doc.text(row.value, totX + totW - 2, trY + totRowH / 2 + 1.2, { align: "right" });
+
+      trY += totRowH;
+    }
+    y = trY;
+  }
 
   /* ── 7. Two-column block: Terms (left) + Work Remarks (right) ── */
   const termsW = CW * 0.50;
