@@ -519,38 +519,16 @@ export function buildWoPdf(data: WoPdfData): Blob {
     const totValueW = totW - totLabelW;
     const totRowH = 5;
 
-    // Parse custom row values into numbers so they roll into the grand total.
-    // Strips currency symbols, commas, and accepts "(1,200)" as negative.
-    const parseCustomVal = (s: string): number => {
-      if (!s) return 0;
-      const trimmed = String(s).trim();
-      const negParen = /^\(.*\)$/.test(trimmed);
-      const cleaned = trimmed.replace(/[(),\s₹Rs.]/gi, "").replace(/(?<=\d)-/g, "");
-      const n = parseFloat(cleaned);
-      if (!isFinite(n)) return 0;
-      return negParen ? -Math.abs(n) : n;
-    };
-
     const validCustomRows = (data.customTotalRows ?? [])
       .filter((r) => r && (r.label || r.value));
-    const customSum = validCustomRows.reduce((s, r) => s + parseCustomVal(r.value || ""), 0);
-
-    // Grand total comes from the caller (data.grandTotal). When the user has not
-    // overridden it, the caller passes the auto value: subtotal + customSum
-    // rounded to whole rupees. When overridden, the caller passes the manual
-    // value. Either way, Round Off is whatever makes the box balance.
-    const grandFinal = data.grandTotal;
-    const roundOff = grandFinal - data.subtotal - customSum;
 
     const fmtPlain2 = (n: number) =>
       n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const fmtSignedPlain2 = (n: number) => (n < 0 ? "(" + fmtPlain2(Math.abs(n)) + ")" : fmtPlain2(n));
 
     const totalRows: { label: string; value: string; bold?: boolean }[] = [
       { label: "Subtotal", value: fmtPlain2(data.subtotal) },
       ...validCustomRows.map((r) => ({ label: r.label || "", value: r.value || "" })),
-      { label: "Round Off A/c", value: fmtSignedPlain2(roundOff) },
-      { label: "Grand Total", value: fmtPlain2(grandFinal), bold: true },
+      { label: "Grand Total", value: fmtPlain2(data.grandTotal), bold: true },
     ];
 
     // Page-break guard — total height needed (plus a little for the Terms block

@@ -178,7 +178,8 @@ export default function WorkOrders() {
   const [w_lineItems, setLineItems] = useState<LineItem[]>([newLineItem()]);
   const [w_customColumns, setCustomColumns] = useState<WoPdfCustomColumn[]>([]);
   const [w_customTotalRows, setCustomTotalRows] = useState<WoPdfCustomTotalRow[]>([]);
-  const [w_grandTotalOverride, setGrandTotalOverride] = useState<string>("");  // empty = auto
+  const [w_subtotalOverride, setSubtotalOverride] = useState<string>("");      // blank = auto from line items
+  const [w_grandTotalOverride, setGrandTotalOverride] = useState<string>("");  // blank = auto from subtotal + extras
   const [w_standardTerms, setStandardTerms] = useState<string[]>([...WO_DEFAULT_STANDARD_TERMS]);
   const [w_workRemarks, setWorkRemarks] = useState<string[]>([...WO_DEFAULT_WORK_REMARKS]);
 
@@ -298,19 +299,12 @@ export default function WorkOrders() {
   }, [rows]);
 
   // ── computed totals during editing ──
-  // Subtotal = sum of per-line Total Value. Extra charges (CGST/SGST/IGST/Freight/
-  // Discount, etc.) are user-added rows in the totals block — see w_customTotalRows.
-  // Grand Total: auto = Subtotal + sum(custom rows), rounded to whole rupees.
-  //              If w_grandTotalOverride is set, that wins and Round Off is whatever
-  //              balances the box.
+  // Subtotal: auto = sum of line item Totals; user can override by typing.
+  // Extra rows: pure display (CGST, SGST, IGST, Freight, Discount, etc.) — they
+  //             do NOT auto-add to Grand Total. User fills the Grand Total
+  //             themselves to whatever final number they want.
+  // Grand Total: typed by user. Placeholder defaults to Subtotal as a hint.
   const computedTotals = useMemo(() => {
-    let subtotal = 0;
-    for (const li of w_lineItems) {
-      const qty = parseFloat(li.quantity) || 0;
-      const rate = parseFloat(li.rate) || 0;
-      const lineTotal = parseFloat(li.total_value) || (qty * rate);
-      subtotal += lineTotal;
-    }
     const parseCustomVal = (s: string): number => {
       if (!s) return 0;
       const trimmed = String(s).trim();
@@ -320,18 +314,23 @@ export default function WorkOrders() {
       if (!isFinite(n)) return 0;
       return negParen ? -Math.abs(n) : n;
     };
-    const customSum = (w_customTotalRows ?? []).reduce(
-      (s, r) => s + parseCustomVal(r?.value || ""),
-      0,
-    );
-    const autoGrand = Math.round(subtotal + customSum);
-    const overrideRaw = (w_grandTotalOverride ?? "").trim();
-    const overrideNum = overrideRaw === "" ? null : parseCustomVal(overrideRaw);
-    const grandTotal = overrideNum != null && isFinite(overrideNum) ? overrideNum : autoGrand;
-    const roundOff = grandTotal - subtotal - customSum;
-    const isManualGrand = overrideNum != null && isFinite(overrideNum);
-    return { subtotal, customSum, roundOff, autoGrand, grandTotal, isManualGrand, gstAmount: 0 };
-  }, [w_lineItems, w_customTotalRows, w_grandTotalOverride]);
+
+    let autoSubtotal = 0;
+    for (const li of w_lineItems) {
+      const qty = parseFloat(li.quantity) || 0;
+      const rate = parseFloat(li.rate) || 0;
+      const lineTotal = parseFloat(li.total_value) || (qty * rate);
+      autoSubtotal += lineTotal;
+    }
+
+    const subOverride = (w_subtotalOverride ?? "").trim();
+    const subtotal = subOverride === "" ? autoSubtotal : parseCustomVal(subOverride);
+
+    const grandOverride = (w_grandTotalOverride ?? "").trim();
+    const grandTotal = grandOverride === "" ? subtotal : parseCustomVal(grandOverride);
+
+    return { autoSubtotal, autoGrand: subtotal, subtotal, customSum: 0, grandTotal, gstAmount: 0 };
+  }, [w_lineItems, w_subtotalOverride, w_grandTotalOverride]);
 
   // ── wizard helpers ──
   const resetWizard = () => {
@@ -352,6 +351,7 @@ export default function WorkOrders() {
     setLineItems([newLineItem()]);
     setCustomColumns([]);
     setCustomTotalRows([]);
+    setSubtotalOverride("");
     setGrandTotalOverride("");
     setStandardTerms([...WO_DEFAULT_STANDARD_TERMS]);
     setWorkRemarks([...WO_DEFAULT_WORK_REMARKS]);
@@ -421,9 +421,10 @@ export default function WorkOrders() {
       setWorkRemarks(((wo as any).work_remarks as string[]) ?? [...WO_DEFAULT_WORK_REMARKS]);
       setCustomColumns(((wo as any).custom_columns as WoPdfCustomColumn[]) ?? []);
       setCustomTotalRows(((wo as any).custom_total_rows as WoPdfCustomTotalRow[]) ?? []);
-      setGrandTotalOverride(
-        (wo as any).grand_total_override != null ? String((wo as any).grand_total_override) : ""
-      );
+      // Leave overrides blank — values auto-recompute from the loaded line items and extras.
+      // User can type in either input to override.
+      setSubtotalOverride("");
+      setGrandTotalOverride("");
       setPreparedBy((wo as any).prepared_by_name ?? "");
       setCheckedBy((wo as any).checked_by_name ?? "");
       setAuthorisedSignatory((wo as any).authorised_signatory ?? "MR.DHRUV AGARWAL");
@@ -825,7 +826,7 @@ Rules:
         subtotal: computedTotals.subtotal,
         gst_amount: computedTotals.gstAmount,
         grand_total: computedTotals.grandTotal,
-        grand_total_override: computedTotals.isManualGrand ? computedTotals.grandTotal : null,
+        grand_total_override: null,
         custom_columns: w_customColumns,
         custom_total_rows: w_customTotalRows,
         standard_terms: w_standardTerms,
@@ -1423,13 +1424,25 @@ Rules:
                   </table>
                 </div>
 
-                <div className="flex items-center justify-end gap-4 text-sm pt-2">
-                  <span>Subtotal: <span className="font-medium">{fmtINR(computedTotals.subtotal)}</span></span>
-                  {computedTotals.customSum !== 0 && (
-                    <span>Extras: <span className="font-medium">{fmtINR(computedTotals.customSum)}</span></span>
-                  )}
-                  <span className="text-base">Grand Total: <span className="font-bold text-primary">{fmtINR(computedTotals.grandTotal)}</span></span>
+                <div className="flex flex-wrap items-center justify-end gap-3 text-sm pt-2">
+                  <Label className="text-xs text-muted-foreground shrink-0">Subtotal</Label>
+                  <Input
+                    className="h-8 w-44 text-right font-mono text-sm"
+                    placeholder={String(computedTotals.autoSubtotal)}
+                    value={w_subtotalOverride}
+                    onChange={(e) => setSubtotalOverride(e.target.value)}
+                  />
+                  <Label className="text-sm font-bold shrink-0">Grand Total</Label>
+                  <Input
+                    className="h-9 w-44 text-right font-mono text-base font-bold text-primary"
+                    placeholder={String(computedTotals.autoGrand)}
+                    value={w_grandTotalOverride}
+                    onChange={(e) => setGrandTotalOverride(e.target.value)}
+                  />
                 </div>
+                <p className="text-[11px] text-muted-foreground text-right -mt-1">
+                  Subtotal default = sum of line items. Grand Total default = Subtotal. Both editable. Extras shown on PDF for reference — they do not change Grand Total.
+                </p>
 
                 {/* Custom totals rows — show on PDF between IGST and Round Off */}
                 <div className="border-t pt-3 mt-3 space-y-2">
@@ -1484,38 +1497,6 @@ Rules:
                     </div>
                   )}
 
-                  {/* Grand Total override — leave blank for auto (Subtotal + extras, rounded) */}
-                  <div className="border-t pt-2 mt-2 flex items-center justify-end gap-3">
-                    <Label className="text-xs text-muted-foreground shrink-0">
-                      Grand Total{" "}
-                      <span className="text-[10px] italic">
-                        (auto: {fmtINR(computedTotals.autoGrand)} — leave blank to use)
-                      </span>
-                    </Label>
-                    <Input
-                      className="h-9 text-sm w-44 text-right font-mono font-semibold"
-                      placeholder={String(computedTotals.autoGrand)}
-                      value={w_grandTotalOverride}
-                      onChange={(e) => setGrandTotalOverride(e.target.value)}
-                    />
-                    {w_grandTotalOverride && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="h-8 px-2 text-xs"
-                        onClick={() => setGrandTotalOverride("")}
-                        title="Clear override"
-                      >
-                        Reset
-                      </Button>
-                    )}
-                  </div>
-                  {computedTotals.isManualGrand && (
-                    <div className="text-[11px] text-amber-700 text-right">
-                      Manual Grand Total — Round Off A/c will show {fmtINR(computedTotals.roundOff)} to balance the box.
-                    </div>
-                  )}
                 </div>
               </div>
 
