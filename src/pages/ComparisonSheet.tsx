@@ -61,6 +61,7 @@ type ComparisonSheetRow = {
   frozen_at?: string | null;
   frozen_by?: string | null;
   snapshot_version?: number | null;
+  comparison_pdf_url?: string | null;
 };
 
 type RfqRow = { id: string; rfq_number: string; title: string | null; pr_id: string };
@@ -1181,6 +1182,63 @@ export default function ComparisonSheetPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheet, suppliers, aiRecommendation, loading, allQuoteLinesBySupplierId, quoteBySupplierId]);
 
+  /* Auto-upload comparison PDF to storage so resend payloads always have a URL.
+     Two triggers:
+       1. ?autoUploadFor=<po_id> in query — round-trip from PurchaseOrders Resend when
+          the URL was missing. After upload, navigate back to /purchase-orders and the
+          PurchaseOrders mount effect will pick up the sessionStorage flag and re-fire
+          the resend, this time with a valid comparison_pdf_url.
+       2. Passive backfill — any time someone opens a sheet that has no PDF URL stored,
+          upload one silently. Over time every approved sheet ends up with a URL,
+          so future resends "just work" without any redirect dance.
+     getComparisonPdfBuffer relies on a lot of derived state (suppliers, lineItems,
+     quote maps, market benchmarks). We gate on `loading=false` so all loaders have
+     committed before we try to build the PDF. */
+  const [autoUploadTried, setAutoUploadTried] = useState(false);
+  useEffect(() => {
+    if (autoUploadTried) return;
+    if (loading) return;
+    if (!sheet || !rfq) return;
+    if (suppliers.length === 0) return; // nothing to compare yet — skip silently
+
+    const params = new URLSearchParams(window.location.search);
+    const autoUploadForPoId = params.get("autoUploadFor");
+    const alreadyHasUrl = !!sheet.comparison_pdf_url;
+
+    // Passive path: URL already present and not in round-trip mode → nothing to do
+    if (alreadyHasUrl && !autoUploadForPoId) {
+      setAutoUploadTried(true);
+      return;
+    }
+
+    setAutoUploadTried(true);
+    (async () => {
+      try {
+        const url = await uploadComparisonPdf(sheet.id);
+        if (autoUploadForPoId) {
+          // Round-trip from Resend: flag intent and navigate back. PurchaseOrders mount
+          // effect will detect the flag and re-trigger the resend.
+          try {
+            sessionStorage.setItem("auto_resend_po_id", autoUploadForPoId);
+            if (url) sessionStorage.setItem("auto_resend_pdf_ready", "1");
+          } catch { /* sessionStorage might be unavailable in private browsing */ }
+          toast.success(url ? "Comparison PDF ready — returning to PO" : "Could not generate comparison PDF — returning to PO");
+          navigate("/purchase-orders");
+        } else if (url) {
+          // Passive backfill done. Update local sheet so we don't re-run on every render.
+          setSheet((prev) => prev ? { ...prev, comparison_pdf_url: url } : prev);
+        }
+      } catch {
+        if (autoUploadForPoId) {
+          // Even on failure, return so user isn't stranded on the comparison page
+          try { sessionStorage.setItem("auto_resend_po_id", autoUploadForPoId); } catch { /* ignore */ }
+          navigate("/purchase-orders");
+        }
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheet, rfq, suppliers.length, loading, autoUploadTried]);
+
   const canSeeMatrix = useMemo(() => {
     if (!sheet) return false;
     if (canCreateRFQ) return true;
@@ -2172,7 +2230,7 @@ export default function ComparisonSheetPage() {
   const getComparisonPdfBuffer = (): ArrayBuffer | null => {
     if (!sheet || !rfq) return null;
     const data = buildExportData();
-    if (!data) return;
+    if (!data) return null;
     const { supplierTotals, winnerSupplierId, resolveRate, cheapestPerRow, aiVerdict, headPickName, justification, aboveMarketCount } = data;
 
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });

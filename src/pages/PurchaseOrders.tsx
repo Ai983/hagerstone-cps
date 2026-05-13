@@ -384,6 +384,7 @@ export default function PurchaseOrders() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, searchParams]);
+
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(0);
@@ -436,6 +437,40 @@ export default function PurchaseOrders() {
   // founder_approval_reason so users can see WHY the original was rejected without
   // having to navigate away to open the superseded PO.
   const [viewPoParent, setViewPoParent] = useState<{ po_number: string; founder_approval_reason: string | null } | null>(null);
+
+  /* Auto-resend trampoline. When resend detected a missing comparison_pdf_url it
+     redirected the user to ComparisonSheet, which auto-uploaded the PDF and bounced
+     back here with the PO id stashed in sessionStorage. Three steps:
+       1. On mount: read the stashed id, store it, set a one-shot "pdf_ready" flag so
+          the next resend call skips the redirect even if the URL is briefly stale.
+       2. Once rows are loaded: openView(stashedId) so viewPo populates.
+       3. Once viewPo matches the stashed id: fire resendFounderNotification.
+     Clearing pendingAutoResendPoId before firing prevents re-entry loops. */
+  const [pendingAutoResendPoId, setPendingAutoResendPoId] = useState<string | null>(null);
+  useEffect(() => {
+    let stashed: string | null = null;
+    try { stashed = sessionStorage.getItem("auto_resend_po_id"); } catch { /* ignore */ }
+    if (!stashed) return;
+    try {
+      sessionStorage.removeItem("auto_resend_po_id");
+      sessionStorage.setItem("auto_resend_pdf_ready", "1");
+    } catch { /* ignore */ }
+    setPendingAutoResendPoId(stashed);
+  }, []);
+  useEffect(() => {
+    if (!pendingAutoResendPoId) return;
+    if (rows.length === 0) return;
+    void openView(pendingAutoResendPoId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAutoResendPoId, rows.length]);
+  useEffect(() => {
+    if (!pendingAutoResendPoId) return;
+    if (!viewPo || viewPo.id !== pendingAutoResendPoId) return;
+    setPendingAutoResendPoId(null);
+    // Defer one tick so supplier/rfq/etc. hydration in openView finishes first
+    setTimeout(() => { void resendFounderNotification(); }, 150);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewPo, pendingAutoResendPoId]);
 
   const [viewSupplier, setViewSupplier] = useState<SupplierRow | null>(null);
   const [viewRfq, setViewRfq] = useState<RfqRow | null>(null);
@@ -1340,7 +1375,12 @@ export default function PurchaseOrders() {
          flow shipped. uploadPoPdf upserts at the same path, so the URL stays stable. */
       const refreshedPdfUrl = await regeneratePoPdfAndUpload(poId, poNumber);
 
-      /* fetch comparison sheet context for enriched WhatsApp message */
+      /* fetch comparison sheet context for enriched WhatsApp message.
+         If a comparison sheet exists for this PO but the PDF hasn't been uploaded yet
+         (older POs, or first-time-render failures), redirect through the ComparisonSheet
+         page which auto-uploads on visit and bounces back. We stash the PO id in
+         sessionStorage so the mount effect re-fires the resend with a real URL.
+         This guarantees the comparison PDF always flows in the payload. */
       let comparisonPdfUrl: string | null = null;
       let comparisonExtra: { total_quotes_received?: number; potential_savings?: number; reviewer_recommendation_reason?: string; rfq_number?: string; item_descriptions?: string } = {};
       if ((viewPo as any).comparison_sheet_id) {
@@ -1353,6 +1393,19 @@ export default function PurchaseOrders() {
           comparisonPdfUrl = (cs as any).comparison_pdf_url ?? null;
           comparisonExtra = cs as any;
         }
+        // Round-trip if missing: navigate to the comparison sheet, let it auto-upload,
+        // then PurchaseOrders mount picks up sessionStorage and retriggers this handler.
+        const skipRedirect = sessionStorage.getItem("auto_resend_pdf_ready") === "1";
+        if (!comparisonPdfUrl && viewPo.rfq_id && !skipRedirect) {
+          try { sessionStorage.setItem("auto_resend_po_id", poId); } catch { /* ignore */ }
+          toast.info("Generating comparison PDF first…");
+          setResending(false);
+          navigate(`/comparison/${viewPo.rfq_id}?autoUploadFor=${poId}`);
+          return;
+        }
+        // Clear the one-shot flag so subsequent manual resends still get the redirect
+        // safety net if the URL was never persisted.
+        try { sessionStorage.removeItem("auto_resend_pdf_ready"); } catch { /* ignore */ }
       }
 
       /* cumulative approved PO total for this project */
@@ -1700,6 +1753,34 @@ export default function PurchaseOrders() {
               .update({ founder_approval_status: "pending" })
               .eq("id", newPoId);
 
+            /* fetch comparison sheet context (inherited from original PO) */
+            let comparisonPdfUrl: string | null = null;
+            let comparisonExtra: { total_quotes_received?: number; potential_savings?: number; reviewer_recommendation_reason?: string } = {};
+            if ((_viewPo as any).comparison_sheet_id) {
+              const { data: cs } = await supabase
+                .from("cps_comparison_sheets")
+                .select("comparison_pdf_url,total_quotes_received,potential_savings,reviewer_recommendation_reason")
+                .eq("id", (_viewPo as any).comparison_sheet_id)
+                .maybeSingle();
+              if (cs) {
+                comparisonPdfUrl = (cs as any).comparison_pdf_url ?? null;
+                comparisonExtra = cs as any;
+              }
+            }
+
+            /* cumulative approved PO total for this project (exclude this new revision) */
+            let totalProjectPoAmount: number | null = null;
+            if (_viewPo.project_code) {
+              const { data: poTotals } = await supabase
+                .from("cps_purchase_orders")
+                .select("grand_total")
+                .eq("project_code", _viewPo.project_code)
+                .in("status", ["approved", "sent", "acknowledged", "dispatched", "delivered", "closed"])
+                .neq("id", newPoId);
+              const sum = (poTotals ?? []).reduce((s: number, r: any) => s + (Number(r.grand_total) || 0), 0);
+              if (sum > 0) totalProjectPoAmount = sum;
+            }
+
             await fetch(webhookUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1708,6 +1789,9 @@ export default function PurchaseOrders() {
                 po_id: newPoId,
                 po_number: newPoNumber,
                 supplier_name: supplierName,
+                site_name: _viewPo.ship_to_address?.split("\n")[0] ?? null,
+                project_code: _viewPo.project_code ?? null,
+                total_project_po_amount: totalProjectPoAmount,
                 grand_total: Number(_viewPo.grand_total ?? 0),
                 gst_amount: Number(_viewPo.gst_amount ?? 0),
                 total_value: Number(_viewPo.total_value ?? 0),
@@ -1718,6 +1802,11 @@ export default function PurchaseOrders() {
                 bhaskar_whatsapp: bhaskarWA,
                 dhruv_approval_link: dhruvRevLink,
                 dhruv_whatsapp: dhruvWA,
+                comparison_pdf_url: comparisonPdfUrl ?? null,
+                rfq_number: (_viewPo as any).rfq_number ?? null,
+                total_quotes_received: comparisonExtra.total_quotes_received ?? null,
+                potential_savings: comparisonExtra.potential_savings ?? null,
+                reviewer_recommendation_reason: comparisonExtra.reviewer_recommendation_reason ?? null,
                 revision_reason: trimmedReason,
               }),
             });
