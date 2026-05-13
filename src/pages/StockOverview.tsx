@@ -31,7 +31,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Boxes, Loader2, Search } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Boxes, Loader2, Plus, Search } from "lucide-react";
 
 type BoqRow = { project_code: string; item_description: string; unit: string | null; planned_quantity: number | null };
 type StockRow = {
@@ -85,6 +86,33 @@ export default function StockOverview() {
     unit: string;
     current_qty: string;
   }>({ project_code: "", item_description: "", unit: "", current_qty: "" });
+
+  /* Manual add-stock dialog state. Admin-level roles (procurement head, IT head,
+     management) can seed extra lines that came in outside the invoice flow — e.g.
+     design team head reviewed a site and flagged items missing from the catalog. */
+  const [addOpen, setAddOpen] = useState(false);
+  const [addSaving, setAddSaving] = useState(false);
+  const [addForm, setAddForm] = useState<{
+    project_code: string;
+    new_project_code: string;
+    item_description: string;
+    category: string;
+    unit: string;
+    current_qty: string;
+    typical_rate: string;
+    note: string;
+    status: "pending" | "approved";
+  }>({
+    project_code: "",
+    new_project_code: "",
+    item_description: "",
+    category: "",
+    unit: "",
+    current_qty: "0",
+    typical_rate: "",
+    note: "",
+    status: "approved",
+  });
 
   const canReviewStock = !!user && REVIEW_STOCK_ROLES.has(user.role);
 
@@ -240,6 +268,86 @@ export default function StockOverview() {
     }
   };
 
+  const resetAddForm = () => {
+    setAddForm({
+      project_code: "",
+      new_project_code: "",
+      item_description: "",
+      category: "",
+      unit: "",
+      current_qty: "0",
+      typical_rate: "",
+      note: "",
+      status: "approved",
+    });
+  };
+
+  const submitAddStock = async () => {
+    if (!user) return;
+    /* Routing rule: project is mandatory; description is mandatory; qty must parse.
+       Status comes from the form — "approved" goes live immediately, "pending" sits
+       in the review queue so procurement can second-eye the line later. */
+    const projectCode = (addForm.project_code === "__new__"
+      ? addForm.new_project_code
+      : addForm.project_code).trim();
+    if (!projectCode) {
+      toast.error("Project select karo (ya naya project name daalo)");
+      return;
+    }
+    const desc = addForm.item_description.trim();
+    if (!desc) {
+      toast.error("Item description khaali nahi ho sakta");
+      return;
+    }
+    const qty = Number(addForm.current_qty);
+    if (!Number.isFinite(qty) || qty < 0) {
+      toast.error("Current qty valid number honi chahiye");
+      return;
+    }
+    const rate = addForm.typical_rate.trim() === "" ? null : Number(addForm.typical_rate);
+    if (rate !== null && (!Number.isFinite(rate) || rate < 0)) {
+      toast.error("Typical rate valid number honi chahiye (ya khaali chhodo)");
+      return;
+    }
+
+    setAddSaving(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const payload: Record<string, unknown> = {
+        project_code: projectCode,
+        item_description: desc,
+        unit: addForm.unit.trim() || null,
+        current_qty: qty,
+        typical_rate: rate,
+        category: addForm.category.trim() || null,
+        approval_status: addForm.status,
+        stock_origin: "manual_admin_add",
+        invoice_note: addForm.note.trim() || null,
+        updated_at: nowIso,
+      };
+      if (addForm.status === "approved") {
+        payload.approved_at = nowIso;
+        payload.approved_by = user.id;
+      }
+
+      const { error } = await supabase.from("cps_stock").insert([payload] as any);
+      if (error) throw error;
+
+      toast.success(
+        addForm.status === "approved"
+          ? "Stock added — live site par dikh jayegi"
+          : "Stock added in pending — procurement review ke baad live hogi"
+      );
+      setAddOpen(false);
+      resetAddForm();
+      await loadAll();
+    } catch (e: any) {
+      toast.error(e?.message || "Add stock fail");
+    } finally {
+      setAddSaving(false);
+    }
+  };
+
   const confirmReject = async () => {
     if (!rejectTarget) return;
     setActingId(rejectTarget.stock_id);
@@ -316,6 +424,18 @@ export default function StockOverview() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Item ya project search karo…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
+
+        {canReviewStock && (
+          <Button
+            type="button"
+            variant="default"
+            className="ml-auto gap-1.5"
+            onClick={() => { resetAddForm(); setAddOpen(true); }}
+          >
+            <Plus className="h-4 w-4" />
+            Add Stock Item
+          </Button>
+        )}
       </div>
 
       {loading ? (
@@ -480,6 +600,145 @@ export default function StockOverview() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog open={addOpen} onOpenChange={(o) => { if (!o && !addSaving) { setAddOpen(false); resetAddForm(); } }}>
+        <DialogContent className="sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>Add Stock Item</DialogTitle>
+            <DialogDescription>
+              Manual entry — design / site review se aaya item jo invoice flow se nahi aaya.
+              Status select karo: <strong>Live</strong> = directly site par dikhega,
+              <strong> Pending</strong> = procurement review ke baad live hoga.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 max-h-[60vh] overflow-y-auto pr-1">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="add_project">Project <span className="text-destructive">*</span></Label>
+                <Select
+                  value={addForm.project_code}
+                  onValueChange={(v) => setAddForm((f) => ({ ...f, project_code: v }))}
+                >
+                  <SelectTrigger id="add_project"><SelectValue placeholder="Project select karo" /></SelectTrigger>
+                  <SelectContent>
+                    {projects.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                    <SelectItem value="__new__">+ Naya project add karo</SelectItem>
+                  </SelectContent>
+                </Select>
+                {addForm.project_code === "__new__" && (
+                  <Input
+                    className="mt-1.5"
+                    placeholder="Naya project name (jaise: Auma India Pvt.Ltd)"
+                    value={addForm.new_project_code}
+                    onChange={(e) => setAddForm((f) => ({ ...f, new_project_code: e.target.value }))}
+                  />
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="add_status">Status <span className="text-destructive">*</span></Label>
+                <Select
+                  value={addForm.status}
+                  onValueChange={(v) => setAddForm((f) => ({ ...f, status: v as "pending" | "approved" }))}
+                >
+                  <SelectTrigger id="add_status"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="approved">Live (site par seedha dikhega)</SelectItem>
+                    <SelectItem value="pending">Pending (procurement review ke baad)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="add_desc">Item description <span className="text-destructive">*</span></Label>
+              <Input
+                id="add_desc"
+                placeholder="Jaise: 12mm Plywood Greenply BWP"
+                value={addForm.item_description}
+                onChange={(e) => setAddForm((f) => ({ ...f, item_description: e.target.value }))}
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="add_unit">Unit</Label>
+                <Input
+                  id="add_unit"
+                  placeholder="nos / bag / sqft / kg"
+                  value={addForm.unit}
+                  onChange={(e) => setAddForm((f) => ({ ...f, unit: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="add_qty">Current qty <span className="text-destructive">*</span></Label>
+                <Input
+                  id="add_qty"
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={addForm.current_qty}
+                  onChange={(e) => setAddForm((f) => ({ ...f, current_qty: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="add_rate">Typical rate (₹)</Label>
+                <Input
+                  id="add_rate"
+                  type="number"
+                  step="any"
+                  min="0"
+                  placeholder="optional"
+                  value={addForm.typical_rate}
+                  onChange={(e) => setAddForm((f) => ({ ...f, typical_rate: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="add_category">Category</Label>
+              <Input
+                id="add_category"
+                placeholder="optional — jaise: Plywood / Hardware / Paint"
+                value={addForm.category}
+                onChange={(e) => setAddForm((f) => ({ ...f, category: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="add_note">Source note</Label>
+              <Textarea
+                id="add_note"
+                placeholder="Optional — kahaan se mila yeh item info? Jaise: 'Design head Pooja review — Auma site walkthrough 13-May-26'"
+                value={addForm.note}
+                onChange={(e) => setAddForm((f) => ({ ...f, note: e.target.value }))}
+                rows={2}
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setAddOpen(false); resetAddForm(); }}
+              disabled={addSaving}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void submitAddStock()}
+              disabled={addSaving}
+            >
+              {addSaving ? (
+                <><Loader2 className="h-4 w-4 animate-spin mr-1.5" /> Saving…</>
+              ) : (
+                addForm.status === "approved" ? "Add as Live" : "Add as Pending"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!editTarget} onOpenChange={(o) => { if (!o && actingId === null) setEditTarget(null); }}>
         <DialogContent className="sm:max-w-[520px]">
