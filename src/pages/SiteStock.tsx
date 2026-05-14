@@ -138,13 +138,14 @@ export default function SiteStock() {
   const loadAll = async (code: string) => {
     setLoading(true);
     try {
-      let stockReq = supabase
+      // Site engineers see approved rows plus any pending rows for projects
+      // they're assigned to (RLS handles the visibility — see migration
+      // stock_select_visibility_for_assigned_engineers). The PENDING badge in
+      // the UI tells them their edit is awaiting procurement approval.
+      const stockReq = supabase
         .from("cps_stock")
         .select("id,item_description,current_qty,unit,updated_at,last_movement_at,category,approval_status,stock_origin,invoice_note")
         .eq("project_code", code);
-      if (!isProcurement) {
-        stockReq = stockReq.eq("approval_status", "approved");
-      }
       const [boqRes, stockRes] = await Promise.all([
         supabase
           .from("cps_project_boqs")
@@ -557,10 +558,10 @@ export default function SiteStock() {
                           <span className="text-[10px] font-mono text-muted-foreground bg-muted/40 rounded px-1">#{idx + 1}</span>
                           <span className="font-medium text-sm">{r.item_description}</span>
                           {!r.from_boq && <Badge variant="outline" className="text-[9px] bg-amber-100 text-amber-800 border-amber-300 h-4 px-1">EXTRA</Badge>}
-                          {isProcurement && r.approval_status === "pending" && (
+                          {r.approval_status === "pending" && (
                             <Badge variant="outline" className="text-[9px] bg-orange-100 text-orange-900 border-orange-300 h-4 px-1">PENDING</Badge>
                           )}
-                          {isProcurement && r.approval_status === "rejected" && (
+                          {r.approval_status === "rejected" && (
                             <Badge variant="outline" className="text-[9px] bg-muted text-muted-foreground h-4 px-1">REJECTED</Badge>
                           )}
                         </div>
@@ -720,10 +721,10 @@ export default function SiteStock() {
                               <div className="flex items-center gap-2">
                                 <span className="font-medium">{r.item_description}</span>
                                 {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">EXTRA</Badge>}
-                                {isProcurement && r.approval_status === "pending" && (
+                                {r.approval_status === "pending" && (
                                   <Badge variant="outline" className="text-[10px] bg-orange-100 text-orange-900 border-orange-300">PENDING</Badge>
                                 )}
-                                {isProcurement && r.approval_status === "rejected" && (
+                                {r.approval_status === "rejected" && (
                                   <Badge variant="outline" className="text-[10px] bg-muted text-muted-foreground">REJECTED</Badge>
                                 )}
                               </div>
