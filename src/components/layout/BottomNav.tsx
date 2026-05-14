@@ -24,6 +24,7 @@ const ADMIN_MORE = [
   { title: "Delivery", url: "/delivery", icon: Truck, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
   { title: "BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive", "procurement_head", "it_head", "management"] },
   { title: "Stock", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
+  { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "design_team"] },
   { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor"] },
   { title: "Items", url: "/items", icon: Package, roles: ["procurement_executive", "procurement_head", "it_head"] },
   { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor", "procurement_head", "it_head", "management"] },

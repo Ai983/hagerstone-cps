@@ -47,7 +47,7 @@ type Assignment = { project_code: string; assigned_to_user_id: string };
 type EngineerLite = { id: string; name: string | null; email: string };
 
 const norm = (s: string) => s.trim().toLowerCase();
-const PROCUREMENT_ROLES = ["procurement_executive", "procurement_head", "it_head", "management"];
+const PROCUREMENT_ROLES = ["procurement_executive", "procurement_head", "it_head", "management", "design_team"];
 
 export default function SiteStock() {
   const { user } = useAuth();
