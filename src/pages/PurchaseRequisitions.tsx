@@ -32,6 +32,8 @@ type PurchaseRequisition = {
   project_code: string | null;
   requested_by: string;
   requested_by_name: string;
+  assigned_to_user_id?: string | null;
+  assigned_to_name?: string | null;
   status: PRStatus;
   required_by: string;
   notes: string | null;
@@ -761,6 +763,16 @@ export default function PurchaseRequisitions() {
   const [wizProjectSite, setWizProjectSite] = useState("");
   const [wizRequiredBy, setWizRequiredBy] = useState("");
   const [wizPriority, setWizPriority] = useState<PRPriority>("normal");
+  const [wizAssignedToId, setWizAssignedToId] = useState<string>("");
+  // Limited dropdown of procurement contacts the site engineer can route the PR to.
+  // Restricted by email so it stays stable across environments.
+  const PR_ASSIGNEE_EMAILS = [
+    "procurement@hagerstone.com",   // Avisha
+    "ajitreddy916@gmail.com",        // Ajit
+    "mep@hagerstone.com",            // Deepak
+    "sakshamkaloya109@gmail.com",    // Saksham
+  ];
+  const [wizAssignees, setWizAssignees] = useState<Array<{ id: string; name: string; email: string; role: string; department: string | null }>>([]);
   const [wizLineItems, setWizLineItems] = useState<LineItem[]>([]);
   const [wizNotes, setWizNotes] = useState("");
   const [wizSubmitting, setWizSubmitting] = useState(false);
@@ -831,7 +843,7 @@ export default function PurchaseRequisitions() {
     setLoading(true);
     let prQuery = supabase
       .from("cps_purchase_requisitions")
-      .select("id, pr_number, project_site, project_code, requested_by, status, required_by, notes, created_at, priority, duplicate_of_pr_id, duplicate_score")
+      .select("id, pr_number, project_site, project_code, requested_by, assigned_to_user_id, status, required_by, notes, created_at, priority, duplicate_of_pr_id, duplicate_score")
       .order("created_at", { ascending: false });
     const isRestrictedRole = user?.role === "requestor" || user?.role === "site_receiver";
     if (isRestrictedRole) prQuery = prQuery.eq("requested_by", user?.id ?? "");
@@ -861,10 +873,18 @@ export default function PurchaseRequisitions() {
       }
     }
 
-    const requestedByIds = [...new Set(prRows.map((p: any) => p.requested_by).filter(Boolean))];
+    // Build a single id list for both "requested_by" and "assigned_to_user_id"
+    // so we resolve all the cps_users names in one query.
+    const userIds = [
+      ...new Set(
+        prRows
+          .flatMap((p: any) => [p.requested_by, p.assigned_to_user_id])
+          .filter(Boolean) as string[],
+      ),
+    ];
     let userMap: Record<string, string> = {};
-    if (requestedByIds.length) {
-      const { data: users } = await supabase.from("cps_users").select("id, name").in("id", requestedByIds);
+    if (userIds.length) {
+      const { data: users } = await supabase.from("cps_users").select("id, name").in("id", userIds);
       if (users) userMap = Object.fromEntries((users as any[]).map((u) => [u.id, u.name]));
     }
 
@@ -875,6 +895,7 @@ export default function PurchaseRequisitions() {
             ...(p as PurchaseRequisition),
             items_count: counts[String(p.id)] ?? 0,
             requested_by_name: userMap[p.requested_by] ?? "—",
+            assigned_to_name: p.assigned_to_user_id ? (userMap[p.assigned_to_user_id] ?? null) : null,
           }) as PurchaseRequisition,
       ),
     );
@@ -922,15 +943,30 @@ export default function PurchaseRequisitions() {
     refresh();
     loadItemsMaster();
     loadProjects();
+    loadAssignees();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const loadAssignees = async () => {
+    const { data, error } = await supabase
+      .from("cps_users")
+      .select("id, name, email, role, department")
+      .in("email", PR_ASSIGNEE_EMAILS)
+      .eq("active", true);
+    if (!error && data) {
+      // Preserve the order from PR_ASSIGNEE_EMAILS (Avisha, Ajit, Deepak, Saksham)
+      const order = new Map(PR_ASSIGNEE_EMAILS.map((e, i) => [e, i]));
+      const sorted = (data as any[]).sort((a, b) => (order.get(a.email) ?? 99) - (order.get(b.email) ?? 99));
+      setWizAssignees(sorted as any);
+    }
+  };
 
   useEffect(() => {
     if (!wizardOpen || wizardStep >= 6) return;
     const canProceed =
       wizardStep === 1 ? (!!wizProjectId || wizProjectName === "__other__" || !!wizProjectSite.trim())
       : wizardStep === 2 ? !!wizProjectSite.trim()
-      : wizardStep === 3 ? !!wizRequiredBy
+      : wizardStep === 3 ? (!!wizRequiredBy && !!wizAssignedToId)
       : wizardStep === 4 ? wizLineItems.some((li) => li.description.trim().length > 0)
       : true;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -943,7 +979,7 @@ export default function PurchaseRequisitions() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wizardOpen, wizardStep, wizProjectId, wizProjectName, wizProjectSite, wizRequiredBy, wizLineItems]);
+  }, [wizardOpen, wizardStep, wizProjectId, wizProjectName, wizProjectSite, wizRequiredBy, wizAssignedToId, wizLineItems]);
 
   const toggleSortPR = (field: string) => {
     if (sortField === field) setSortDirPR((d) => (d === "asc" ? "desc" : "asc"));
@@ -997,6 +1033,7 @@ export default function PurchaseRequisitions() {
     setWizProjectSite("");
     setWizRequiredBy(twoWeeksFromNow());
     setWizPriority("normal");
+    setWizAssignedToId("");
     setWizLineItems([emptyLine()]);
     setWizNotes("");
     setWizSuccess(null);
@@ -1507,13 +1544,14 @@ export default function PurchaseRequisitions() {
           project_site: wizProjectSite.trim(),
           project_code: wizProjectName.trim() || null,
           requested_by: user.id,
+          assigned_to_user_id: wizAssignedToId || null,
           status: (isDuplicate ? "duplicate_flagged" : "pending") as PRStatus,
           required_by: wizRequiredBy,
           notes: wizNotes.trim() || null,
           priority: wizPriority,
           duplicate_of_pr_id: topDup?.id ?? null,
           duplicate_score: topDup?.score ?? null,
-        }])
+        } as any])
         .select("id")
         .single();
       if (prInsertError || !prInsert) throw new Error("Failed to create PR: " + prInsertError?.message);
@@ -1881,6 +1919,7 @@ export default function PurchaseRequisitions() {
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("project_code")}>Project Name {sortField==="project_code"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("project_site")}>Project Site {sortField==="project_site"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("requested_by_name")}>Created By {sortField==="requested_by_name"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead>Assigned To</TableHead>
                 <TableHead>Items</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("required_by")}>Required By {sortField==="required_by"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortPR("priority")}>Priority {sortField==="priority"?(sortDir==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
@@ -1893,7 +1932,7 @@ export default function PurchaseRequisitions() {
               {loading ? (
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i}>
-                    {Array.from({ length: 10 }).map((__, j) => (
+                    {Array.from({ length: 11 }).map((__, j) => (
                       <TableCell key={j}>
                         <Skeleton className="h-4 w-28" />
                       </TableCell>
@@ -1902,7 +1941,7 @@ export default function PurchaseRequisitions() {
                 ))
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="text-center py-10">
+                  <TableCell colSpan={11} className="text-center py-10">
                     <div className="mx-auto max-w-md space-y-3">
                       <div className="flex justify-center">
                         <div className="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center">
@@ -1933,6 +1972,15 @@ export default function PurchaseRequisitions() {
                       <TableCell className="font-medium">{pr.project_code ?? "—"}</TableCell>
                       <TableCell className="text-muted-foreground text-sm">{pr.project_site}</TableCell>
                       <TableCell className="text-muted-foreground">{pr.requested_by_name}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {pr.assigned_to_name ? (
+                          <Badge variant="outline" className="text-xs border-primary/40 text-primary bg-primary/5">
+                            {pr.assigned_to_name}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        )}
+                      </TableCell>
                       <TableCell>{pr.items_count}</TableCell>
                       <TableCell className="text-muted-foreground">{formatRequiredByDate(pr.required_by)}</TableCell>
                       <TableCell>
@@ -1978,7 +2026,7 @@ export default function PurchaseRequisitions() {
                     {/* Expanded preview row */}
                     {expandedPrId === pr.id && (
                       <TableRow className="bg-muted/20">
-                        <TableCell colSpan={10} className="py-2 px-6">
+                        <TableCell colSpan={11} className="py-2 px-6">
                           {expandLoading ? (
                             <div className="flex items-center gap-2 py-2"><Skeleton className="h-4 w-48" /><Skeleton className="h-4 w-32" /></div>
                           ) : expandedItems.length === 0 ? (
@@ -2032,6 +2080,9 @@ export default function PurchaseRequisitions() {
                     {pr.project_code && <div className="text-sm font-medium text-foreground mt-0.5">{pr.project_code}</div>}
                     <div className="text-xs text-muted-foreground mt-0.5">{pr.project_site}</div>
                     <div className="text-xs text-muted-foreground">By {pr.requested_by_name}</div>
+                    {pr.assigned_to_name && (
+                      <div className="text-[11px] text-primary mt-0.5">→ {pr.assigned_to_name}</div>
+                    )}
                   </div>
                   <Badge className={`text-xs border-0 ${badge.className} shrink-0`}>{badge.label}</Badge>
                 </div>
@@ -2230,13 +2281,41 @@ export default function PurchaseRequisitions() {
                     </p>
                   </div>
 
+                  <div className="space-y-3 pt-2">
+                    <p className="text-sm font-medium text-foreground">
+                      {lang === 'hi' ? 'Kisko Request Bhejna Hai? ' : 'Assign To (Procurement) '}
+                      <span className="text-primary">*</span>
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {wizAssignees.map((u) => (
+                        <button
+                          key={u.id}
+                          type="button"
+                          onClick={() => setWizAssignedToId(u.id)}
+                          className={`px-4 py-2 rounded-lg border text-sm font-medium transition-all ${
+                            wizAssignedToId === u.id
+                              ? "bg-primary text-primary-foreground border-primary ring-2 ring-primary/30"
+                              : "bg-background border-border text-foreground hover:border-primary/50"
+                          }`}
+                        >
+                          {u.name}
+                        </button>
+                      ))}
+                    </div>
+                    {!wizAssignedToId && (
+                      <p className="text-xs text-muted-foreground">
+                        {lang === 'hi' ? 'Procurement team mein se ek naam choose karein' : 'Pick one procurement person to route this PR to'}
+                      </p>
+                    )}
+                  </div>
+
                   <div className="flex items-center gap-3">
                     <Button variant="ghost" className="h-12 px-6 rounded-lg" onClick={() => setWizardStep(2)}>
                       {lang === 'hi' ? '← Wapas' : '← Back'}
                     </Button>
                     <Button
                       className="h-12 px-8 rounded-lg"
-                      disabled={!wizRequiredBy}
+                      disabled={!wizRequiredBy || !wizAssignedToId}
                       onClick={() => setWizardStep(4)}
                     >
                       {lang === 'hi' ? 'हो गया ✓' : 'Done ✓'}

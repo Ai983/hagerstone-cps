@@ -34,6 +34,8 @@ type PR = {
   created_at: string;
   requested_by: string;
   requester_name: string;
+  assigned_to_user_id: string | null;
+  assigned_to_name: string | null;
   items_count: number;
 };
 
@@ -160,12 +162,14 @@ export default function PRReview() {
     try {
       const { data, error } = await supabase
         .from("cps_purchase_requisitions")
-        .select("id,pr_number,project_site,project_code,required_by,notes,status,created_at,requested_by")
+        .select("id,pr_number,project_site,project_code,required_by,notes,status,created_at,requested_by,assigned_to_user_id")
         .order("created_at", { ascending: false });
       if (error) throw error;
 
       const rows = (data ?? []) as any[];
-      const userIds = Array.from(new Set(rows.map((r) => r.requested_by).filter(Boolean)));
+      const userIds = Array.from(new Set(
+        rows.flatMap((r) => [r.requested_by, r.assigned_to_user_id]).filter(Boolean) as string[],
+      ));
       const nameMap: Record<string, string> = {};
       if (userIds.length) {
         const { data: users } = await supabase.from("cps_users").select("id,name").in("id", userIds);
@@ -186,6 +190,7 @@ export default function PRReview() {
       setPrs(rows.map((r) => ({
         ...r,
         requester_name: nameMap[r.requested_by] ?? "—",
+        assigned_to_name: r.assigned_to_user_id ? (nameMap[r.assigned_to_user_id] ?? null) : null,
         items_count: countMap[r.id] ?? 0,
       })));
     } catch (e: any) {
@@ -603,6 +608,9 @@ export default function PRReview() {
                   <span>By {pr.requester_name} · {pr.items_count} items</span>
                   <span>Req {fmt(pr.required_by)}</span>
                 </div>
+                {pr.assigned_to_name && (
+                  <div className="text-[11px] text-primary">→ Assigned to {pr.assigned_to_name}</div>
+                )}
               </button>
             ))
           )}
@@ -625,6 +633,7 @@ export default function PRReview() {
                   <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("requester_name")}>
                     Raised By <SortIcon field="requester_name" sortField={sortField} sortDir={sortDir} />
                   </TableHead>
+                  <TableHead>Assigned To</TableHead>
                   <TableHead className="cursor-pointer select-none" onClick={() => toggleSort("required_by")}>
                     Required By <SortIcon field="required_by" sortField={sortField} sortDir={sortDir} />
                   </TableHead>
@@ -642,14 +651,14 @@ export default function PRReview() {
                 {loading ? (
                   Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>
-                      {Array.from({ length: 8 }).map((_, j) => (
+                      {Array.from({ length: 9 }).map((_, j) => (
                         <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                       ))}
                     </TableRow>
                   ))
                 ) : displayPrs.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-12 text-muted-foreground">
+                    <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                       No purchase requests found
                     </TableCell>
                   </TableRow>
@@ -662,6 +671,15 @@ export default function PRReview() {
                         {pr.project_code && <div className="text-xs text-muted-foreground">{pr.project_code}</div>}
                       </TableCell>
                       <TableCell className="text-sm">{pr.requester_name}</TableCell>
+                      <TableCell className="text-sm">
+                        {pr.assigned_to_name ? (
+                          <Badge variant="outline" className="text-xs border-primary/40 text-primary bg-primary/5">
+                            {pr.assigned_to_name}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm">{fmt(pr.required_by)}</TableCell>
                       <TableCell className="text-sm">{fmt(pr.created_at)}</TableCell>
                       <TableCell className="text-center">
