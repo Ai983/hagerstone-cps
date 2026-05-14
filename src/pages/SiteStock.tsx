@@ -4,6 +4,16 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Boxes, Plus, Edit2, Search, Check, X, Eye, UserCheck } from "lucide-react";
+import { Boxes, Plus, Edit2, Search, Check, X, Eye, UserCheck, Trash2 } from "lucide-react";
 
 type BoqRow = { id: string; item_description: string; unit: string | null; planned_quantity: number | null; notes: string | null };
 type StockRow = {
@@ -67,8 +77,14 @@ export default function SiteStock() {
   // Inline-edit state (replaces old update dialog)
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editQty, setEditQty] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [editUnit, setEditUnit] = useState("");
   const [editNotes, setEditNotes] = useState("");
   const [editSaving, setEditSaving] = useState(false);
+
+  // Delete (procurement / IT / mgmt / design only)
+  const [deleteTarget, setDeleteTarget] = useState<UnifiedRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [addExtraOpen, setAddExtraOpen] = useState(false);
   const [extraName, setExtraName] = useState("");
@@ -197,13 +213,57 @@ export default function SiteStock() {
   const startEdit = (row: UnifiedRow) => {
     setEditingKey(row.key);
     setEditQty(String(row.current_qty));
+    setEditDesc(row.item_description ?? "");
+    setEditUnit(row.unit ?? "");
     setEditNotes("");
   };
 
   const cancelEdit = () => {
     setEditingKey(null);
     setEditQty("");
+    setEditDesc("");
+    setEditUnit("");
     setEditNotes("");
+  };
+
+  // Hard-delete a stock row + its movements. Restricted to procurement / IT /
+  // mgmt / design (i.e. anyone in PROCUREMENT_ROLES). Site engineers cannot
+  // delete — they can only mark adjustments via edit.
+  const confirmDelete = async () => {
+    if (!user || !deleteTarget || !projectCode) return;
+    if (!isProcurement) {
+      toast.error("Sirf procurement / IT / management / design team delete kar sakte hain");
+      return;
+    }
+    const target = deleteTarget;
+    if (!target.stock_id) {
+      // Nothing in cps_stock to delete (BOQ-only row) — bail with a clear message
+      toast.error("Yeh row sirf BOQ se hai — Project BOQ page se hatao");
+      setDeleteTarget(null);
+      return;
+    }
+    setDeleting(true);
+    try {
+      // Movements first (FK to stock_id), then the stock row itself
+      const { error: mvErr } = await supabase
+        .from("cps_stock_movements")
+        .delete()
+        .eq("stock_id", target.stock_id);
+      if (mvErr) throw mvErr;
+      const { error: stErr } = await supabase
+        .from("cps_stock")
+        .delete()
+        .eq("id", target.stock_id);
+      if (stErr) throw stErr;
+
+      toast.success(`"${target.item_description}" delete ho gaya`);
+      setDeleteTarget(null);
+      await loadAll(projectCode);
+    } catch (e: any) {
+      toast.error(e?.message || "Delete fail ho gaya");
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const saveEdit = async (row: UnifiedRow) => {
@@ -211,6 +271,16 @@ export default function SiteStock() {
     if (!canEdit) { toast.error("Aapko is project ka stock update karne ki permission nahi hai"); return; }
     const qty = parseFloat(editQty);
     if (!Number.isFinite(qty) || qty < 0) { toast.error("Sahi quantity daalo"); return; }
+    const desc = editDesc.trim();
+    if (!desc) { toast.error("Item ka naam khaali nahi ho sakta"); return; }
+    const unit = editUnit.trim() || null;
+
+    // Site engineer rule: editing only Qty stays approved; editing Description
+    // or Unit kicks the row back to "pending" so procurement re-approves the
+    // change. Procurement / IT / management / design_team users edit directly.
+    const descChanged = desc !== (row.item_description ?? "");
+    const unitChanged = (unit ?? "") !== (row.unit ?? "");
+    const needsReApproval = !isProcurement && (descChanged || unitChanged);
 
     setEditSaving(true);
     try {
@@ -219,25 +289,39 @@ export default function SiteStock() {
 
       let stockId = row.stock_id;
       if (!stockId) {
+        // New row created from edit (unusual path — usually saveExtra is used)
         const { data: inserted, error: insErr } = await supabase
           .from("cps_stock")
           .insert({
             project_code: projectCode,
             item_id: null,
-            item_description: row.item_description,
-            unit: row.unit,
+            item_description: desc,
+            unit,
             current_qty: qty,
             last_movement_at: new Date().toISOString(),
-            approval_status: "approved",
+            // Site engineer adds need approval; procurement adds go live.
+            approval_status: isProcurement ? "approved" : "pending",
             stock_origin: row.stock_origin ?? "manual_site",
           } as any)
           .select("id").single();
         if (insErr) throw insErr;
         stockId = (inserted as any).id;
       } else {
+        const updatePayload: Record<string, unknown> = {
+          item_description: desc,
+          unit,
+          current_qty: qty,
+          last_movement_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        if (needsReApproval) {
+          updatePayload.approval_status = "pending";
+          updatePayload.approved_at = null;
+          updatePayload.approved_by = null;
+        }
         const { error: upErr } = await supabase
           .from("cps_stock")
-          .update({ current_qty: qty, last_movement_at: new Date().toISOString(), updated_at: new Date().toISOString() } as any)
+          .update(updatePayload as any)
           .eq("id", stockId);
         if (upErr) throw upErr;
       }
@@ -257,9 +341,15 @@ export default function SiteStock() {
         } as any);
       }
 
-      toast.success("Stock update ho gaya");
+      if (needsReApproval) {
+        toast.success("Update saved — procurement approval ke liye Pending tab mein chala gaya");
+      } else {
+        toast.success("Stock update ho gaya");
+      }
       setEditingKey(null);
       setEditQty("");
+      setEditDesc("");
+      setEditUnit("");
       setEditNotes("");
       await loadAll(projectCode);
     } catch (e: any) {
@@ -284,6 +374,11 @@ export default function SiteStock() {
 
     setSaving(true);
     try {
+      // Site engineer adds new stock → starts in "pending" so procurement
+      // reviews before it goes live. Procurement / IT / management / design
+      // adds go straight to "approved".
+      const newStatus = isProcurement ? "approved" : "pending";
+
       const { data: inserted, error: insErr } = await supabase
         .from("cps_stock")
         .insert({
@@ -293,7 +388,7 @@ export default function SiteStock() {
           unit: extraUnit.trim() || null,
           current_qty: qty,
           last_movement_at: new Date().toISOString(),
-          approval_status: "approved",
+          approval_status: newStatus,
           stock_origin: "manual_site",
         } as any)
         .select("id").single();
@@ -317,7 +412,11 @@ export default function SiteStock() {
         } as any);
       }
 
-      toast.success("Extra item add ho gaya");
+      if (newStatus === "pending") {
+        toast.success("Item add ho gaya — procurement approval ke liye Pending tab mein chala gaya");
+      } else {
+        toast.success("Extra item add ho gaya");
+      }
       setAddExtraOpen(false);
       setExtraName("");
       setExtraUnit("");
@@ -468,9 +567,23 @@ export default function SiteStock() {
                         <div className="text-[11px] text-muted-foreground">{r.unit ?? "—"} · {fmtDate(r.last_updated)}</div>
                       </div>
                       {!isEdit && canEdit && (
-                        <Button variant="outline" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} className="shrink-0 h-9 px-3">
-                          <Edit2 className="h-4 w-4 mr-1" /> Update
-                        </Button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <Button variant="outline" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} className="h-9 px-3">
+                            <Edit2 className="h-4 w-4 mr-1" /> Update
+                          </Button>
+                          {isProcurement && r.stock_id && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setDeleteTarget(r)}
+                              disabled={editingKey !== null || deleting}
+                              className="h-9 px-2 text-destructive border-destructive/30 hover:bg-destructive/10"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
                       )}
                     </div>
 
@@ -493,10 +606,29 @@ export default function SiteStock() {
                       </div>
                     ) : (
                       <div className="space-y-2 pt-1">
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">Item Ka Naam *</Label>
+                          <Input
+                            value={editDesc}
+                            onChange={(e) => setEditDesc(e.target.value)}
+                            className="h-10 text-sm"
+                            placeholder="Item ka naam"
+                            autoFocus
+                          />
+                        </div>
                         <div className="flex items-center gap-2">
+                          <div className="flex-1">
+                            <Label className="text-[10px] text-muted-foreground">Unit</Label>
+                            <Input
+                              value={editUnit}
+                              onChange={(e) => setEditUnit(e.target.value)}
+                              className="h-10 text-sm"
+                              placeholder="PCS / BOX"
+                            />
+                          </div>
                           <div className="shrink-0">
                             <div className="text-[10px] text-muted-foreground">Planned</div>
-                            <div className="font-mono text-sm">{r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}</div>
+                            <div className="font-mono text-sm pt-2">{r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}</div>
                           </div>
                           <div className="flex-1">
                             <Label className="text-[10px] text-muted-foreground">New Current Qty *</Label>
@@ -508,7 +640,6 @@ export default function SiteStock() {
                               value={editQty}
                               onChange={(e) => setEditQty(e.target.value)}
                               className="h-11 text-base font-mono"
-                              autoFocus
                             />
                           </div>
                         </div>
@@ -578,18 +709,38 @@ export default function SiteStock() {
                         <TableRow className={isEdit ? "bg-primary/5" : (!r.from_boq ? "bg-amber-50/50" : undefined)}>
                           <TableCell className="text-muted-foreground font-mono text-xs">{idx + 1}</TableCell>
                           <TableCell>
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{r.item_description}</span>
-                              {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">EXTRA</Badge>}
-                              {isProcurement && r.approval_status === "pending" && (
-                                <Badge variant="outline" className="text-[10px] bg-orange-100 text-orange-900 border-orange-300">PENDING</Badge>
-                              )}
-                              {isProcurement && r.approval_status === "rejected" && (
-                                <Badge variant="outline" className="text-[10px] bg-muted text-muted-foreground">REJECTED</Badge>
-                              )}
-                            </div>
+                            {isEdit ? (
+                              <Input
+                                value={editDesc}
+                                onChange={(e) => setEditDesc(e.target.value)}
+                                className="h-8"
+                                placeholder="Item ka naam"
+                              />
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium">{r.item_description}</span>
+                                {!r.from_boq && <Badge variant="outline" className="text-[10px] bg-amber-100 text-amber-800 border-amber-300">EXTRA</Badge>}
+                                {isProcurement && r.approval_status === "pending" && (
+                                  <Badge variant="outline" className="text-[10px] bg-orange-100 text-orange-900 border-orange-300">PENDING</Badge>
+                                )}
+                                {isProcurement && r.approval_status === "rejected" && (
+                                  <Badge variant="outline" className="text-[10px] bg-muted text-muted-foreground">REJECTED</Badge>
+                                )}
+                              </div>
+                            )}
                           </TableCell>
-                          <TableCell className="text-muted-foreground">{r.unit ?? "—"}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {isEdit ? (
+                              <Input
+                                value={editUnit}
+                                onChange={(e) => setEditUnit(e.target.value)}
+                                className="h-8"
+                                placeholder="PCS / BOX / KG"
+                              />
+                            ) : (
+                              r.unit ?? "—"
+                            )}
+                          </TableCell>
                           <TableCell className="text-right font-mono">
                             {r.planned_qty != null ? Number(r.planned_qty).toLocaleString("en-IN") : "—"}
                           </TableCell>
@@ -627,9 +778,23 @@ export default function SiteStock() {
                                 </Button>
                               </div>
                             ) : canEdit ? (
-                              <Button variant="ghost" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} title="Update Qty">
-                                <Edit2 className="h-3.5 w-3.5" />
-                              </Button>
+                              <div className="flex items-center justify-end gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => startEdit(r)} disabled={editingKey !== null} title="Update">
+                                  <Edit2 className="h-3.5 w-3.5" />
+                                </Button>
+                                {isProcurement && r.stock_id && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setDeleteTarget(r)}
+                                    disabled={editingKey !== null || deleting}
+                                    title="Delete this stock row"
+                                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
+                              </div>
                             ) : (
                               <span className="text-[10px] text-muted-foreground italic">View only</span>
                             )}
@@ -698,6 +863,36 @@ export default function SiteStock() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this stock row?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget && (
+                <>
+                  <span className="font-medium text-foreground">{deleteTarget.item_description}</span>
+                  {" "}({projectCode}) — current qty <span className="font-mono">{Number(deleteTarget.current_qty).toLocaleString("en-IN")}</span>{" "}
+                  permanently delete ho jayega. Saare related stock movements bhi delete honge. Undo nahi ho sakta.
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDelete();
+              }}
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? "Delete kar rahe…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
