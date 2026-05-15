@@ -435,7 +435,9 @@ export default function SiteStock() {
     if (!d) return "—";
     const dt = new Date(d);
     if (Number.isNaN(dt.getTime())) return "—";
-    return dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    const date = dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    const time = dt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+    return `${date}, ${time}`;
   };
 
   return (
