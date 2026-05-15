@@ -587,6 +587,17 @@ export function buildWoPdf(data: WoPdfData): Blob {
   const lineH = 3.5;
   const trBlockH = Math.max(termsLineCount, remarksLineCount) * lineH + 6;
 
+  // Page-break guard — if terms + signature + footer won't all fit on the
+  // current page, jump to a fresh page so the signature block isn't pushed
+  // off the bottom (and the red footer line stays clear of the content).
+  const SIG_BLOCK_H = 14;
+  const FOOTER_RESERVE = 14;     // line + italic text below it
+  const PAGE_TOP_MARGIN = 12;
+  if (y + trBlockH + SIG_BLOCK_H + FOOTER_RESERVE > H) {
+    doc.addPage();
+    y = PAGE_TOP_MARGIN;
+  }
+
   // Left box: Terms
   doc.setLineWidth(0.3);
   doc.setDrawColor(0);
@@ -630,7 +641,14 @@ export function buildWoPdf(data: WoPdfData): Blob {
        LEFT COLUMN (bottom): Prepared By: <name>  |  Chkd By: <name>
        RIGHT COLUMN: 2-row signature block — name on top, "Authorised Signatory" label below
   */
-  const sigBlockH = 14;        // total height of signature block (right column = 2 rows)
+  // Second page-break guard — if the terms block consumed most of the page
+  // and the signature won't fit above the footer, push it to the next page.
+  if (y + SIG_BLOCK_H + FOOTER_RESERVE > H) {
+    doc.addPage();
+    y = PAGE_TOP_MARGIN;
+  }
+
+  const sigBlockH = SIG_BLOCK_H;        // total height of signature block (right column = 2 rows)
   const sigW = CW * 0.30;
   const leftColW = CW - sigW;
   const sigX = ML + leftColW;
