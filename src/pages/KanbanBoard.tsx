@@ -520,16 +520,22 @@ export default function KanbanBoard() {
     setLoading(false);
   };
 
+  // Project filter options come from the cps_projects master — same list as
+  // the PR wizard / Site Stock, not scraped from whatever cards are loaded.
+  const [projectOptions, setProjectOptions] = useState<string[]>([]);
+
   useEffect(() => {
     fetchAll();
+    void (async () => {
+      const { data } = await supabase.from("cps_projects").select("name").eq("active", true);
+      setProjectOptions(
+        Array.from(
+          new Set(((data ?? []) as Array<{ name: string | null }>).map((r) => (r.name ?? "").trim()).filter(Boolean)),
+        ).sort(),
+      );
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const projectOptions = useMemo(() => {
-    const set = new Set<string>();
-    cards.forEach((c) => { if (c.project_code) set.add(c.project_code); });
-    return Array.from(set).sort();
-  }, [cards]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();

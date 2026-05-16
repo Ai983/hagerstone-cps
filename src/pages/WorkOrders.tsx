@@ -127,7 +127,7 @@ export default function WorkOrders() {
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [projectSiteSuggestions, setProjectSiteSuggestions] = useState<string[]>([]);
+  const [woProjects, setWoProjects] = useState<Array<{ name: string; site_address: string | null }>>([]);
   const [logoBase64, setLogoBase64] = useState<string | null>(null);
 
   // Wizard state
@@ -235,24 +235,19 @@ export default function WorkOrders() {
     setSuppliers((data ?? []) as Supplier[]);
   };
 
-  const fetchProjectSites = async () => {
+  const fetchProjects = async () => {
     const { data } = await supabase
-      .from("cps_purchase_requisitions")
-      .select("project_site, project_code")
-      .order("created_at", { ascending: false })
-      .limit(500);
-    const set = new Set<string>();
-    (data ?? []).forEach((p: any) => {
-      if (p.project_site) set.add(p.project_site);
-      if (p.project_code) set.add(p.project_code);
-    });
-    setProjectSiteSuggestions(Array.from(set));
+      .from("cps_projects")
+      .select("name, site_address")
+      .eq("active", true)
+      .order("name", { ascending: true });
+    setWoProjects((data ?? []) as Array<{ name: string; site_address: string | null }>);
   };
 
   useEffect(() => {
     fetchAll();
     fetchSuppliers();
-    fetchProjectSites();
+    fetchProjects();
     // Load Hagerstone logo once into base64 for embedding in WO PDFs (same approach as PO PDFs)
     (async () => {
       try {
@@ -1173,19 +1168,31 @@ Rules:
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <Label>Project Site *</Label>
-                  <Input
-                    list="wo-project-sites"
+                  <Select
                     value={w_projectSite}
-                    onChange={(e) => setProjectSite(e.target.value)}
-                    placeholder="e.g. Auma India Pvt.Ltd"
-                  />
-                  <datalist id="wo-project-sites">
-                    {projectSiteSuggestions.map((s) => <option key={s} value={s} />)}
-                  </datalist>
+                    onValueChange={(v) => {
+                      setProjectSite(v);
+                      setProjectCode(v);
+                      const proj = woProjects.find((p) => p.name === v);
+                      if (proj) {
+                        if (!w_workAtName) setWorkAtName(v);
+                        if (!w_workAddress) setWorkAddress(proj.site_address ?? "");
+                      }
+                    }}
+                  >
+                    <SelectTrigger><SelectValue placeholder="Choose project" /></SelectTrigger>
+                    <SelectContent>
+                      {woProjects.map((p) => <SelectItem key={p.name} value={p.name}>{p.name}</SelectItem>)}
+                      {/* keep a legacy WO's saved project visible even if it's not in the master */}
+                      {w_projectSite && !woProjects.some((p) => p.name === w_projectSite) && (
+                        <SelectItem value={w_projectSite}>{w_projectSite}</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1">
                   <Label>Project Code</Label>
-                  <Input value={w_projectCode} onChange={(e) => setProjectCode(e.target.value)} placeholder="Optional" />
+                  <Input value={w_projectCode} onChange={(e) => setProjectCode(e.target.value)} placeholder="Auto-filled from project" />
                 </div>
                 <div className="space-y-1">
                   <Label>Category *</Label>

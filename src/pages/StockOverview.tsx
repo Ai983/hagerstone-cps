@@ -116,23 +116,37 @@ export default function StockOverview() {
 
   const canReviewStock = !!user && REVIEW_STOCK_ROLES.has(user.role);
 
+  // Master project list (cps_projects) — single source of truth, same as the
+  // PR wizard and Site Stock. Used for the filter and the Add Stock dialog.
+  const [masterProjects, setMasterProjects] = useState<string[]>([]);
+
   useEffect(() => { void loadAll(); }, []);
 
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [stockRes, boqRes] = await Promise.all([
+      const [stockRes, boqRes, projRes] = await Promise.all([
         supabase
           .from("cps_stock")
           .select("id,project_code,item_description,current_qty,unit,last_movement_at,updated_at,approval_status,stock_origin,invoice_note"),
         supabase
           .from("cps_project_boqs")
           .select("project_code,item_description,unit,planned_quantity"),
+        supabase
+          .from("cps_projects")
+          .select("name")
+          .eq("active", true),
       ]);
       if (stockRes.error) throw stockRes.error;
       if (boqRes.error) throw boqRes.error;
+      if (projRes.error) throw projRes.error;
       setStock((stockRes.data ?? []) as StockRow[]);
       setBoq((boqRes.data ?? []) as BoqRow[]);
+      setMasterProjects(
+        Array.from(
+          new Set(((projRes.data ?? []) as Array<{ name: string | null }>).map((r) => (r.name ?? "").trim()).filter(Boolean)),
+        ).sort(),
+      );
     } catch (e: any) {
       toast.error(e?.message || "Failed to load stock overview");
     } finally {
@@ -185,9 +199,8 @@ export default function StockOverview() {
 
   const pendingCount = useMemo(() => rows.filter((r) => r.approval_status === "pending").length, [rows]);
 
-  const projects = useMemo(() => {
-    return Array.from(new Set(rows.map((r) => r.project_code))).sort();
-  }, [rows]);
+  // Project dropdowns (filter + Add Stock) read the cps_projects master.
+  const projects = masterProjects;
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -288,11 +301,9 @@ export default function StockOverview() {
     /* Routing rule: project is mandatory; description is mandatory; qty must parse.
        Status comes from the form — "approved" goes live immediately, "pending" sits
        in the review queue so procurement can second-eye the line later. */
-    const projectCode = (addForm.project_code === "__new__"
-      ? addForm.new_project_code
-      : addForm.project_code).trim();
+    const projectCode = addForm.project_code.trim();
     if (!projectCode) {
-      toast.error("Project select karo (ya naya project name daalo)");
+      toast.error("Project select karo");
       return;
     }
     const desc = addForm.item_description.trim();
@@ -626,17 +637,8 @@ export default function StockOverview() {
                   <SelectTrigger id="add_project"><SelectValue placeholder="Project select karo" /></SelectTrigger>
                   <SelectContent>
                     {projects.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                    <SelectItem value="__new__">+ Naya project add karo</SelectItem>
                   </SelectContent>
                 </Select>
-                {addForm.project_code === "__new__" && (
-                  <Input
-                    className="mt-1.5"
-                    placeholder="Naya project name (jaise: Auma India Pvt.Ltd)"
-                    value={addForm.new_project_code}
-                    onChange={(e) => setAddForm((f) => ({ ...f, new_project_code: e.target.value }))}
-                  />
-                )}
               </div>
 
               <div className="space-y-1.5">

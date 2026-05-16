@@ -134,6 +134,7 @@ export default function Analytics() {
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [periodFilter, setPeriodFilter] = useState<string>("all");
   const [compSheets, setCompSheets] = useState<CompSheet[]>([]);
+  const [projectOptions, setProjectOptions] = useState<string[]>([]);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -146,6 +147,7 @@ export default function Analytics() {
         { data: compData },
         { data: prLineData },
         { data: itemData },
+        { data: projData },
       ] = await Promise.all([
         supabase.from("cps_purchase_orders").select("id, po_number, supplier_id, project_code, status, grand_total, total_value, gst_amount, created_at, delivery_date, pr_id, rfq_id, payment_terms_type, payment_due_date, supplier_name_text"),
         supabase.from("cps_suppliers").select("id, name, performance_score, status"),
@@ -154,12 +156,18 @@ export default function Analytics() {
         supabase.from("cps_comparison_sheets").select("rfq_id, potential_savings, reviewer_recommendation"),
         supabase.from("cps_pr_line_items").select("pr_id, item_id"),
         supabase.from("cps_items").select("id, category"),
+        supabase.from("cps_projects").select("name").eq("active", true),
       ]);
 
       setPos((poData ?? []) as POMini[]);
       setSuppliers((supplierData ?? []) as Supplier[]);
       setPrs((prData ?? []) as PR[]);
       setGrns((grnData ?? []) as GRN[]);
+      setProjectOptions(
+        Array.from(
+          new Set(((projData ?? []) as Array<{ name: string | null }>).map((r) => (r.name ?? "").trim()).filter(Boolean)),
+        ).sort(),
+      );
 
       setCompSheets((compData ?? []) as CompSheet[]);
 
@@ -220,11 +228,7 @@ export default function Analytics() {
     return m;
   }, [grns]);
 
-  const projectOptions = useMemo(() => {
-    const set = new Set<string>();
-    pos.forEach((p) => { if (p.project_code) set.add(p.project_code); });
-    return Array.from(set).sort();
-  }, [pos]);
+  // Project filter options come from the cps_projects master, not scraped from POs.
 
   // KPIs
   const kpis = useMemo(() => {
