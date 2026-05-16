@@ -34,6 +34,7 @@ type StockRow = {
   unit: string | null;
   updated_at: string | null;
   last_movement_at: string | null;
+  updated_by: string | null;
   approval_status?: string | null;
   stock_origin?: string | null;
   invoice_note?: string | null;
@@ -46,6 +47,7 @@ type UnifiedRow = {
   planned_qty: number | null;     // null → item is extra (not in BOQ)
   current_qty: number;
   last_updated: string | null;
+  updated_by_name: string | null;
   stock_id: string | null;
   from_boq: boolean;
   approval_status: string | null;
@@ -71,6 +73,8 @@ export default function SiteStock() {
   // Project assignments — who can edit which project
   const [assignments, setAssignments] = useState<Map<string, Assignment>>(new Map());
   const [engineers, setEngineers] = useState<Map<string, EngineerLite>>(new Map());
+  // updated_by uuid → user name, for the "edited by" display on each row
+  const [editorNames, setEditorNames] = useState<Map<string, string>>(new Map());
 
   const isProcurement = !!user && PROCUREMENT_ROLES.includes(user.role);
 
@@ -144,7 +148,7 @@ export default function SiteStock() {
       // the UI tells them their edit is awaiting procurement approval.
       const stockReq = supabase
         .from("cps_stock")
-        .select("id,item_description,current_qty,unit,updated_at,last_movement_at,category,approval_status,stock_origin,invoice_note")
+        .select("id,item_description,current_qty,unit,updated_at,last_movement_at,updated_by,category,approval_status,stock_origin,invoice_note")
         .eq("project_code", code);
       const [boqRes, stockRes] = await Promise.all([
         supabase
@@ -156,7 +160,19 @@ export default function SiteStock() {
       if (boqRes.error) throw boqRes.error;
       if (stockRes.error) throw stockRes.error;
       setBoq((boqRes.data ?? []) as BoqRow[]);
-      setStock((stockRes.data ?? []) as StockRow[]);
+      const stockRows = (stockRes.data ?? []) as StockRow[];
+      setStock(stockRows);
+
+      // Resolve updated_by → name for the "edited by" display
+      const editorIds = Array.from(new Set(stockRows.map((s) => s.updated_by).filter(Boolean) as string[]));
+      if (editorIds.length) {
+        const { data: editors } = await supabase.from("cps_users").select("id,name").in("id", editorIds);
+        const em = new Map<string, string>();
+        (editors ?? []).forEach((u: any) => em.set(u.id, u.name));
+        setEditorNames(em);
+      } else {
+        setEditorNames(new Map());
+      }
     } catch (e: any) {
       toast.error(e?.message || "Stock load fail ho gaya");
     } finally {
@@ -179,6 +195,7 @@ export default function SiteStock() {
         planned_qty: b?.planned_quantity != null ? Number(b.planned_quantity) : null,
         current_qty: Number(s.current_qty),
         last_updated: s.last_movement_at ?? s.updated_at ?? null,
+        updated_by_name: s.updated_by ? (editorNames.get(s.updated_by) ?? null) : null,
         stock_id: s.id,
         from_boq: !!b,
         approval_status: s.approval_status ?? "approved",
@@ -191,7 +208,7 @@ export default function SiteStock() {
       if (a.from_boq !== b.from_boq) return a.from_boq ? -1 : 1;
       return a.item_description.localeCompare(b.item_description);
     });
-  }, [boq, stock]);
+  }, [boq, stock, editorNames]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -300,6 +317,7 @@ export default function SiteStock() {
             unit,
             current_qty: qty,
             last_movement_at: new Date().toISOString(),
+            updated_by: user.id,
             // Site engineer adds need approval; procurement adds go live.
             approval_status: isProcurement ? "approved" : "pending",
             stock_origin: row.stock_origin ?? "manual_site",
@@ -314,6 +332,7 @@ export default function SiteStock() {
           current_qty: qty,
           last_movement_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
+          updated_by: user.id,
         };
         if (needsReApproval) {
           updatePayload.approval_status = "pending";
@@ -389,6 +408,7 @@ export default function SiteStock() {
           unit: extraUnit.trim() || null,
           current_qty: qty,
           last_movement_at: new Date().toISOString(),
+          updated_by: user.id,
           approval_status: newStatus,
           stock_origin: "manual_site",
         } as any)
@@ -567,7 +587,10 @@ export default function SiteStock() {
                             <Badge variant="outline" className="text-[9px] bg-muted text-muted-foreground h-4 px-1">REJECTED</Badge>
                           )}
                         </div>
-                        <div className="text-[11px] text-muted-foreground">{r.unit ?? "—"} · {fmtDate(r.last_updated)}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {r.unit ?? "—"} · {fmtDate(r.last_updated)}
+                          {r.updated_by_name && <> · by {r.updated_by_name}</>}
+                        </div>
                       </div>
                       {!isEdit && canEdit && (
                         <div className="flex items-center gap-1 shrink-0">
@@ -769,7 +792,12 @@ export default function SiteStock() {
                               </span>
                             )}
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-xs">{fmtDate(r.last_updated)}</TableCell>
+                          <TableCell className="text-muted-foreground text-xs">
+                            <div>{fmtDate(r.last_updated)}</div>
+                            {r.updated_by_name && (
+                              <div className="text-[10px] text-muted-foreground/70">by {r.updated_by_name}</div>
+                            )}
+                          </TableCell>
                           <TableCell className="text-right">
                             {isEdit ? (
                               <div className="flex items-center justify-end gap-1">

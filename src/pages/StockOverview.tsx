@@ -254,6 +254,7 @@ export default function StockOverview() {
           approved_at: new Date().toISOString(),
           approved_by: user.id,
           updated_at: new Date().toISOString(),
+          updated_by: user.id,
         } as any)
         .eq("id", editTarget.stock_id)
         .eq("approval_status", "pending");
@@ -324,6 +325,7 @@ export default function StockOverview() {
         stock_origin: "manual_admin_add",
         invoice_note: addForm.note.trim() || null,
         updated_at: nowIso,
+        updated_by: user.id,
       };
       if (addForm.status === "approved") {
         payload.approved_at = nowIso;
@@ -357,6 +359,7 @@ export default function StockOverview() {
         .update({
           approval_status: "rejected",
           updated_at: new Date().toISOString(),
+          updated_by: user?.id ?? null,
         } as any)
         .eq("id", rejectTarget.stock_id)
         .eq("approval_status", "pending");

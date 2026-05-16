@@ -1003,6 +1003,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
           category: r.category.trim() || null,
           current_qty: qty,
           updated_at: new Date().toISOString(),
+          updated_by: user.id,
           approval_status: "approved",
           stock_origin: "bom_boq",
           approved_at: new Date().toISOString(),
