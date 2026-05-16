@@ -964,7 +964,7 @@ export default function PurchaseRequisitions() {
   useEffect(() => {
     if (!wizardOpen || wizardStep >= 6) return;
     const canProceed =
-      wizardStep === 1 ? (!!wizProjectId || wizProjectName === "__other__" || !!wizProjectSite.trim())
+      wizardStep === 1 ? !!wizProjectId
       : wizardStep === 2 ? !!wizProjectSite.trim()
       : wizardStep === 3 ? (!!wizRequiredBy && !!wizAssignedToId)
       : wizardStep === 4 ? wizLineItems.some((li) => li.description.trim().length > 0)
@@ -2162,14 +2162,9 @@ export default function PurchaseRequisitions() {
                     value={wizProjectId}
                     onValueChange={(v) => {
                       setWizProjectId(v);
-                      if (v === "__other__") {
-                        setWizProjectName("__other__");
-                        setWizProjectSite("");
-                      } else {
-                        const proj = projects.find((p) => p.id === v);
-                        setWizProjectName(proj?.name ?? "");
-                        setWizProjectSite(proj?.site_address ?? proj?.name ?? "");
-                      }
+                      const proj = projects.find((p) => p.id === v);
+                      setWizProjectName(proj?.name ?? "");
+                      setWizProjectSite(proj?.site_address ?? proj?.name ?? "");
                     }}
                   >
                     <SelectTrigger className="h-12 sm:h-14 text-base sm:text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0">
@@ -2179,19 +2174,9 @@ export default function PurchaseRequisitions() {
                       {projects.map((p) => (
                         <SelectItem key={p.id} value={p.id} className="py-3 text-base">{p.name}</SelectItem>
                       ))}
-                      <SelectItem value="__other__" className="py-3 text-base font-medium text-primary">+ Other (type manually)</SelectItem>
                     </SelectContent>
                   </Select>
-                  {wizProjectId === "__other__" && (
-                    <Input
-                      autoFocus
-                      placeholder="Type project / site name..."
-                      value={wizProjectName === "__other__" ? "" : wizProjectName}
-                      onChange={(e) => { setWizProjectName(e.target.value); setWizProjectSite(e.target.value); }}
-                      className="h-12 sm:h-14 text-base sm:text-lg border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0"
-                    />
-                  )}
-                  {(wizProjectId && wizProjectId !== "__other__") || (wizProjectId === "__other__" && wizProjectSite.trim()) ? (
+                  {wizProjectId ? (
                     <Button
                       className="h-12 px-8 rounded-lg"
                       onClick={() => setWizardStep(2)}
