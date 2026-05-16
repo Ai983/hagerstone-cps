@@ -109,15 +109,19 @@ export default function SiteStock() {
   }, [projectCode, isProcurement]);
 
   const loadProjects = async () => {
-    const [prRes, boqRes] = await Promise.all([
-      supabase.from("cps_purchase_requisitions").select("project_code").neq("project_code", null),
-      supabase.from("cps_project_boqs").select("project_code"),
-    ]);
-    const all = [
-      ...((prRes.data ?? []) as Array<{ project_code: string | null }>),
-      ...((boqRes.data ?? []) as Array<{ project_code: string | null }>),
-    ];
-    const unique = Array.from(new Set(all.map((r) => (r.project_code ?? "").trim()).filter(Boolean))).sort();
+    // Single source of truth: the cps_projects master — the exact same list
+    // the PR wizard shows. Active projects only.
+    const { data, error } = await supabase
+      .from("cps_projects")
+      .select("name")
+      .eq("active", true);
+    if (error) {
+      toast.error(error.message || "Projects load fail ho gaye");
+      return;
+    }
+    const unique = Array.from(
+      new Set(((data ?? []) as Array<{ name: string | null }>).map((r) => (r.name ?? "").trim()).filter(Boolean)),
+    ).sort();
     setProjects(unique);
   };
 
