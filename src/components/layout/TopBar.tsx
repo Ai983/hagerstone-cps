@@ -13,12 +13,14 @@ const ROLE_COLORS: Record<string, string> = {
   requestor: "bg-gray-100 text-gray-700",
   finance: "bg-green-100 text-green-800",
   site_receiver: "bg-orange-100 text-orange-800",
+  accounts_team: "bg-teal-100 text-teal-800",
 };
 
 const ROLE_LABELS: Record<string, string> = {
   requestor: "Requestor", procurement_executive: "Procurement Executive",
   procurement_head: "Procurement Head", it_head: "IT Head", management: "Management",
   finance: "Finance", site_receiver: "Site Receiver", auditor: "Auditor",
+  accounts_team: "Accounts Team",
 };
 
 /* ── Notification types ── */

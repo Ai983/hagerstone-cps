@@ -119,6 +119,8 @@ const fmtDate = (d: string | null | undefined) => {
 
 export default function WorkOrders() {
   const { user, canViewPrices } = useAuth();
+  // accounts_team is a view-only role — it can see Work Orders but not create/edit them.
+  const canManageWO = user?.role !== "accounts_team";
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<WoRow[]>([]);
   const [userNameMap, setUserNameMap] = useState<Record<string, string>>({});
@@ -364,6 +366,12 @@ export default function WorkOrders() {
   };
 
   const openEdit = async (row: WoRow) => {
+    // View-only roles never open the editor — they get the WO PDF instead.
+    if (!canManageWO) {
+      if (row.wo_pdf_url) window.open(row.wo_pdf_url, "_blank", "noopener,noreferrer");
+      else toast.info("Is work order ka PDF abhi available nahi hai");
+      return;
+    }
     resetWizard();
     setWizardEditId(row.id);
     setLoading(true);
@@ -1011,9 +1019,11 @@ Rules:
             Contractor work orders for labour & installation services
           </p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="h-4 w-4 mr-2" /> Create Work Order
-        </Button>
+        {canManageWO && (
+          <Button onClick={openCreate}>
+            <Plus className="h-4 w-4 mr-2" /> Create Work Order
+          </Button>
+        )}
       </div>
 
       {/* Stats */}
@@ -1059,7 +1069,7 @@ Rules:
           <Card><CardContent className="py-12 text-center space-y-2">
             <Briefcase className="h-10 w-10 mx-auto text-muted-foreground/40" />
             <div className="text-sm text-muted-foreground">No work orders yet</div>
-            <Button size="sm" onClick={openCreate}><Plus className="h-4 w-4 mr-1.5" /> Create First WO</Button>
+            {canManageWO && <Button size="sm" onClick={openCreate}><Plus className="h-4 w-4 mr-1.5" /> Create First WO</Button>}
           </CardContent></Card>
         ) : (
           filteredRows.map((r) => (
@@ -1112,7 +1122,7 @@ Rules:
                     <div className="space-y-3">
                       <Briefcase className="h-10 w-10 mx-auto text-muted-foreground/30" />
                       <div className="text-muted-foreground">No work orders yet</div>
-                      <Button onClick={openCreate} size="sm"><Plus className="h-4 w-4 mr-1.5" /> Create First WO</Button>
+                      {canManageWO && <Button onClick={openCreate} size="sm"><Plus className="h-4 w-4 mr-1.5" /> Create First WO</Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -1136,7 +1146,9 @@ Rules:
                             </a>
                           </Button>
                         )}
-                        <Button variant="outline" size="sm" onClick={() => openEdit(r)}>Edit</Button>
+                        {canManageWO && (
+                          <Button variant="outline" size="sm" onClick={() => openEdit(r)}>Edit</Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>

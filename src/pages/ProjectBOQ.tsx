@@ -126,6 +126,12 @@ const BOM_CATEGORY_SUGGESTIONS = [
 
 export default function ProjectBOQ() {
   const { user } = useAuth();
+  // accounts_team is a view-only role — it can browse Project BOQ but not mutate it.
+  const canManageBOQ = user?.role !== "accounts_team";
+  const blockIfViewOnly = (): boolean => {
+    if (!canManageBOQ) { toast.error("Aapke paas sirf view access hai"); return true; }
+    return false;
+  };
   const [projects, setProjects] = useState<string[]>([]);
   const [projectCode, setProjectCode] = useState<string>("");
 
@@ -224,6 +230,7 @@ export default function ProjectBOQ() {
   };
 
   const deleteBoqUpload = async (upload: BoqUpload) => {
+    if (blockIfViewOnly()) return;
     if (!projectCode) return;
 
     const riskyFinish =
@@ -495,6 +502,7 @@ export default function ProjectBOQ() {
   };
 
   const uploadBoqFile = async () => {
+    if (blockIfViewOnly()) return;
     if (!user || !projectCode || !uploadFile) return;
     setUploading(true);
     
@@ -963,6 +971,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
   };
 
   const submitStockList = async () => {
+    if (blockIfViewOnly()) return;
     if (!user || !projectCode || !stockSubmissionUpload) return;
     const seen = new Set<string>();
     for (const r of stockDraftRows) {
@@ -1057,6 +1066,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
   };
 
   const addStockDraftRow = () => {
+    if (blockIfViewOnly()) return;
     setStockDraftRows((p) => [
       ...p,
       {
@@ -1072,6 +1082,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
   };
 
   const confirmAllBom = async () => {
+    if (blockIfViewOnly()) return;
     if (!selectedUpload) return;
     setBomSaving(true);
     
@@ -1160,6 +1171,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
   };
 
   const markFounderApproved = async (upload: BoqUpload) => {
+    if (blockIfViewOnly()) return;
     if (!user || !confirm("Founder approval confirm karna hai? Is ke baad site ko assign kar sakte ho.")) return;
     
     const { error } = await supabase
@@ -1181,6 +1193,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
   };
 
   const assignToSite = async (upload: BoqUpload) => {
+    if (blockIfViewOnly()) return;
     if (!user || !projectCode) return;
 
     // Check if site engineer is assigned
@@ -1213,6 +1226,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
   };
 
   const saveAssignment = async () => {
+    if (blockIfViewOnly()) return;
     if (!user || !projectCode) return;
     if (!assignSelectedUserId) { toast.error("Site engineer chuno"); return; }
     setAssignSaving(true);
@@ -1238,6 +1252,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
   };
 
   const removeAssignment = async () => {
+    if (blockIfViewOnly()) return;
     if (!projectCode || !confirm("Is project ki assignment hata dein?")) return;
     const { error } = await supabase
       .from("cps_project_assignments")
@@ -1294,6 +1309,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
   };
 
   const addManualProcurementRow = async () => {
+    if (blockIfViewOnly()) return;
     if (!user || !selectedUpload || !bomWorkspaceEditable) return;
     const name = extraProcName.trim();
     if (!name) {

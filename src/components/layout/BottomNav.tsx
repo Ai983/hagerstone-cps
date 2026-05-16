@@ -18,13 +18,13 @@ const ADMIN_PRIMARY = [
 const ADMIN_MORE = [
   { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor"] },
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive", "procurement_head", "it_head", "management"] },
-  { title: "Work Orders", url: "/work-orders", icon: Briefcase, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
-  { title: "Kanban", url: "/kanban", icon: KanbanSquare, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor", "finance"] },
-  { title: "Analytics", url: "/analytics", icon: LineChart, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
+  { title: "Work Orders", url: "/work-orders", icon: Briefcase, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor", "accounts_team"] },
+  { title: "Kanban", url: "/kanban", icon: KanbanSquare, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor", "finance", "accounts_team"] },
+  { title: "Analytics", url: "/analytics", icon: LineChart, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor", "accounts_team"] },
   { title: "Delivery", url: "/delivery", icon: Truck, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
-  { title: "BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive", "procurement_head", "it_head", "management"] },
-  { title: "Stock", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor"] },
-  { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "design_team"] },
+  { title: "BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive", "procurement_head", "it_head", "management", "accounts_team"] },
+  { title: "Stock", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor", "accounts_team"] },
+  { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "design_team", "accounts_team"] },
   { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor"] },
   { title: "Items", url: "/items", icon: Package, roles: ["procurement_executive", "procurement_head", "it_head"] },
   { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor", "procurement_head", "it_head", "management"] },
@@ -42,6 +42,7 @@ const ROLE_LABELS: Record<string, string> = {
   requestor: "Requestor", procurement_executive: "Proc. Executive",
   procurement_head: "Proc. Head", it_head: "IT Head", management: "Management",
   finance: "Finance", site_receiver: "Site Receiver", auditor: "Auditor",
+  accounts_team: "Accounts Team",
 };
 
 export function BottomNav() {
