@@ -567,8 +567,18 @@ export function buildWoPdf(data: WoPdfData): Blob {
   const termsW = CW * 0.50;
   const remarksW = CW - termsW;
 
+  // A term wrapped in **...** prints bold. parseTerm strips the markers and
+  // reports whether the line should be bold.
+  const parseTerm = (t: string): { text: string; bold: boolean } => {
+    const trimmed = t.trim();
+    if (trimmed.length >= 4 && trimmed.startsWith("**") && trimmed.endsWith("**")) {
+      return { text: trimmed.slice(2, -2).trim(), bold: true };
+    }
+    return { text: t, bold: false };
+  };
+
   const termsLines: string[] = ["Terms & Conditions"];
-  data.standardTerms.forEach((t, i) => termsLines.push((i + 1) + ". " + t));
+  data.standardTerms.forEach((t, i) => termsLines.push((i + 1) + ". " + parseTerm(t).text));
   const remarksLines: string[] = ["Remarks"];
   data.workRemarks.forEach((r) => remarksLines.push(r));
 
@@ -608,13 +618,15 @@ export function buildWoPdf(data: WoPdfData): Blob {
   doc.setTextColor(20, 20, 20);
   doc.text("Terms & Conditions", ML + 1.5, txtY);
   txtY += 4;
-  doc.setFont("helvetica", "normal");
   doc.setFontSize(6.8);
   for (let i = 0; i < data.standardTerms.length; i++) {
-    const wrapped = doc.splitTextToSize((i + 1) + ". " + data.standardTerms[i], termsW - 4);
+    const { text, bold } = parseTerm(data.standardTerms[i]);
+    doc.setFont("helvetica", bold ? "bold" : "normal");
+    const wrapped = doc.splitTextToSize((i + 1) + ". " + text, termsW - 4);
     doc.text(wrapped, ML + 1.5, txtY);
     txtY += wrapped.length * lineH + 0.3;
   }
+  doc.setFont("helvetica", "normal");
 
   // Right box: Remarks
   const remX = ML + termsW;

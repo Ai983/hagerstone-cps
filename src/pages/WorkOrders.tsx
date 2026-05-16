@@ -1503,7 +1503,10 @@ Rules:
               {/* Standard Terms */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Terms & Conditions</div>
+                  <div>
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Terms & Conditions</div>
+                    <div className="text-[10px] text-muted-foreground normal-case font-normal">Wrap a term in **double asterisks** to print that line in bold on the PDF.</div>
+                  </div>
                   <Button type="button" size="sm" variant="outline" onClick={() => setStandardTerms((p) => [...p, ""])}>
                     <Plus className="h-3.5 w-3.5 mr-1" /> Add Term
                   </Button>
