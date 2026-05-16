@@ -204,8 +204,12 @@ export default function SiteStock() {
       });
     });
 
+    // Most recently updated rows first; rows never updated (no timestamp) sink
+    // to the bottom, alphabetical among themselves.
     return rows.sort((a, b) => {
-      if (a.from_boq !== b.from_boq) return a.from_boq ? -1 : 1;
+      const ta = a.last_updated ? new Date(a.last_updated).getTime() : 0;
+      const tb = b.last_updated ? new Date(b.last_updated).getTime() : 0;
+      if (ta !== tb) return tb - ta;
       return a.item_description.localeCompare(b.item_description);
     });
   }, [boq, stock, editorNames]);
