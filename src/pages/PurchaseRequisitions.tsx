@@ -2007,9 +2007,6 @@ export default function PurchaseRequisitions() {
                               <ClipboardCheck className="h-3.5 w-3.5 mr-1" /> Review
                             </Button>
                           )}
-                          <Button variant="outline" size="sm" onClick={() => openDoc(pr)} title="View as Document">
-                            <Printer className="h-3.5 w-3.5" />
-                          </Button>
                           {(pr.status === "pending" || pr.status === "pending_design" || pr.status === "duplicate_flagged") && (
                             <Button variant="outline" size="sm" onClick={(e) => closePR(pr, e)} title="Cancel PR" className="text-destructive hover:bg-destructive/10 border-destructive/30">
                               <X className="h-3.5 w-3.5" />
