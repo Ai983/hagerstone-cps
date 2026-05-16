@@ -2188,7 +2188,7 @@ export default function PurchaseRequisitions() {
                 </div>
               )}
 
-              {/* Step 2: Site Address */}
+              {/* Step 2: Site Address — fixed from the project record, not editable */}
               {wizardStep === 2 && (
                 <div className="space-y-6">
                   <div className="space-y-2">
@@ -2196,16 +2196,19 @@ export default function PurchaseRequisitions() {
                       {lang === 'hi' ? 'Delivery kahan karni hai?' : 'Delivery location'}
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {lang === 'hi' ? 'Project se address aa gaya hai — zaroorat ho toh badlo' : 'Pre-filled from project — edit if needed'}
+                      {lang === 'hi'
+                        ? 'Yeh address project record se fixed hai — change nahi ho sakta'
+                        : 'Fixed from the project record — cannot be changed here'}
                     </p>
                   </div>
-                  <Textarea
-                    autoFocus
-                    value={wizProjectSite}
-                    onChange={(e) => setWizProjectSite(e.target.value)}
-                    placeholder="Site address..."
-                    className="text-base sm:text-lg min-h-[80px] sm:min-h-[100px] resize-none border-b-2 border-primary/30 focus:border-primary rounded-none border-x-0 border-t-0 shadow-none px-0"
-                  />
+                  <div className="rounded-lg border border-border bg-muted/40 p-4 text-base sm:text-lg text-foreground whitespace-pre-wrap">
+                    {wizProjectSite || (lang === 'hi' ? 'Is project ka address record mein nahi hai' : 'No address on file for this project')}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {lang === 'hi'
+                      ? 'Address galat hai? Procurement se project record update karwayein.'
+                      : 'Address wrong? Ask procurement to update the project record.'}
+                  </p>
                   <div className="flex items-center gap-3">
                     <Button variant="ghost" className="h-12 px-6 rounded-lg" onClick={() => setWizardStep(1)}>
                       {lang === 'hi' ? '← Wapas' : '← Back'}
