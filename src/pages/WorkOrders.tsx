@@ -424,10 +424,36 @@ export default function WorkOrders() {
       setWorkRemarks(((wo as any).work_remarks as string[]) ?? [...WO_DEFAULT_WORK_REMARKS]);
       setCustomColumns(((wo as any).custom_columns as WoPdfCustomColumn[]) ?? []);
       setCustomTotalRows(((wo as any).custom_total_rows as WoPdfCustomTotalRow[]) ?? []);
-      // Leave overrides blank — values auto-recompute from the loaded line items and extras.
-      // User can type in either input to override.
-      setSubtotalOverride("");
-      setGrandTotalOverride("");
+
+      // Re-hydrate the totals overrides from the saved WO. The PDF preview
+      // recomputes Subtotal/Grand Total from these inputs (blank = auto sum of
+      // line items). If a stored total does NOT match the plain line-item sum
+      // it was a deliberate override — pre-fill the input so the previewed PDF
+      // shows the exact figure the WO was saved with. When it matches the
+      // line-item sum, leave the input blank so totals keep auto-updating as
+      // line items change.
+      const loadedItems = (items ?? []) as any[];
+      const autoSub = loadedItems.reduce((sum, it) => {
+        const tv = it.total_value != null ? Number(it.total_value) : NaN;
+        const line = Number.isFinite(tv)
+          ? tv
+          : (Number(it.quantity) || 0) * (Number(it.rate) || 0);
+        return sum + line;
+      }, 0);
+      const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
+      const storedSub = (wo as any).subtotal != null ? Number((wo as any).subtotal) : null;
+      const storedGrand = (wo as any).grand_total != null ? Number((wo as any).grand_total) : null;
+      setSubtotalOverride(
+        storedSub != null && Number.isFinite(storedSub) && !near(storedSub, autoSub)
+          ? String(storedSub)
+          : "",
+      );
+      const effectiveSub = storedSub != null && Number.isFinite(storedSub) ? storedSub : autoSub;
+      setGrandTotalOverride(
+        storedGrand != null && Number.isFinite(storedGrand) && !near(storedGrand, effectiveSub)
+          ? String(storedGrand)
+          : "",
+      );
       setPreparedBy((wo as any).prepared_by_name ?? "");
       setCheckedBy((wo as any).checked_by_name ?? "");
       setAuthorisedSignatory((wo as any).authorised_signatory ?? "MR.DHRUV AGARWAL");
