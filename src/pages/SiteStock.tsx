@@ -605,7 +605,7 @@ export default function SiteStock() {
                             <Badge variant="outline" className="text-[9px] bg-orange-100 text-orange-900 border-orange-300 h-4 px-1">PENDING</Badge>
                           )}
                           {r.approval_status === "rejected" && (
-                            <Badge variant="outline" className="text-[9px] bg-muted text-muted-foreground h-4 px-1">REJECTED</Badge>
+                            <Badge variant="outline" className="text-[9px] bg-red-100 text-red-800 border-red-300 h-4 px-1">REJECTED</Badge>
                           )}
                         </div>
                         <div className="text-[11px] text-muted-foreground">
@@ -789,7 +789,7 @@ export default function SiteStock() {
                                   <Badge variant="outline" className="text-[10px] bg-orange-100 text-orange-900 border-orange-300">PENDING</Badge>
                                 )}
                                 {r.approval_status === "rejected" && (
-                                  <Badge variant="outline" className="text-[10px] bg-muted text-muted-foreground">REJECTED</Badge>
+                                  <Badge variant="outline" className="text-[10px] bg-red-100 text-red-800 border-red-300">REJECTED</Badge>
                                 )}
                               </div>
                             )}
