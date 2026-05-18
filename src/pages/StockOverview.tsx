@@ -49,7 +49,7 @@ type StockRow = {
   review_comment: string | null;
 };
 
-type ApprovalTab = "live" | "pending" | "all";
+type ApprovalTab = "live" | "pending" | "rejected" | "all";
 
 type OverviewRow = {
   stock_id: string;
@@ -213,6 +213,7 @@ export default function StockOverview() {
     return rows.filter((r) => {
       if (approvalTab === "live" && r.approval_status !== "approved") return false;
       if (approvalTab === "pending" && r.approval_status !== "pending") return false;
+      if (approvalTab === "rejected" && r.approval_status !== "rejected") return false;
       if (projectFilter !== "all" && r.project_code !== projectFilter) return false;
       if (extrasOnly && r.from_boq) return false;
       if (q && !r.item_description.toLowerCase().includes(q) && !r.project_code.toLowerCase().includes(q)) return false;
@@ -227,6 +228,7 @@ export default function StockOverview() {
       extras: rows.filter((r) => !r.from_boq).length,
       liveRows: rows.filter((r) => r.approval_status === "approved").length,
       pendingRows: pendingCount,
+      rejectedRows: rows.filter((r) => r.approval_status === "rejected").length,
     };
   }, [rows, projects, pendingCount]);
 
@@ -421,6 +423,7 @@ export default function StockOverview() {
           <TabsTrigger value="pending" className="text-xs sm:text-sm">
             Pending approval ({stats.pendingRows})
           </TabsTrigger>
+          <TabsTrigger value="rejected" className="text-xs sm:text-sm">Rejected ({stats.rejectedRows})</TabsTrigger>
           <TabsTrigger value="all" className="text-xs sm:text-sm">All rows ({stats.totalRows})</TabsTrigger>
         </TabsList>
       </Tabs>
@@ -496,13 +499,13 @@ export default function StockOverview() {
                   <TableHead className="text-right">Diff</TableHead>
                   <TableHead>Last Updated</TableHead>
                   <TableHead className="min-w-[160px]">Note (site team ko dikhega)</TableHead>
-                  {canReviewStock && approvalTab !== "live" && <TableHead className="text-right w-[140px]">Actions</TableHead>}
+                  {canReviewStock && (approvalTab === "pending" || approvalTab === "all") && <TableHead className="text-right w-[140px]">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.map((r, idx) => {
                   const diff = r.planned_qty != null ? (r.current_qty - r.planned_qty) : null;
-                  const showActions = canReviewStock && approvalTab !== "live" && r.approval_status === "pending";
+                  const showActions = canReviewStock && (approvalTab === "pending" || approvalTab === "all") && r.approval_status === "pending";
                   return (
                     <TableRow
                       key={`${r.stock_id}::${idx}`}
@@ -562,7 +565,7 @@ export default function StockOverview() {
                           ? <span className="whitespace-pre-wrap break-words text-foreground">{r.review_comment}</span>
                           : "—"}
                       </TableCell>
-                      {canReviewStock && approvalTab !== "live" && (
+                      {canReviewStock && (approvalTab === "pending" || approvalTab === "all") && (
                         <TableCell className="text-right">
                           {showActions ? (
                             <div className="flex justify-end gap-1 flex-wrap">
