@@ -38,6 +38,7 @@ type StockRow = {
   approval_status?: string | null;
   stock_origin?: string | null;
   invoice_note?: string | null;
+  review_comment?: string | null;
 };
 
 type UnifiedRow = {
@@ -53,6 +54,7 @@ type UnifiedRow = {
   approval_status: string | null;
   stock_origin: string | null;
   invoice_note: string | null;
+  review_comment: string | null;
 };
 
 type Assignment = { project_code: string; assigned_to_user_id: string };
@@ -152,7 +154,7 @@ export default function SiteStock() {
       // the UI tells them their edit is awaiting procurement approval.
       const stockReq = supabase
         .from("cps_stock")
-        .select("id,item_description,current_qty,unit,updated_at,last_movement_at,updated_by,category,approval_status,stock_origin,invoice_note")
+        .select("id,item_description,current_qty,unit,updated_at,last_movement_at,updated_by,category,approval_status,stock_origin,invoice_note,review_comment")
         .eq("project_code", code);
       const [boqRes, stockRes] = await Promise.all([
         supabase
@@ -205,6 +207,7 @@ export default function SiteStock() {
         approval_status: s.approval_status ?? "approved",
         stock_origin: s.stock_origin ?? null,
         invoice_note: s.invoice_note ?? null,
+        review_comment: s.review_comment ?? null,
       });
     });
 
@@ -599,6 +602,12 @@ export default function SiteStock() {
                           {r.unit ?? "—"} · {fmtDate(r.last_updated)}
                           {r.updated_by_name && <> · by {r.updated_by_name}</>}
                         </div>
+                        {r.review_comment && (
+                          <div className="text-[11px] mt-0.5">
+                            <span className="text-muted-foreground">Procurement note: </span>
+                            <span className="text-foreground whitespace-pre-wrap break-words">{r.review_comment}</span>
+                          </div>
+                        )}
                       </div>
                       {!isEdit && canEdit && (
                         <div className="flex items-center gap-1 shrink-0">
@@ -716,6 +725,7 @@ export default function SiteStock() {
                   <TableHead className="w-32 text-right">Current</TableHead>
                   <TableHead className="w-24 text-right">Diff</TableHead>
                   <TableHead className="w-32">Last Updated</TableHead>
+                  <TableHead className="min-w-[160px]">Procurement Note</TableHead>
                   <TableHead className="w-28 text-right">Action</TableHead>
                 </TableRow>
               </TableHeader>
@@ -723,12 +733,12 @@ export default function SiteStock() {
                 {loading ? (
                   [1, 2, 3].map((i) => (
                     <TableRow key={i}>
-                      {[1, 2, 3, 4, 5, 6, 7, 8].map((j) => <TableCell key={j}><Skeleton className="h-4 w-20" /></TableCell>)}
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((j) => <TableCell key={j}><Skeleton className="h-4 w-20" /></TableCell>)}
                     </TableRow>
                   ))
                 ) : filtered.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-10 text-muted-foreground">
+                    <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
                       {unified.length === 0
                         ? "Is project ke liye abhi koi BOQ nahi hai — procurement se kaho ya extra item add karo."
                         : "Search se kuch nahi mila"}
@@ -806,6 +816,11 @@ export default function SiteStock() {
                               <div className="text-[10px] text-muted-foreground/70">by {r.updated_by_name}</div>
                             )}
                           </TableCell>
+                          <TableCell className="text-xs max-w-[240px]">
+                            {r.review_comment
+                              ? <span className="whitespace-pre-wrap break-words text-foreground">{r.review_comment}</span>
+                              : <span className="text-muted-foreground">—</span>}
+                          </TableCell>
                           <TableCell className="text-right">
                             {isEdit ? (
                               <div className="flex items-center justify-end gap-1">
@@ -841,7 +856,7 @@ export default function SiteStock() {
                         </TableRow>
                         {isEdit && (
                           <TableRow className="bg-primary/5">
-                            <TableCell colSpan={8} className="py-2">
+                            <TableCell colSpan={9} className="py-2">
                               <div className="flex items-center gap-2">
                                 <Label className="text-xs text-muted-foreground shrink-0">Reason / note:</Label>
                                 <Input

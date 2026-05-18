@@ -46,6 +46,7 @@ type StockRow = {
   approval_status: string | null;
   stock_origin: string | null;
   invoice_note: string | null;
+  review_comment: string | null;
 };
 
 type ApprovalTab = "live" | "pending" | "all";
@@ -62,6 +63,7 @@ type OverviewRow = {
   approval_status: string;
   stock_origin: string | null;
   invoice_note: string | null;
+  review_comment: string | null;
 };
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -86,6 +88,9 @@ export default function StockOverview() {
     unit: string;
     current_qty: string;
   }>({ project_code: "", item_description: "", unit: "", current_qty: "" });
+  // Procurement's note recorded at approve / reject time — shown to the site team.
+  const [editComment, setEditComment] = useState("");
+  const [rejectComment, setRejectComment] = useState("");
 
   /* Manual add-stock dialog state. Admin-level roles (procurement head, IT head,
      management) can seed extra lines that came in outside the invoice flow — e.g.
@@ -128,7 +133,7 @@ export default function StockOverview() {
       const [stockRes, boqRes, projRes] = await Promise.all([
         supabase
           .from("cps_stock")
-          .select("id,project_code,item_description,current_qty,unit,last_movement_at,updated_at,approval_status,stock_origin,invoice_note"),
+          .select("id,project_code,item_description,current_qty,unit,last_movement_at,updated_at,approval_status,stock_origin,invoice_note,review_comment"),
         supabase
           .from("cps_project_boqs")
           .select("project_code,item_description,unit,planned_quantity"),
@@ -184,6 +189,7 @@ export default function StockOverview() {
         approval_status: st,
         stock_origin: s.stock_origin ?? null,
         invoice_note: s.invoice_note ?? null,
+        review_comment: s.review_comment ?? null,
       });
     });
 
@@ -240,6 +246,7 @@ export default function StockOverview() {
       unit: r.unit ?? "",
       current_qty: String(r.current_qty ?? ""),
     });
+    setEditComment(r.review_comment ?? "");
     setEditTarget(r);
   };
 
@@ -268,6 +275,7 @@ export default function StockOverview() {
           approval_status: "approved",
           approved_at: new Date().toISOString(),
           approved_by: user.id,
+          review_comment: editComment.trim() || null,
           updated_at: new Date().toISOString(),
           updated_by: user.id,
         } as any)
@@ -371,6 +379,7 @@ export default function StockOverview() {
         .from("cps_stock")
         .update({
           approval_status: "rejected",
+          review_comment: rejectComment.trim() || null,
           updated_at: new Date().toISOString(),
           updated_by: user?.id ?? null,
         } as any)
@@ -486,6 +495,7 @@ export default function StockOverview() {
                   <TableHead className="text-right">Current</TableHead>
                   <TableHead className="text-right">Diff</TableHead>
                   <TableHead>Last Updated</TableHead>
+                  <TableHead className="min-w-[160px]">Note (site team ko dikhega)</TableHead>
                   {canReviewStock && approvalTab !== "live" && <TableHead className="text-right w-[140px]">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
@@ -547,6 +557,11 @@ export default function StockOverview() {
                         )}
                       </TableCell>
                       <TableCell className="text-muted-foreground text-xs whitespace-nowrap">{fmtDate(r.last_updated)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground max-w-[240px]">
+                        {r.review_comment
+                          ? <span className="whitespace-pre-wrap break-words text-foreground">{r.review_comment}</span>
+                          : "—"}
+                      </TableCell>
                       {canReviewStock && approvalTab !== "live" && (
                         <TableCell className="text-right">
                           {showActions ? (
@@ -565,7 +580,7 @@ export default function StockOverview() {
                                 variant="outline"
                                 className="h-8"
                                 disabled={actingId === r.stock_id}
-                                onClick={() => setRejectTarget(r)}
+                                onClick={() => { setRejectComment(r.review_comment ?? ""); setRejectTarget(r); }}
                               >
                                 Reject
                               </Button>
@@ -589,7 +604,7 @@ export default function StockOverview() {
         Engineers ke liye low-stock widget bhi isi approved qty par based hai.
       </p>
 
-      <AlertDialog open={!!rejectTarget} onOpenChange={(o) => !o && setRejectTarget(null)}>
+      <AlertDialog open={!!rejectTarget} onOpenChange={(o) => { if (!o) { setRejectTarget(null); setRejectComment(""); } }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Reject stock line?</AlertDialogTitle>
@@ -602,6 +617,16 @@ export default function StockOverview() {
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="reject_comment">Note for site team</Label>
+            <Textarea
+              id="reject_comment"
+              value={rejectComment}
+              onChange={(e) => setRejectComment(e.target.value)}
+              rows={3}
+              placeholder="Kyun reject kiya — yeh note site team ko Site Stock par dikhega"
+            />
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
@@ -791,6 +816,16 @@ export default function StockOverview() {
                 min="0"
                 value={editForm.current_qty}
                 onChange={(e) => setEditForm((f) => ({ ...f, current_qty: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ap_comment">Note for site team</Label>
+              <Textarea
+                id="ap_comment"
+                value={editComment}
+                onChange={(e) => setEditComment(e.target.value)}
+                rows={2}
+                placeholder="Optional — yeh note site team ko Site Stock par dikhega"
               />
             </div>
           </div>
