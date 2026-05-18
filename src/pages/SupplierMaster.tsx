@@ -14,7 +14,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -71,13 +70,6 @@ type SupplierForm = {
   pincode: string;
   categoriesText: string;
   notes: string;
-  status: SupplierStatus;
-};
-
-const statusConfig: Record<SupplierStatus, { badge: string; label: string }> = {
-  active: { badge: "bg-green-100 text-green-800 border-green-200", label: "active" },
-  inactive: { badge: "bg-muted text-muted-foreground border-border/80", label: "inactive" },
-  blacklisted: { badge: "bg-red-100 text-red-800 border-red-200", label: "blacklisted" },
 };
 
 const formatPct = (value: number | null | undefined) => {
@@ -97,7 +89,6 @@ export default function SupplierMaster() {
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
-  const [statusFilter, setStatusFilter] = useState<SupplierStatus | "all">("all");
   const [sortFieldSup, setSortFieldSup] = useState("name");
   const [sortDirSup, setSortDirSup] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(0);
@@ -231,7 +222,6 @@ For any field not found on the card, use empty string. For phone, if the card sh
     pincode: "",
     categoriesText: "",
     notes: "",
-    status: "active",
   });
 
   const fetchSuppliers = async () => {
@@ -297,7 +287,6 @@ For any field not found on the card, use empty string. For phone, if the card sh
   const filtered = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
     const list = allSuppliers.filter((s) => {
-      const matchesStatus = statusFilter === "all" ? true : s.status === statusFilter;
       const matchesSearch = !q
         ? true
         : (s.name ?? "").toLowerCase().includes(q) ||
@@ -308,7 +297,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
         activeTab === "complete" ? isSupplierComplete(s)
         : activeTab === "incomplete" ? !isSupplierComplete(s)
         : true;
-      return matchesStatus && matchesSearch && matchesCategory && matchesTab;
+      return matchesSearch && matchesCategory && matchesTab;
     });
     return [...list].sort((a, b) => {
       const av = (a as any)[sortFieldSup] ?? "";
@@ -316,10 +305,10 @@ For any field not found on the card, use empty string. For phone, if the card sh
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirSup === "asc" ? cmp : -cmp;
     });
-  }, [allSuppliers, debouncedSearch, statusFilter, categoryFilter, sortFieldSup, sortDirSup, activeTab]);
+  }, [allSuppliers, debouncedSearch, categoryFilter, sortFieldSup, sortDirSup, activeTab]);
 
   // Reset page when filters or tab change
-  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, categoryFilter, activeTab]);
+  useEffect(() => { setPage(0); }, [debouncedSearch, categoryFilter, activeTab]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginatedFiltered = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -339,7 +328,6 @@ For any field not found on the card, use empty string. For phone, if the card sh
       pincode: "",
       categoriesText: "",
       notes: "",
-      status: "active",
     });
     setCardPreview(null);
     setDialogOpen(true);
@@ -360,7 +348,6 @@ For any field not found on the card, use empty string. For phone, if the card sh
       pincode: "",
       categoriesText: formatCategories(s.categories).join(", "),
       notes: s.notes ?? "",
-      status: s.status,
     });
     setDialogOpen(true);
   };
@@ -414,7 +401,6 @@ For any field not found on the card, use empty string. For phone, if the card sh
       pincode: form.pincode.trim() || null,
       categories: categoriesArr,
       notes: form.notes.trim() || null,
-      status: form.status,
     };
 
     if (editingId) {
@@ -429,7 +415,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
       return;
     }
 
-    const { error } = await supabase.from("cps_suppliers").insert([payload]);
+    const { error } = await supabase.from("cps_suppliers").insert([{ ...payload, status: "active" }]);
     if (error) {
       toast.error("Failed to add supplier");
       return;
@@ -441,7 +427,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
 
   const suppliersContent = (
     <>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Suppliers</CardTitle>
@@ -452,18 +438,10 @@ For any field not found on the card, use empty string. For phone, if the card sh
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Active</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Pending Registration</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground">{stats.active}</div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Blacklisted</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-foreground">{stats.blacklisted}</div>
+            <div className="text-2xl font-bold text-foreground">{completenessCounts.incomplete}</div>
           </CardContent>
         </Card>
       </div>
@@ -474,18 +452,9 @@ For any field not found on the card, use empty string. For phone, if the card sh
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input placeholder="Search name, GSTIN, city..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
           </div>
-          <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as any)}>
-            <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="inactive">Inactive</SelectItem>
-              <SelectItem value="blacklisted">Blacklisted</SelectItem>
-            </SelectContent>
-          </Select>
           <Select value={categoryFilter} onValueChange={setCategoryFilter}>
             <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
-            <SelectContent>
+            <SelectContent position="popper" sideOffset={4} className="max-h-[50vh] overflow-y-auto z-[300]">
               <SelectItem value="all">All Categories</SelectItem>
               {supplierCategoryOptions.map((c) => (
                 <SelectItem key={c} value={c}>{c}</SelectItem>
@@ -517,7 +486,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
                 <TableHead>Contact</TableHead>
                 <TableHead className="cursor-pointer select-none" onClick={() => toggleSortSup("performance_score")}>Performance {sortFieldSup==="performance_score"?(sortDirSup==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
                 <TableHead>Win Rate</TableHead>
-                <TableHead className="cursor-pointer select-none" onClick={() => toggleSortSup("status")}>Status {sortFieldSup==="status"?(sortDirSup==="asc"?"↑":"↓"):<span className="text-muted-foreground/40">↕</span>}</TableHead>
+                <TableHead>Registration</TableHead>
                 {canManageSuppliers && <TableHead className="text-right">Edit</TableHead>}
               </TableRow>
             </TableHeader>
@@ -536,9 +505,9 @@ For any field not found on the card, use empty string. For phone, if the card sh
                 </TableRow>
               ) : (
                 paginatedFiltered.map((s) => {
-                  const sb = statusConfig[s.status];
+                  const complete = isSupplierComplete(s);
                   return (
-                    <TableRow key={s.id} className={`cursor-pointer ${s.profile_complete === false ? "bg-amber-50/30 hover:bg-amber-50/50" : "hover:bg-muted/30"}`} onClick={() => openSupplierDetail(s)}>
+                    <TableRow key={s.id} className={`cursor-pointer ${complete ? "hover:bg-muted/30" : "bg-amber-50/30 hover:bg-amber-50/50"}`} onClick={() => openSupplierDetail(s)}>
                       <TableCell>
                         <div>
                           <div className="flex items-center gap-2">
@@ -576,19 +545,10 @@ For any field not found on the card, use empty string. For phone, if the card sh
                       <TableCell className="text-sm text-muted-foreground">{formatPct(s.win_rate)}</TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-1">
-                          {s.status === "blacklisted" && s.blacklist_reason ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild><Badge className={`text-xs border-0 ${sb.badge}`}>{sb.label}</Badge></TooltipTrigger>
-                              <TooltipContent><div className="max-w-[260px] text-xs">{s.blacklist_reason}</div></TooltipContent>
-                            </Tooltip>
+                          {complete ? (
+                            <Badge className="text-xs border-0 bg-green-100 text-green-800 w-fit">Complete</Badge>
                           ) : (
-                            <Badge className={`text-xs border-0 ${sb.badge}`}>{sb.label}</Badge>
-                          )}
-                          {s.profile_complete === false && (
-                            <span className="text-[10px] font-semibold bg-gray-100 text-gray-600 border border-gray-300 rounded px-1.5 py-0.5 leading-none w-fit">📝 INCOMPLETE</span>
-                          )}
-                          {s.verified === false && s.profile_complete !== false && (
-                            <span className="text-[10px] font-semibold bg-orange-100 text-orange-700 border border-orange-300 rounded px-1.5 py-0.5 leading-none w-fit">⚠️ Unverified</span>
+                            <Badge className="text-xs border-0 bg-amber-100 text-amber-800 w-fit">Pending Registration</Badge>
                           )}
                           {s.added_via === "legacy_quote" && (
                             <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 leading-none w-fit">📄 Added via Quote</span>
@@ -630,7 +590,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
           <div className="text-center py-8 text-muted-foreground">No suppliers found</div>
         ) : (
           paginatedFiltered.map((s) => {
-            const sb = statusConfig[s.status];
+            const complete = isSupplierComplete(s);
             return (
               <Card key={s.id} className="p-4">
                 <div className="flex items-start justify-between gap-2">
@@ -640,7 +600,11 @@ For any field not found on the card, use empty string. For phone, if the card sh
                     {s.phone && <div className="text-xs text-muted-foreground">{s.phone}</div>}
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
-                    <Badge className={`text-xs border-0 ${sb.badge}`}>{sb.label}</Badge>
+                    {complete ? (
+                      <Badge className="text-xs border-0 bg-green-100 text-green-800">Complete</Badge>
+                    ) : (
+                      <Badge className="text-xs border-0 bg-amber-100 text-amber-800">Pending</Badge>
+                    )}
                     {s.performance_score != null && (
                       <div className="flex items-center gap-0.5 text-xs"><Star className="h-3 w-3 text-amber-500 fill-amber-500" />{s.performance_score}</div>
                     )}
@@ -664,7 +628,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
       <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
           <h1 className="text-xl lg:text-2xl font-bold text-foreground">Supplier Master</h1>
-          <p className="text-muted-foreground text-xs lg:text-sm mt-1">{stats.active} active suppliers</p>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">{stats.total} suppliers · {completenessCounts.incomplete} pending registration</p>
         </div>
         {canManageSuppliers && (
           <Button onClick={openAdd}><Plus className="h-4 w-4 mr-2" />Naya Supplier Add Karo</Button>
@@ -743,17 +707,6 @@ For any field not found on the card, use empty string. For phone, if the card sh
             <div className="space-y-1"><Label>Email</Label><Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="contact@supplier.com" /></div>
             <div className="space-y-1"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+91 XXXXX XXXXX" /></div>
             <div className="space-y-1"><Label>WhatsApp</Label><Input value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} placeholder="+91 XXXXX XXXXX" /></div>
-            <div className="space-y-1">
-              <Label>Status</Label>
-              <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as SupplierStatus })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">active</SelectItem>
-                  <SelectItem value="inactive">inactive</SelectItem>
-                  <SelectItem value="blacklisted">blacklisted</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
             <div className="space-y-1"><Label>City</Label><Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} placeholder="City" /></div>
             <div className="space-y-1"><Label>State</Label><Input value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} placeholder="State" /></div>
             <div className="space-y-1"><Label>Pincode</Label><Input value={form.pincode} onChange={(e) => setForm({ ...form, pincode: e.target.value })} placeholder="Pincode" /></div>
