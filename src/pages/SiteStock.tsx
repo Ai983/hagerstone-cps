@@ -112,6 +112,19 @@ export default function SiteStock() {
     setEditingKey(null);
   }, [projectCode, isProcurement]);
 
+  // Auto-open the project this user is assigned to, so a site engineer lands
+  // straight on their stock list without picking from the dropdown. Only fires
+  // while no project is selected — the user can still switch projects after.
+  useEffect(() => {
+    if (projectCode || !user || assignments.size === 0) return;
+    for (const a of assignments.values()) {
+      if (a.assigned_to_user_id === user.id) {
+        setProjectCode(a.project_code);
+        break;
+      }
+    }
+  }, [assignments, user, projectCode]);
+
   const loadProjects = async () => {
     // Single source of truth: the cps_projects master — the exact same list
     // the PR wizard shows. Active projects only.
