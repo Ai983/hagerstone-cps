@@ -89,25 +89,8 @@ const formatPct = (value: number | null | undefined) => {
 
 const formatCategories = (cats: string[] | null) => (cats ?? []).filter(Boolean);
 
-type VendorRegistration = {
-  id: string;
-  company_name: string | null;
-  contact_person: string | null;
-  email: string | null;
-  phone: string | null;
-  whatsapp: string | null;
-  gstin: string | null;
-  city: string | null;
-  state: string | null;
-  categories: string[] | null;
-  regions: string[] | null;
-  submitted_at: string | null;
-  created_at: string | null;
-};
-
 export default function SupplierMaster() {
   const { canManageSuppliers, user } = useAuth();
-  const isProcurementHead = user?.role === "procurement_head" || user?.role === "it_head";
 
   const [allSuppliers, setAllSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
@@ -213,15 +196,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
     }
   };
 
-  const [pendingRegs, setPendingRegs] = useState<VendorRegistration[]>([]);
-  const [pendingLoading, setPendingLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("complete");
-
-  const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
-  const [approveTarget, setApproveTarget] = useState<VendorRegistration | null>(null);
-  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
-  const [rejectTarget, setRejectTarget] = useState<VendorRegistration | null>(null);
-  const [rejectReason, setRejectReason] = useState("");
 
   // Supplier detail + PO history
   type SupplierPO = { id: string; po_number: string; status: string; grand_total: number | null; created_at: string | null; delivery_date: string | null; payment_terms_type: string | null };
@@ -279,98 +254,8 @@ For any field not found on the card, use empty string. For phone, if the card sh
     setLoading(false);
   };
 
-  const fetchPendingRegs = async () => {
-    setPendingLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from("cps_vendor_registrations")
-        .select("id,company_name,contact_person,email,phone,whatsapp,gstin,city,state,categories,regions,submitted_at,created_at")
-        .eq("status", "pending")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      setPendingRegs((data ?? []) as VendorRegistration[]);
-    } catch {
-      setPendingRegs([]);
-    } finally {
-      setPendingLoading(false);
-    }
-  };
-
-  const approveRegistration = async () => {
-    if (!user || !approveTarget) return;
-    try {
-      const reg = approveTarget;
-      const categoriesArr = (reg.categories ?? []).filter(Boolean);
-
-      const { data: newSup, error: insErr } = await supabase
-        .from("cps_suppliers")
-        .insert([{
-          name: reg.company_name ?? "Unnamed",
-          email: reg.email ?? null,
-          phone: reg.phone ?? null,
-          whatsapp: reg.whatsapp ?? null,
-          gstin: reg.gstin ?? null,
-          city: reg.city ?? null,
-          state: reg.state ?? null,
-          categories: categoriesArr.length ? categoriesArr : null,
-          status: "active",
-        }])
-        .select("id")
-        .single();
-      if (insErr) throw insErr;
-
-      const newSupplierId = (newSup as any).id;
-      const { error: updErr } = await supabase
-        .from("cps_vendor_registrations")
-        .update({
-          status: "approved",
-          supplier_id: newSupplierId,
-          reviewed_by: user.id,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq("id", reg.id);
-      if (updErr) throw updErr;
-
-      toast.success("Vendor approved and added to supplier master");
-      setApproveConfirmOpen(false);
-      setApproveTarget(null);
-      await Promise.all([fetchSuppliers(), fetchPendingRegs()]);
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to approve vendor");
-    }
-  };
-
-  const rejectRegistration = async () => {
-    if (!user || !rejectTarget) return;
-    if (!rejectReason.trim()) {
-      toast.error("Rejection reason is required");
-      return;
-    }
-    try {
-      const { error } = await supabase
-        .from("cps_vendor_registrations")
-        .update({
-          status: "rejected",
-          rejection_reason: rejectReason.trim(),
-          reviewed_by: user.id,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq("id", rejectTarget.id);
-      if (error) throw error;
-
-      toast.success("Registration rejected");
-      setRejectDialogOpen(false);
-      setRejectTarget(null);
-      setRejectReason("");
-      await fetchPendingRegs();
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to reject registration");
-    }
-  };
-
   useEffect(() => {
     fetchSuppliers();
-    if (isProcurementHead) fetchPendingRegs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -774,121 +659,6 @@ For any field not found on the card, use empty string. For phone, if the card sh
     </>
   );
 
-  const pendingContent = (
-    <>
-      {/* Mobile cards */}
-      <Card className="lg:hidden">
-        <CardContent className="p-0 divide-y divide-border">
-          {pendingLoading ? (
-            Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="p-3"><Skeleton className="h-16 w-full" /></div>
-            ))
-          ) : pendingRegs.length === 0 ? (
-            <div className="text-center py-10 text-sm text-muted-foreground">No pending registrations</div>
-          ) : (
-            pendingRegs.map((reg) => (
-              <div key={reg.id} className="p-3 space-y-2">
-                <div className="space-y-0.5">
-                  <div className="font-medium text-sm">{reg.company_name ?? "—"}</div>
-                  {reg.contact_person && <div className="text-xs text-muted-foreground">{reg.contact_person}</div>}
-                </div>
-                <div className="text-xs text-muted-foreground space-y-0.5">
-                  {reg.email && <div className="truncate">{reg.email}</div>}
-                  {reg.phone && <div>{reg.phone}</div>}
-                </div>
-                {(reg.categories ?? []).length > 0 && (
-                  <div className="flex gap-1 flex-wrap">
-                    {(reg.categories ?? []).slice(0, 3).map((c) => (
-                      <span key={c} className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded">{c}</span>
-                    ))}
-                    {(reg.categories ?? []).length > 3 && (
-                      <span className="text-[10px] text-muted-foreground">+{(reg.categories ?? []).length - 3}</span>
-                    )}
-                  </div>
-                )}
-                <div className="flex items-center justify-between gap-2 pt-1">
-                  <span className="text-[11px] text-muted-foreground">
-                    {reg.submitted_at || reg.created_at
-                      ? new Date(reg.submitted_at ?? reg.created_at!).toLocaleDateString("en-IN")
-                      : "—"}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" className="bg-green-600 hover:bg-green-700 h-8 text-xs" onClick={() => { setApproveTarget(reg); setApproveConfirmOpen(true); }}>Approve</Button>
-                    <Button size="sm" variant="destructive" className="h-8 text-xs" onClick={() => { setRejectTarget(reg); setRejectReason(""); setRejectDialogOpen(true); }}>Reject</Button>
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Desktop table */}
-      <Card className="hidden lg:block">
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Company Name</TableHead>
-                <TableHead>Contact Person</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>Categories</TableHead>
-                <TableHead>Submitted</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {pendingLoading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <TableRow key={i}>
-                    {Array.from({ length: 7 }).map((__, j) => (
-                      <TableCell key={j}><Skeleton className="h-4 w-24" /></TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : pendingRegs.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center py-10 text-muted-foreground">No pending registrations</TableCell>
-                </TableRow>
-              ) : (
-                pendingRegs.map((reg) => (
-                  <TableRow key={reg.id} className="hover:bg-muted/30">
-                    <TableCell className="font-medium">{reg.company_name ?? "—"}</TableCell>
-                    <TableCell>{reg.contact_person ?? "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{reg.email ?? "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{reg.phone ?? "—"}</TableCell>
-                    <TableCell>
-                      <div className="flex gap-1 flex-wrap">
-                        {(reg.categories ?? []).slice(0, 2).map((c) => (
-                          <span key={c} className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded">{c}</span>
-                        ))}
-                        {(reg.categories ?? []).length > 2 && (
-                          <span className="text-xs text-muted-foreground">+{(reg.categories ?? []).length - 2}</span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {reg.submitted_at || reg.created_at
-                        ? new Date(reg.submitted_at ?? reg.created_at!).toLocaleDateString("en-IN")
-                        : "—"}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button size="sm" className="bg-green-600 hover:bg-green-700" onClick={() => { setApproveTarget(reg); setApproveConfirmOpen(true); }}>Approve</Button>
-                        <Button size="sm" variant="destructive" onClick={() => { setRejectTarget(reg); setRejectReason(""); setRejectDialogOpen(true); }}>Reject</Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-    </>
-  );
-
   return (
     <div className="space-y-4 lg:space-y-6">
       <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
@@ -907,19 +677,11 @@ For any field not found on the card, use empty string. For phone, if the card sh
             Complete{completenessCounts.complete > 0 ? ` (${completenessCounts.complete})` : ""}
           </TabsTrigger>
           <TabsTrigger value="incomplete">
-            Incomplete{completenessCounts.incomplete > 0 ? ` (${completenessCounts.incomplete})` : ""}
+            Pending Registrations{completenessCounts.incomplete > 0 ? ` (${completenessCounts.incomplete})` : ""}
           </TabsTrigger>
-          {isProcurementHead && (
-            <TabsTrigger value="pending">
-              Pending Registrations{pendingRegs.length > 0 ? ` (${pendingRegs.length})` : ""}
-            </TabsTrigger>
-          )}
         </TabsList>
         <TabsContent value="complete" className="mt-4 space-y-6">{suppliersContent}</TabsContent>
         <TabsContent value="incomplete" className="mt-4 space-y-6">{suppliersContent}</TabsContent>
-        {isProcurementHead && (
-          <TabsContent value="pending" className="mt-4 space-y-4">{pendingContent}</TabsContent>
-        )}
       </Tabs>
 
       {/* Add/Edit Supplier Dialog */}
@@ -1004,22 +766,6 @@ For any field not found on the card, use empty string. For phone, if the card sh
             <Button onClick={handleSave}>{editingId ? "Save Changes" : "Add Supplier"}</Button>
           </DialogFooter>
           </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Approve Confirmation Dialog */}
-      <Dialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Approve Vendor Registration</DialogTitle>
-            <DialogDescription>
-              This will create a new supplier record for <span className="font-medium">{approveTarget?.company_name}</span> and mark the registration as approved.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setApproveConfirmOpen(false)}>Cancel</Button>
-            <Button className="bg-green-600 hover:bg-green-700" onClick={approveRegistration}>Approve</Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1161,23 +907,6 @@ For any field not found on the card, use empty string. For phone, if the card sh
         </DialogContent>
       </Dialog>
 
-      {/* Reject Dialog */}
-      <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Reject Registration</DialogTitle>
-            <DialogDescription>Provide a reason for rejecting {rejectTarget?.company_name}.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 pt-2">
-            <Label>Rejection Reason *</Label>
-            <Textarea rows={3} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Required reason for rejection" />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRejectDialogOpen(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={rejectRegistration}>Reject</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

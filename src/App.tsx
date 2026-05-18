@@ -60,8 +60,6 @@ const PurchaseOrders = lazyWithRetry(() => import("@/pages/PurchaseOrders"));
 const WorkOrders = lazyWithRetry(() => import("@/pages/WorkOrders"));
 const DeliveryTracker = lazyWithRetry(() => import("@/pages/DeliveryTracker"));
 const AuditLog = lazyWithRetry(() => import("@/pages/AuditLog"));
-const VendorRegister = lazyWithRetry(() => import("@/pages/VendorRegister"));
-const VendorStatus = lazyWithRetry(() => import("@/pages/VendorStatus"));
 const VendorUploadQuote = lazyWithRetry(() => import("@/pages/VendorUploadQuote"));
 const InvoiceUpload = lazyWithRetry(() => import("@/pages/InvoiceUpload"));
 const ApprovePoPage = lazyWithRetry(() => import("@/pages/ApprovePoPage"));
@@ -95,8 +93,6 @@ const App = () => (
         <BrowserRouter>
           <React.Suspense fallback={<Loader />}>
             <Routes>
-              <Route path="/vendor/register" element={<VendorRegister />} />
-              <Route path="/vendor/status" element={<VendorStatus />} />
               <Route path="/vendor/upload-quote" element={<VendorUploadQuote />} />
               <Route path="/approve-po" element={<ApprovePoPage />} />
               <Route path="/login" element={<Login />} />
