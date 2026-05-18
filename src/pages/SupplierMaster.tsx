@@ -215,7 +215,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
 
   const [pendingRegs, setPendingRegs] = useState<VendorRegistration[]>([]);
   const [pendingLoading, setPendingLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState("suppliers");
+  const [activeTab, setActiveTab] = useState("complete");
 
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
   const [approveTarget, setApproveTarget] = useState<VendorRegistration | null>(null);
@@ -381,6 +381,19 @@ For any field not found on the card, use empty string. For phone, if the card sh
     return { total, active, blacklisted };
   }, [allSuppliers]);
 
+  // A supplier is "complete" when it has a name, at least one category, and a phone.
+  // Complete ones are usable for RFQs; the rest are treated as still-pending.
+  const isSupplierComplete = (s: Supplier) =>
+    !!(s.name && s.name.trim()) &&
+    ((s.categories ?? []).filter(Boolean).length > 0) &&
+    !!(s.phone && s.phone.trim());
+
+  const completenessCounts = useMemo(() => {
+    let complete = 0;
+    allSuppliers.forEach((s) => { if (isSupplierComplete(s)) complete++; });
+    return { complete, incomplete: allSuppliers.length - complete };
+  }, [allSuppliers]);
+
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
 
   const supplierCategoryOptions = useMemo(() => {
@@ -406,7 +419,11 @@ For any field not found on the card, use empty string. For phone, if the card sh
           (s.gstin ?? "").toLowerCase().includes(q) ||
           (s.city ?? "").toLowerCase().includes(q);
       const matchesCategory = categoryFilter === "all" ? true : (s.categories ?? []).includes(categoryFilter);
-      return matchesStatus && matchesSearch && matchesCategory;
+      const matchesTab =
+        activeTab === "complete" ? isSupplierComplete(s)
+        : activeTab === "incomplete" ? !isSupplierComplete(s)
+        : true;
+      return matchesStatus && matchesSearch && matchesCategory && matchesTab;
     });
     return [...list].sort((a, b) => {
       const av = (a as any)[sortFieldSup] ?? "";
@@ -414,10 +431,10 @@ For any field not found on the card, use empty string. For phone, if the card sh
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirSup === "asc" ? cmp : -cmp;
     });
-  }, [allSuppliers, debouncedSearch, statusFilter, categoryFilter, sortFieldSup, sortDirSup]);
+  }, [allSuppliers, debouncedSearch, statusFilter, categoryFilter, sortFieldSup, sortDirSup, activeTab]);
 
-  // Reset page when filters change
-  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, categoryFilter]);
+  // Reset page when filters or tab change
+  useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, categoryFilter, activeTab]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const paginatedFiltered = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -884,20 +901,26 @@ For any field not found on the card, use empty string. For phone, if the card sh
         )}
       </div>
 
-      {isProcurementHead ? (
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList>
-            <TabsTrigger value="suppliers">All Suppliers</TabsTrigger>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList>
+          <TabsTrigger value="complete">
+            Complete{completenessCounts.complete > 0 ? ` (${completenessCounts.complete})` : ""}
+          </TabsTrigger>
+          <TabsTrigger value="incomplete">
+            Incomplete{completenessCounts.incomplete > 0 ? ` (${completenessCounts.incomplete})` : ""}
+          </TabsTrigger>
+          {isProcurementHead && (
             <TabsTrigger value="pending">
               Pending Registrations{pendingRegs.length > 0 ? ` (${pendingRegs.length})` : ""}
             </TabsTrigger>
-          </TabsList>
-          <TabsContent value="suppliers" className="mt-4 space-y-6">{suppliersContent}</TabsContent>
+          )}
+        </TabsList>
+        <TabsContent value="complete" className="mt-4 space-y-6">{suppliersContent}</TabsContent>
+        <TabsContent value="incomplete" className="mt-4 space-y-6">{suppliersContent}</TabsContent>
+        {isProcurementHead && (
           <TabsContent value="pending" className="mt-4 space-y-4">{pendingContent}</TabsContent>
-        </Tabs>
-      ) : (
-        <div className="space-y-6">{suppliersContent}</div>
-      )}
+        )}
+      </Tabs>
 
       {/* Add/Edit Supplier Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
