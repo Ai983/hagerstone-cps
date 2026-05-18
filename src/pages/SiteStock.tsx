@@ -86,6 +86,8 @@ export default function SiteStock() {
   const [editDesc, setEditDesc] = useState("");
   const [editUnit, setEditUnit] = useState("");
   const [editNotes, setEditNotes] = useState("");
+  // Procurement-only: the note shown to the site team (cps_stock.review_comment).
+  const [editReviewComment, setEditReviewComment] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
   // Delete (procurement / IT / mgmt / design only)
@@ -245,6 +247,7 @@ export default function SiteStock() {
     setEditDesc(row.item_description ?? "");
     setEditUnit(row.unit ?? "");
     setEditNotes("");
+    setEditReviewComment(row.review_comment ?? "");
   };
 
   const cancelEdit = () => {
@@ -253,6 +256,7 @@ export default function SiteStock() {
     setEditDesc("");
     setEditUnit("");
     setEditNotes("");
+    setEditReviewComment("");
   };
 
   // Hard-delete a stock row + its movements. Restricted to procurement / IT /
@@ -332,6 +336,7 @@ export default function SiteStock() {
             // Site engineer adds need approval; procurement adds go live.
             approval_status: isProcurement ? "approved" : "pending",
             stock_origin: row.stock_origin ?? "manual_site",
+            review_comment: isProcurement ? (editReviewComment.trim() || null) : null,
           } as any)
           .select("id").single();
         if (insErr) throw insErr;
@@ -349,6 +354,10 @@ export default function SiteStock() {
           updatePayload.approval_status = "pending";
           updatePayload.approved_at = null;
           updatePayload.approved_by = null;
+        }
+        // Only procurement can write the site-team-facing note.
+        if (isProcurement) {
+          updatePayload.review_comment = editReviewComment.trim() || null;
         }
         const { error: upErr } = await supabase
           .from("cps_stock")
@@ -382,6 +391,7 @@ export default function SiteStock() {
       setEditDesc("");
       setEditUnit("");
       setEditNotes("");
+      setEditReviewComment("");
       await loadAll(projectCode);
     } catch (e: any) {
       toast.error(e?.message || "Update fail ho gaya");
@@ -695,6 +705,17 @@ export default function SiteStock() {
                             placeholder="Optional"
                           />
                         </div>
+                        {isProcurement && (
+                          <div>
+                            <Label className="text-[10px] text-muted-foreground">Procurement note (site team ko dikhega)</Label>
+                            <Input
+                              value={editReviewComment}
+                              onChange={(e) => setEditReviewComment(e.target.value)}
+                              className="h-10 text-sm"
+                              placeholder="Optional"
+                            />
+                          </div>
+                        )}
                         <div className="flex gap-2 pt-1">
                           <Button variant="outline" onClick={cancelEdit} disabled={editSaving} className="flex-1 h-11">
                             <X className="h-4 w-4 mr-1" /> Cancel
@@ -856,9 +877,9 @@ export default function SiteStock() {
                         </TableRow>
                         {isEdit && (
                           <TableRow className="bg-primary/5">
-                            <TableCell colSpan={9} className="py-2">
+                            <TableCell colSpan={9} className="py-2 space-y-2">
                               <div className="flex items-center gap-2">
-                                <Label className="text-xs text-muted-foreground shrink-0">Reason / note:</Label>
+                                <Label className="text-xs text-muted-foreground shrink-0 w-32">Reason / note:</Label>
                                 <Input
                                   value={editNotes}
                                   onChange={(e) => setEditNotes(e.target.value)}
@@ -866,6 +887,17 @@ export default function SiteStock() {
                                   placeholder="Optional — kyun update kiya, kahan use hua, etc."
                                 />
                               </div>
+                              {isProcurement && (
+                                <div className="flex items-center gap-2">
+                                  <Label className="text-xs text-muted-foreground shrink-0 w-32">Procurement note:</Label>
+                                  <Input
+                                    value={editReviewComment}
+                                    onChange={(e) => setEditReviewComment(e.target.value)}
+                                    className="h-8"
+                                    placeholder="Site team ko dikhega — approve/reject note"
+                                  />
+                                </div>
+                              )}
                             </TableCell>
                           </TableRow>
                         )}
