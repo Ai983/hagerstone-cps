@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
+import { useSuggestedSuppliers, type SuggestedSupplier } from "@/hooks/useSuggestedSuppliers";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -143,8 +144,18 @@ const isoLocalDateTimeMin = (daysFromNow: number) => {
   return `${yyyy}-${mm}-${dd}T00:00`;
 };
 
+/** One label/value row in the supplier-details dialog. */
+function DetailField({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div>
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-sm text-foreground break-words">{value || "—"}</p>
+    </div>
+  );
+}
+
 export default function RFQs() {
-  const { user, canCreateRFQ } = useAuth();
+  const { user, canCreateRFQ, canManageSuppliers } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -237,6 +248,41 @@ export default function RFQs() {
   const [showNewVendorForm, setShowNewVendorForm] = useState(false);
   const [newVendorForm, setNewVendorForm] = useState({ name: "", phone: "", email: "", gstin: "" });
   const [savingNewVendor, setSavingNewVendor] = useState(false);
+
+  // Suggested Suppliers (auto-match) — draft RFQs only
+  const [suggestSelectedIds, setSuggestSelectedIds] = useState<string[]>([]);
+  const [addingSuggestions, setAddingSuggestions] = useState(false);
+  // Supplier-details dialog (opened by clicking a suggested supplier row)
+  const [detailSuggestion, setDetailSuggestion] = useState<SuggestedSupplier | null>(null);
+  const [detailSupplier, setDetailSupplier] = useState<Record<string, any> | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const suggestionsRfqId = reviewOpen && reviewRfq?.status === "draft" ? reviewRfq.id : undefined;
+  const suggestionsQuery = useSuggestedSuppliers(suggestionsRfqId, 15);
+  const suggestionsLoading = suggestionsQuery.isLoading;
+  const suggestionsFetching = suggestionsQuery.isFetching;
+  const refetchSuggestions = suggestionsQuery.refetch;
+  // Memoised so the reference is stable across renders (a `?? []` default would
+  // create a fresh array each render and loop the default-select effect below).
+  const suggestedSuppliers = useMemo(
+    () => suggestionsQuery.data ?? [],
+    [suggestionsQuery.data],
+  );
+
+  // Supplier IDs already in the "Select Suppliers" send-list below
+  const pooledSupplierIds = useMemo(
+    () => new Set(matchedSuppliers.map((s) => s.id)),
+    [matchedSuppliers],
+  );
+  // Checked suggestions not yet in the pool — what "Add Selected" will actually add
+  const addableSelectedIds = useMemo(
+    () => suggestSelectedIds.filter((id) => !pooledSupplierIds.has(id)),
+    [suggestSelectedIds, pooledSupplierIds],
+  );
+
+  // Default-select the top suggestions (target ≥5) whenever a fresh list arrives
+  useEffect(() => {
+    setSuggestSelectedIds(suggestedSuppliers.slice(0, 5).map((s) => s.supplier_id));
+  }, [suggestedSuppliers]);
 
   const selectedSuppliers = useMemo(() => {
     const set = new Set(selectedSupplierIds);
@@ -654,10 +700,11 @@ export default function RFQs() {
       .eq("pr_id", prId);
     const all = (items ?? []) as unknown as ReviewPrLineItem[];
 
-    // Filter items to only show what's relevant for this RFQ's category scope
-    const filtered = targetCategory === null        ? all
-      : targetCategory === "General"               ? all.filter((li) => !li.item?.category)
-      :                                              all.filter((li) => li.item?.category === targetCategory);
+    // Free-text items (no catalogue category) can't be category-filtered, so
+    // always include them; otherwise keep items whose category matches the RFQ.
+    const filtered = targetCategory === null
+      ? all
+      : all.filter((li) => !li.item?.category || li.item.category === targetCategory);
 
     setReviewPrItems(filtered);
 
@@ -691,6 +738,7 @@ export default function RFQs() {
     setReviewRfqCategories([]);
     setMatchedSuppliers([]);
     setReviewSelectedIds([]);
+    setSuggestSelectedIds([]);
     setShowAllMatched(false);
     setShowNewVendorForm(false);
     setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
@@ -864,6 +912,61 @@ export default function RFQs() {
     setSearchResults((prev) => prev.filter((s) => s.id !== vendor.id));
     setVendorSearch("");
     setShowAddVendor(false);
+  };
+
+  // Open the details dialog for a suggested supplier — fetches the full record.
+  const openSupplierDetail = async (suggestion: SuggestedSupplier) => {
+    setDetailSuggestion(suggestion);
+    setDetailSupplier(null);
+    setDetailLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("cps_suppliers")
+        .select("id, name, gstin, pan, email, phone, whatsapp, address_text, city, state, pincode, categories, regions, status, performance_score, total_po_value, win_rate, on_time_delivery_rate, last_invited_at, last_awarded_at, verified, profile_complete, added_via, notes")
+        .eq("id", suggestion.supplier_id)
+        .maybeSingle();
+      if (error) throw error;
+      setDetailSupplier((data ?? null) as Record<string, any> | null);
+    } catch (e: any) {
+      toast.error("Failed to load supplier: " + (e?.message ?? "unknown error"));
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  // Pull the checked suggestions into the in-memory supplier pool. Reuses the
+  // same "no DB write until Send" path as addSupplierToRFQ — the suppliers are
+  // persisted to cps_rfq_suppliers (added_manually = true) when the RFQ is sent.
+  const addSelectedSuggestions = async () => {
+    const idsToAdd = suggestSelectedIds.filter(
+      (id) => !matchedSuppliers.some((s) => s.id === id),
+    );
+    if (idsToAdd.length === 0) {
+      toast.info("Those suppliers are already in the RFQ");
+      return;
+    }
+    setAddingSuggestions(true);
+    try {
+      // Fetch full supplier records so the Select Suppliers list renders
+      // phone / categories the same way as category-matched rows.
+      const { data, error } = await supabase
+        .from("cps_suppliers")
+        .select("id, name, phone, whatsapp, email, city, categories, performance_score, last_awarded_at, status, profile_complete")
+        .in("id", idsToAdd);
+      if (error) throw error;
+      const rows = (data ?? []) as Supplier[];
+      setMatchedSuppliers((prev) => {
+        const have = new Set(prev.map((s) => s.id));
+        return [...prev, ...rows.filter((r) => !have.has(r.id))];
+      });
+      setReviewSelectedIds((prev) => Array.from(new Set([...prev, ...rows.map((r) => r.id)])));
+      setSuggestSelectedIds([]);
+      toast.success(`Added ${rows.length} supplier${rows.length !== 1 ? "s" : ""} to RFQ`);
+    } catch (e: any) {
+      toast.error("Failed to add suppliers: " + (e?.message ?? "unknown error"));
+    } finally {
+      setAddingSuggestions(false);
+    }
   };
 
   const addNewVendorToRFQ = async () => {
@@ -1666,6 +1769,139 @@ export default function RFQs() {
                     </div>
                   </div>
 
+                  {/* Suggested Suppliers — ranked auto-match (draft RFQs only) */}
+                  {reviewRfq?.status === "draft" && (
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-semibold text-foreground">Suggested Suppliers</h3>
+                          {!suggestionsLoading && (
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                              {suggestedSuppliers.length}
+                            </Badge>
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() => refetchSuggestions()}
+                          disabled={suggestionsFetching}
+                        >
+                          {suggestionsFetching
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : "↻ Refresh"}
+                        </Button>
+                      </div>
+
+                      {suggestionsLoading ? (
+                        <div className="space-y-2">
+                          {[0, 1, 2].map((i) => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}
+                        </div>
+                      ) : suggestedSuppliers.length === 0 ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+                          No confident matches from our database for this RFQ. Add suppliers manually below.
+                        </div>
+                      ) : (
+                        <>
+                          {suggestedSuppliers.filter((s) => s.is_fresh).length < 2 && (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 mb-2">
+                              ⚠ Fewer than 2 fresh suppliers found — anti-corruption rule needs ≥2 fresh.
+                              Consider adding fresh suppliers manually.
+                            </div>
+                          )}
+                          <div className="space-y-2">
+                            {suggestedSuppliers.map((s) => {
+                              const inList = pooledSupplierIds.has(s.supplier_id);
+                              const checked = !inList && suggestSelectedIds.includes(s.supplier_id);
+                              const reasons = (s.matched_on ?? "")
+                                .split(",")
+                                .map((r) => r.trim())
+                                .filter((r) => r && !/fresh/i.test(r));
+                              return (
+                                <div
+                                  key={s.supplier_id}
+                                  className={`flex items-start gap-3 p-3 border rounded-lg transition-colors ${inList ? "border-border/60 bg-muted/30 opacity-80" : checked ? "border-primary/40 bg-primary/5" : "border-border/60 bg-muted/10"}`}
+                                >
+                                  {inList ? (
+                                    <Checkbox className="mt-0.5" checked disabled />
+                                  ) : (
+                                    <Checkbox
+                                      className="mt-0.5"
+                                      checked={checked}
+                                      onCheckedChange={(v) =>
+                                        setSuggestSelectedIds((prev) =>
+                                          v ? [...prev, s.supplier_id] : prev.filter((id) => id !== s.supplier_id),
+                                        )
+                                      }
+                                    />
+                                  )}
+                                  <div
+                                    className="flex-1 min-w-0 cursor-pointer"
+                                    onClick={() => openSupplierDetail(s)}
+                                    title="View supplier details"
+                                  >
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-medium text-sm hover:underline">{s.supplier_name}</span>
+                                      {inList && (
+                                        <Badge className="bg-green-100 text-green-800 border-green-200 border text-[10px] px-1.5 py-0">
+                                          ✓ In send list
+                                        </Badge>
+                                      )}
+                                      {s.is_fresh && (
+                                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">FRESH</Badge>
+                                      )}
+                                      {s.win_rate_review_flag && (
+                                        <Badge className="bg-destructive/10 text-destructive border-destructive/30 border text-[10px] px-1.5 py-0">
+                                          ⚠ Win-rate &gt;40% — review
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    <div className="flex gap-1 mt-1 flex-wrap">
+                                      {reasons.map((r) => (
+                                        <span
+                                          key={r}
+                                          className={`text-[10px] px-1.5 py-0.5 rounded leading-none ${/proven history/i.test(r) ? "bg-secondary/40 text-foreground font-medium" : "bg-muted text-muted-foreground"}`}
+                                        >
+                                          {r}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => openSupplierDetail(s)}
+                                    className="shrink-0 text-right leading-tight"
+                                    title="View supplier details"
+                                  >
+                                    <div className="text-sm font-semibold text-foreground tabular-nums">
+                                      {Math.round(Number(s.score) || 0)}
+                                    </div>
+                                    <div className="text-[9px] text-muted-foreground uppercase tracking-wide">
+                                      match score
+                                    </div>
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {canManageSuppliers && (
+                            <Button
+                              size="sm"
+                              className="mt-3"
+                              onClick={addSelectedSuggestions}
+                              disabled={addableSelectedIds.length === 0 || addingSuggestions}
+                            >
+                              {addingSuggestions
+                                ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Adding…</>
+                                : `Add Selected to RFQ (${addableSelectedIds.length})`}
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
                   {/* Supplier Selection — Top 5 + expand */}
                   <div>
                     <div className="mb-3">
@@ -1971,6 +2207,125 @@ export default function RFQs() {
       </Dialog>
 
       {/* Cancel RFQ dialog — required structured reason for audit trail */}
+      {/* Suggested-supplier details */}
+      <Dialog
+        open={!!detailSuggestion}
+        onOpenChange={(o) => { if (!o) { setDetailSuggestion(null); setDetailSupplier(null); } }}
+      >
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 flex-wrap">
+              {detailSuggestion?.supplier_name ?? "Supplier"}
+              {detailSupplier?.status && (
+                <Badge variant="outline" className="text-[10px] capitalize">{detailSupplier.status}</Badge>
+              )}
+              {detailSuggestion?.is_fresh && (
+                <Badge variant="outline" className="text-[10px]">FRESH</Badge>
+              )}
+              {detailSupplier?.verified && (
+                <Badge className="bg-green-100 text-green-800 border-green-200 border text-[10px]">✓ Verified</Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription>Supplier details &amp; why it was suggested</DialogDescription>
+          </DialogHeader>
+
+          {detailLoading ? (
+            <div className="flex items-center justify-center py-10 gap-2">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              <span className="text-sm text-muted-foreground">Loading…</span>
+            </div>
+          ) : detailSupplier ? (
+            <div className="space-y-4">
+              {/* Match summary */}
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1.5 text-sm">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Why suggested</p>
+                <div className="flex items-center justify-between">
+                  <span>Match score</span>
+                  <span className="font-semibold tabular-nums">{Math.round(Number(detailSuggestion?.score) || 0)}</span>
+                </div>
+                {detailSuggestion?.matched_on && (
+                  <div className="flex items-start justify-between gap-3">
+                    <span>Matched on</span>
+                    <span className="text-right text-muted-foreground">{detailSuggestion.matched_on}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span>Items with prior history</span>
+                  <span className="tabular-nums">{detailSuggestion?.exact_item_count ?? 0}</span>
+                </div>
+                {detailSuggestion?.win_rate_review_flag && (
+                  <p className="text-xs text-destructive">⚠ Win-rate &gt;40% — review for fair rotation</p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
+                <DetailField label="Phone" value={detailSupplier.phone} />
+                <DetailField label="WhatsApp" value={detailSupplier.whatsapp} />
+                <DetailField label="Email" value={detailSupplier.email} />
+                <DetailField label="GSTIN" value={detailSupplier.gstin} />
+                <DetailField label="PAN" value={detailSupplier.pan} />
+                <DetailField label="City / State" value={[detailSupplier.city, detailSupplier.state].filter(Boolean).join(", ")} />
+                <DetailField label="Pincode" value={detailSupplier.pincode} />
+                <DetailField label="Performance score" value={detailSupplier.performance_score != null ? String(detailSupplier.performance_score) : null} />
+                <DetailField label="Win rate" value={detailSupplier.win_rate != null ? `${detailSupplier.win_rate}%` : null} />
+                <DetailField label="On-time delivery" value={detailSupplier.on_time_delivery_rate != null ? `${detailSupplier.on_time_delivery_rate}%` : null} />
+                <DetailField label="Total PO value" value={detailSupplier.total_po_value != null ? `₹${Number(detailSupplier.total_po_value).toLocaleString("en-IN")}` : null} />
+                <DetailField label="Last invited" value={detailSupplier.last_invited_at ? formatIndianDate(detailSupplier.last_invited_at) : "Never"} />
+                <DetailField label="Last awarded" value={detailSupplier.last_awarded_at ? formatIndianDate(detailSupplier.last_awarded_at) : "Never"} />
+                <DetailField label="Added via" value={detailSupplier.added_via} />
+                <DetailField label="Profile" value={detailSupplier.profile_complete ? "Complete" : "Incomplete"} />
+              </div>
+
+              {detailSupplier.address_text && (
+                <DetailField label="Address" value={detailSupplier.address_text} />
+              )}
+
+              {Array.isArray(detailSupplier.categories) && detailSupplier.categories.length > 0 && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Categories</p>
+                  <div className="flex gap-1 flex-wrap">
+                    {detailSupplier.categories.map((c: string) => (
+                      <span key={c} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary">{c}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {Array.isArray(detailSupplier.regions) && detailSupplier.regions.length > 0 && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Regions</p>
+                  <div className="flex gap-1 flex-wrap">
+                    {detailSupplier.regions.map((r: string) => (
+                      <span key={r} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">{r}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {detailSupplier.notes && <DetailField label="Notes" value={detailSupplier.notes} />}
+
+              {canManageSuppliers && detailSuggestion
+                && !matchedSuppliers.some((s) => s.id === detailSuggestion.supplier_id) && (
+                <DialogFooter>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      if (!detailSuggestion) return;
+                      const id = detailSuggestion.supplier_id;
+                      setSuggestSelectedIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+                      setDetailSuggestion(null);
+                      setDetailSupplier(null);
+                    }}
+                  >
+                    Select this supplier
+                  </Button>
+                </DialogFooter>
+              )}
+            </div>
+          ) : (
+            <p className="py-8 text-center text-sm text-muted-foreground">Supplier not found.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!cancelRfqTarget} onOpenChange={(o) => {
         if (!o && !cancelRfqSaving) {
           setCancelRfqTarget(null);
