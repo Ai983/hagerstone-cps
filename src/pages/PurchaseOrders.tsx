@@ -3624,20 +3624,30 @@ export default function PurchaseOrders() {
                     </div>
                   )}
 
-                  {viewPo.finance_paid_at && (
-                    <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-1">
-                      <div className="text-sm font-semibold text-green-900">✅ Finance Paid</div>
-                      <div className="text-xs text-green-700">
-                        Payment confirmed by Finance team on{" "}
-                        {new Date(viewPo.finance_paid_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}.
-                      </div>
-                      {viewPo.finance_paid_amount != null && (
-                        <div className="text-xs text-green-800 font-semibold">
-                          Amount Paid: ₹{Number(viewPo.finance_paid_amount).toLocaleString("en-IN")}
+                  {viewPo.finance_paid_at && (() => {
+                    const paidAmt = Number(viewPo.finance_paid_amount ?? 0);
+                    const poTotal = Number(viewPo.grand_total ?? 0);
+                    const isPartial = paidAmt > 0 && poTotal > 0 && paidAmt < poTotal;
+                    return (
+                      <div className={`rounded-lg border p-4 space-y-1 ${isPartial ? "border-amber-200 bg-amber-50" : "border-green-200 bg-green-50"}`}>
+                        <div className={`text-sm font-semibold ${isPartial ? "text-amber-900" : "text-green-900"}`}>
+                          {isPartial ? "⚠️ Partially Paid" : "✅ Finance Paid"}
                         </div>
-                      )}
-                    </div>
-                  )}
+                        <div className={`text-xs ${isPartial ? "text-amber-700" : "text-green-700"}`}>
+                          Payment {isPartial ? "recorded" : "confirmed"} by Finance team on{" "}
+                          {new Date(viewPo.finance_paid_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}.
+                        </div>
+                        {viewPo.finance_paid_amount != null && (
+                          <div className={`text-xs font-semibold ${isPartial ? "text-amber-800" : "text-green-800"}`}>
+                            Amount Paid: ₹{paidAmt.toLocaleString("en-IN")}
+                            {isPartial && (
+                              <> of ₹{poTotal.toLocaleString("en-IN")} — Balance Due ₹{(poTotal - paidAmt).toLocaleString("en-IN")}</>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {viewPo.status === "closed" && (
                     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-1">
@@ -4052,11 +4062,16 @@ function PoTableRows({
                         ⚠ Dispatch failed
                       </span>
                     )}
-                    {r.finance_paid_at && (
-                      <span className="text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit bg-green-50 text-green-700 border-green-200">
-                        ✓ Finance Paid
-                      </span>
-                    )}
+                    {r.finance_paid_at && (() => {
+                      const paidAmt = Number(r.finance_paid_amount ?? 0);
+                      const poTotal = Number(r.grand_total ?? 0);
+                      const isPartial = paidAmt > 0 && poTotal > 0 && paidAmt < poTotal;
+                      return (
+                        <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit ${isPartial ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-green-50 text-green-700 border-green-200"}`}>
+                          {isPartial ? "◐ Partially Paid" : "✓ Finance Paid"}
+                        </span>
+                      );
+                    })()}
                   </div>
                 );
               })()}
