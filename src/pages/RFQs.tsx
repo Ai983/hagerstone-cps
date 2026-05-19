@@ -279,11 +279,6 @@ export default function RFQs() {
     [suggestSelectedIds, pooledSupplierIds],
   );
 
-  // Default-select the top suggestions (target ≥5) whenever a fresh list arrives
-  useEffect(() => {
-    setSuggestSelectedIds(suggestedSuppliers.slice(0, 5).map((s) => s.supplier_id));
-  }, [suggestedSuppliers]);
-
   const selectedSuppliers = useMemo(() => {
     const set = new Set(selectedSupplierIds);
     return suppliers.filter((s) => set.has(s.id));
@@ -714,21 +709,6 @@ export default function RFQs() {
     return cats;
   };
 
-  const loadMatchedSuppliers = async (categories: string[]): Promise<Supplier[]> => {
-    // General RFQ (no category) → no auto-match; procurement picks manually
-    if (categories.length === 0) return [];
-
-    const { data } = await supabase
-      .from("cps_suppliers")
-      .select("id, name, phone, whatsapp, email, city, state, gstin, categories, performance_score, profile_complete, last_awarded_at, status, added_via")
-      .eq("status", "active")
-      .overlaps("categories", categories)
-      .order("performance_score", { ascending: false })
-      .limit(20);
-
-    return (data ?? []) as Supplier[];
-  };
-
   const openReview = async (rfq: Rfq) => {
     setReviewRfq(rfq);
     setReviewDeadline(rfq.deadline ? rfq.deadline.split("T")[0] : new Date().toISOString().split("T")[0]);
@@ -748,11 +728,11 @@ export default function RFQs() {
     setReviewOpen(true);
 
     if (rfq.status === "draft") {
-      // Draft: load suggestions from cps_suppliers directly — cps_rfq_suppliers is empty
-      const cats = await loadPrItems(rfq.pr_id, rfq.target_category ?? null);
-      const matched = await loadMatchedSuppliers(cats);
-      setMatchedSuppliers(matched);
-      setReviewSelectedIds(matched.slice(0, 5).map((s) => s.id));
+      // Draft: the procurement head builds the send-list from the ranked
+      // Suggested Suppliers section — start empty, nothing pre-selected.
+      await loadPrItems(rfq.pr_id, rfq.target_category ?? null);
+      setMatchedSuppliers([]);
+      setReviewSelectedIds([]);
     } else {
       // Sent / reminder: show who was already dispatched from cps_rfq_suppliers
       await loadPrItems(rfq.pr_id, rfq.target_category ?? null);
@@ -1986,10 +1966,9 @@ export default function RFQs() {
 
                     {/* No category match guidance */}
                     {matchedSuppliers.length === 0 && reviewRfq?.status === "draft" && (
-                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800 mb-2">
-                        {reviewRfqCategories.length > 0
-                          ? `No registered vendors found for category "${reviewRfqCategories.join(", ")}". Search any vendor by name above — all active suppliers are searchable.`
-                          : "General RFQ — no category filter. Search vendors by name above."}
+                      <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground mb-2">
+                        No suppliers added yet — tick the ones you want in <strong>Suggested Suppliers</strong> above
+                        and click "Add Selected to RFQ", or search any vendor by name below.
                       </div>
                     )}
 
