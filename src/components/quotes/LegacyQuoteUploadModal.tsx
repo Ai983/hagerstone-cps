@@ -529,6 +529,14 @@ export function LegacyQuoteUploadModal({
       const normalised: ExtractedData = {
         ...result,
         line_items: (result.line_items ?? []).map(normaliseItem),
+        // Always overwrite AI-guessed vendor identity fields with the supplier the
+        // procurement team explicitly selected in step 2. The AI often misreads the
+        // vendor name from a quote scan, and we already know who it is.
+        vendor_name: selectedSupplier.name,
+        vendor_phone: selectedSupplier.phone || result.vendor_phone || "",
+        vendor_gstin: selectedSupplier.gstin || result.vendor_gstin || "",
+        vendor_email: selectedSupplier.email || result.vendor_email || "",
+        vendor_address: selectedSupplier.address_text || result.vendor_address || "",
       };
       setExtracted(normalised);
       setEditedExtracted(JSON.parse(JSON.stringify(normalised)));
@@ -1137,39 +1145,53 @@ export function LegacyQuoteUploadModal({
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <Label className="text-xs">Vendor Name</Label>
-                      <Input
-                        value={editedExtracted.vendor_name}
-                        onChange={(e) =>
-                          setEditedExtracted((p) =>
-                            p ? { ...p, vendor_name: e.target.value } : p
-                          )
-                        }
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">Phone</Label>
-                      <Input
-                        value={editedExtracted.vendor_phone}
-                        onChange={(e) =>
-                          setEditedExtracted((p) =>
-                            p ? { ...p, vendor_phone: e.target.value } : p
-                          )
-                        }
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">GSTIN</Label>
-                      <Input
-                        value={editedExtracted.vendor_gstin}
-                        onChange={(e) =>
-                          setEditedExtracted((p) =>
-                            p ? { ...p, vendor_gstin: e.target.value } : p
-                          )
-                        }
-                      />
-                    </div>
+                    {/* Vendor identity fields — only shown for incomplete profiles.
+                        Complete suppliers were already selected in step 2; showing
+                        these again just confuses procurement into thinking they
+                        need to re-verify the vendor. */}
+                    {selectedSupplier?.profile_complete === false ? (
+                      <>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Vendor Name</Label>
+                          <Input
+                            value={editedExtracted.vendor_name}
+                            onChange={(e) =>
+                              setEditedExtracted((p) =>
+                                p ? { ...p, vendor_name: e.target.value } : p
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Phone</Label>
+                          <Input
+                            value={editedExtracted.vendor_phone}
+                            onChange={(e) =>
+                              setEditedExtracted((p) =>
+                                p ? { ...p, vendor_phone: e.target.value } : p
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">GSTIN</Label>
+                          <Input
+                            value={editedExtracted.vendor_gstin}
+                            onChange={(e) =>
+                              setEditedExtracted((p) =>
+                                p ? { ...p, vendor_gstin: e.target.value } : p
+                              )
+                            }
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="sm:col-span-2 flex items-center gap-2 rounded-md bg-muted/40 border border-border px-3 py-2 text-sm text-muted-foreground">
+                        <span className="font-medium text-foreground">{selectedSupplier?.name}</span>
+                        {selectedSupplier?.gstin && <span>· GSTIN: {selectedSupplier.gstin}</span>}
+                        {selectedSupplier?.phone && <span>· {selectedSupplier.phone}</span>}
+                      </div>
+                    )}
                     <div className="space-y-1">
                       <Label className="text-xs">Quote Date</Label>
                       <Input

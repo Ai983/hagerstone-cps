@@ -267,7 +267,13 @@ export default function PRReview() {
         preferred_brands: Array.isArray(li.preferred_brands)
           ? li.preferred_brands.join(", ")
           : (li.preferred_brands ?? ""),
-        brand_make: li.brand_make ?? "",
+        // Pre-fill brand_make from what the site engineer entered in preferred_brands
+        // if procurement hasn't overridden it yet. Lets procurement edit rather than retype.
+        brand_make: li.brand_make ||
+          (Array.isArray(li.preferred_brands)
+            ? li.preferred_brands.join(", ")
+            : (li.preferred_brands ?? "")) ||
+          "",
         colour_code: li.colour_code ?? "",
         design_notes: li.design_notes ?? "",
         sort_order: li.sort_order ?? 0,

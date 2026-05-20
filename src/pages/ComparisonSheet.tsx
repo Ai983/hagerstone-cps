@@ -354,10 +354,20 @@ export default function ComparisonSheetPage() {
       .limit(1)
       .maybeSingle();
     if (prevPo) {
-      setBankHolderName((prevPo as any).bank_account_holder_name ?? supplier?.name ?? "");
-      setBankName((prevPo as any).bank_name ?? "");
-      setBankIfsc((prevPo as any).bank_ifsc ?? "");
-      setBankAccountNumber((prevPo as any).bank_account_number ?? "");
+      const holderName = (prevPo as any).bank_account_holder_name ?? supplier?.name ?? "";
+      const bankNameVal = (prevPo as any).bank_name ?? "";
+      const ifscVal = (prevPo as any).bank_ifsc ?? "";
+      const accountVal = (prevPo as any).bank_account_number ?? "";
+      setBankHolderName(holderName);
+      setBankName(bankNameVal);
+      setBankIfsc(ifscVal);
+      setBankAccountNumber(accountVal);
+      // All four fields are already on file — skip the dialog and go straight to
+      // PDF preview. Procurement can edit bank details later via the PO page.
+      if (holderName.trim() && bankNameVal.trim() && ifscVal.trim() && accountVal.trim()) {
+        await previewPo();
+        return;
+      }
     } else {
       setBankHolderName(supplier?.name ?? "");
       setBankName("");
