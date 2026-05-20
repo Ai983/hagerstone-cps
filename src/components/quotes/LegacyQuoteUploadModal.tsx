@@ -633,7 +633,13 @@ export function LegacyQuoteUploadModal({
         const { error: liErr } = await supabase
           .from("cps_quote_line_items")
           .insert(lineItems);
-        if (liErr) toast.error("Failed to insert line items");
+        if (liErr) {
+          // The quote header is already saved at this point. Roll it back so we don't
+          // leave an orphan "approved" quote with zero line items (which would show up
+          // empty in the comparison sheet and silently mislead procurement).
+          await supabase.from("cps_quotes").delete().eq("id", quote.id);
+          throw liErr;
+        }
       }
 
       await supabase

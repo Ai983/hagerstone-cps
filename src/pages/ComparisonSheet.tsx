@@ -2680,15 +2680,24 @@ export default function ComparisonSheetPage() {
         }),
       };
 
+      // Per-item matrix output is ~120-180 tokens per (PR-line × supplier) cell because
+      // both keys are 36-char UUIDs. For large RFQs the matrix alone blows past Haiku's
+      // output budget. Skip it when the RFQ is big — the comparison table already prefers
+      // DB-quoted rates over inferred ones, so the matrix is only really useful for small
+      // RFQs where some supplier sent header-only.
+      const includeMatrix = prLineItems.length <= 20;
+
       const systemPrompt = `You are a procurement analyst for Hagerstone (Indian construction/interiors). Output ONLY valid JSON, no prose, no markdown fences.
 
 Context: GST 18% standard, 100% advance is a red flag, vendors sometimes only send a header total (no per-item breakdown).
 
-You have TWO jobs:
+${includeMatrix
+  ? `You have TWO jobs:
 1. PER-ITEM MATRIX: For every PR line × supplier pair, return the per-unit rate. Use the supplier's quoted line item if available. If the supplier only sent a header total (data_source = "header_totals_only"), INFER per-unit rates by splitting the subtotal proportionally to peer vendors' rates for the same items, using PR quantities. Mark inferred cells with source: "inferred". Only return source: "unavailable" if there is truly no signal.
 2. SHORT VERDICT: Recommend ONE supplier (must match an input supplier name exactly), one-sentence headline (the WHY), and 1-3 concrete watch-outs (max 3, terse, actionable).
 
-Be honest. If you inferred rates, add a watch-out telling reviewers which suppliers' cells are inferred.`;
+Be honest. If you inferred rates, add a watch-out telling reviewers which suppliers' cells are inferred.`
+  : `Your job: SHORT VERDICT only. Recommend ONE supplier (must match an input supplier name exactly), one-sentence headline (the WHY — landed cost, terms, etc), and 1-3 concrete watch-outs (max 3, terse, actionable). Per-item rates are already shown in the table from the DB, so DO NOT produce a per-item matrix.`}`;
 
       const userPrompt = `Analyse this RFQ comparison and return JSON only.
 
@@ -2697,7 +2706,7 @@ ${JSON.stringify(compactInput, null, 2)}
 
 OUTPUT JSON SCHEMA:
 {
-  "per_item_matrix": {
+${includeMatrix ? `  "per_item_matrix": {
     "<pr_line_item_id>": {
       "<supplier_id>": {
         "rate": <number — per-unit rate in Rs>,
@@ -2706,22 +2715,22 @@ OUTPUT JSON SCHEMA:
       }
     }
   },
-  "recommended_supplier": "<exact name from input>",
+` : ""}  "recommended_supplier": "<exact name from input>",
   "headline": "<one sentence, the WHY — e.g. 'Lowest landed cost (Rs 1,72,588) — 4% cheaper than next bidder.'>",
   "watch_outs": ["1-3 short concrete cautions"]
 }
 
 Rules:
-- Use supplier IDs and PR line item IDs from input EXACTLY as keys.
+${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as keys.
 - "rate" is a number (no Rs symbol, no commas).
 - For source="inferred", explain in 8 words or less in note (e.g., "split from header total proportional to peers").
-- "recommended_supplier" must match an input supplier name verbatim.
+` : ""}- "recommended_supplier" must match an input supplier name verbatim.
 - Return JSON only. No markdown.`;
 
       const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 3000,
+          max_tokens: 8000,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],
         },
