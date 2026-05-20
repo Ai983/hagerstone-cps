@@ -344,36 +344,31 @@ export default function ComparisonSheetPage() {
       return;
     }
     const supplier = suppliers.find((s) => s.id === supplierId);
-    // Pre-fill from supplier's most recent PO (if any)
-    const { data: prevPo } = await supabase
-      .from("cps_purchase_orders")
-      .select("bank_account_holder_name,bank_name,bank_ifsc,bank_account_number")
-      .eq("supplier_id", supplierId)
-      .not("bank_account_number", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
+
+    // Priority 1: supplier master record (bank details saved after first PO)
+    const { data: supplierBank } = await supabase
+      .from("cps_suppliers")
+      .select("name,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number")
+      .eq("id", supplierId)
       .maybeSingle();
-    if (prevPo) {
-      const holderName = (prevPo as any).bank_account_holder_name ?? supplier?.name ?? "";
-      const bankNameVal = (prevPo as any).bank_name ?? "";
-      const ifscVal = (prevPo as any).bank_ifsc ?? "";
-      const accountVal = (prevPo as any).bank_account_number ?? "";
-      setBankHolderName(holderName);
-      setBankName(bankNameVal);
-      setBankIfsc(ifscVal);
-      setBankAccountNumber(accountVal);
-      // All four fields are already on file — skip the dialog and go straight to
-      // PDF preview. Procurement can edit bank details later via the PO page.
-      if (holderName.trim() && bankNameVal.trim() && ifscVal.trim() && accountVal.trim()) {
-        await previewPo();
-        return;
-      }
-    } else {
-      setBankHolderName(supplier?.name ?? "");
-      setBankName("");
-      setBankIfsc("");
-      setBankAccountNumber("");
-    }
+
+    // Priority 2: most recent PO for this supplier that had bank details
+    const { data: prevPo } = (!supplierBank?.bank_account_number)
+      ? await supabase
+          .from("cps_purchase_orders")
+          .select("bank_account_holder_name,bank_name,bank_ifsc,bank_account_number")
+          .eq("supplier_id", supplierId)
+          .not("bank_account_number", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : { data: null };
+
+    const src = (supplierBank?.bank_account_number ? supplierBank : prevPo) as any;
+    setBankHolderName(src?.bank_account_holder_name ?? supplierBank?.name ?? supplier?.name ?? "");
+    setBankName(src?.bank_name ?? "");
+    setBankIfsc(src?.bank_ifsc ?? "");
+    setBankAccountNumber(src?.bank_account_number ?? "");
     setBankDialogOpen(true);
   };
 
@@ -2979,6 +2974,20 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           poLineItemsToInsert.map((li) => ({ po_id: poId, ...li })),
         );
         if (poLiErr) throw poLiErr;
+      }
+
+      // Persist bank details on the supplier master so the dialog pre-fills on
+      // the next PO for this supplier without hunting through past POs.
+      if (bankHolderName.trim() || bankName.trim() || bankIfsc.trim() || bankAccountNumber.trim()) {
+        await supabase
+          .from("cps_suppliers")
+          .update({
+            bank_account_holder_name: bankHolderName.trim() || null,
+            bank_name:                bankName.trim() || null,
+            bank_ifsc:                bankIfsc.trim().toUpperCase() || null,
+            bank_account_number:      bankAccountNumber.trim() || null,
+          })
+          .eq("id", supplierId);
       }
 
       // The winning quote(s) for this RFQ + supplier are now effectively approved —
