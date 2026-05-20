@@ -218,22 +218,44 @@ const complianceBadgeCls = (s: string | null | undefined) => {
   return "bg-muted text-muted-foreground border-border";
 };
 
+// Collapse inch markers so `4"` and `4in` tokenise as the same `4`. Without
+// this, AI-extracted quote descriptions ("4in PVC Socket") tie up with multiple
+// PR rows that share only one or two tokens with the original `4" Socket PVC`.
+const normaliseDesc = (s: string): string =>
+  normalize(s)
+    .replace(/(\d)\s*["″]/g, "$1 ")
+    .replace(/(\d)\s*(in|inch|inches)\b/g, "$1 ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 // "Closest description text match" (simple heuristic, deterministic).
-const matchScore = (a: string, b: string) => {
-  const A = normalize(a);
-  const B = normalize(b);
+// Optional qty arguments break ties: a quote line and a PR line that share even
+// one descriptive token AND have the exact same quantity are almost certainly
+// the same item — that's why suppliers quote the same qty the PR asked for.
+const matchScore = (
+  a: string,
+  b: string,
+  aQty?: number | null,
+  bQty?: number | null,
+) => {
+  const A = normaliseDesc(a);
+  const B = normaliseDesc(b);
   if (!A || !B) return 0;
   if (A === B) return 100000;
   if (A.includes(B) || B.includes(A)) {
     return 50000 + Math.max(A.length, B.length);
   }
-  const aTokens = new Set(A.split(/[\s,/.-]+/).filter(Boolean));
-  const bTokens = new Set(B.split(/[\s,/.-]+/).filter(Boolean));
+  const aTokens = new Set(A.split(/[\s,/.\-()×]+/).filter(Boolean));
+  const bTokens = new Set(B.split(/[\s,/.\-()×]+/).filter(Boolean));
   if (!aTokens.size || !bTokens.size) return 0;
   let overlap = 0;
   for (const tok of aTokens) if (bTokens.has(tok)) overlap += 1;
-  // prefer more overlap and longer strings a bit
-  return overlap * 1000 + Math.min(A.length, B.length);
+  if (overlap === 0) return 0;
+  const qtyBonus =
+    aQty != null && bQty != null && Number(aQty) > 0 && Number(aQty) === Number(bQty)
+      ? 500
+      : 0;
+  return overlap * 1000 + qtyBonus + Math.min(A.length, B.length);
 };
 
 const ordinal = (n: number) => {
@@ -1058,8 +1080,14 @@ export default function ComparisonSheetPage() {
         // Fallback: description matching
         let bestPr: PrLineItem | null = null;
         let best = 0;
+        const liQty = li.quantity != null ? Number(li.quantity) : null;
         for (const pli of localPrLineItems) {
-          const score = matchScore(String(li.original_description ?? ""), String(pli.description ?? ""));
+          const score = matchScore(
+            String(li.original_description ?? ""),
+            String(pli.description ?? ""),
+            liQty,
+            pli.quantity != null ? Number(pli.quantity) : null,
+          );
           if (score > best) {
             best = score;
             bestPr = pli;
