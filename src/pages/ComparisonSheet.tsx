@@ -2768,14 +2768,24 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           messages: [{ role: "user", content: userPrompt }],
         },
       });
-      if (fnError) throw new Error("Claude proxy error: " + fnError.message);
+      if (fnError) {
+        // HTTP 529 = Anthropic servers overloaded — transient, user should retry.
+        const msg = fnError.message ?? "";
+        if (msg.includes("529") || msg.toLowerCase().includes("non-2xx")) {
+          throw new Error("Anthropic API is temporarily overloaded — please wait a moment and click Run AI again.");
+        }
+        throw new Error("Claude proxy error: " + msg);
+      }
 
       // Pass-through proxy hands back the Anthropic error object verbatim when
       // the request fails (bad model, content too large, etc). Surface it.
       if ((result as any)?.error) {
         const err = (result as any).error;
-        const msg = typeof err === "string" ? err : err?.message ?? JSON.stringify(err);
-        throw new Error("Anthropic API: " + msg);
+        const rawMsg = typeof err === "string" ? err : err?.message ?? JSON.stringify(err);
+        if (String(err?.status ?? err?.status_code ?? "").includes("529") || rawMsg.includes("529") || rawMsg.toLowerCase().includes("overloaded")) {
+          throw new Error("Anthropic API is temporarily overloaded — please wait a moment and click Run AI again.");
+        }
+        throw new Error("Anthropic API: " + rawMsg);
       }
 
       const content = result?.content?.[0]?.text ?? "";
