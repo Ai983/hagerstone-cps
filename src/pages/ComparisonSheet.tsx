@@ -2762,19 +2762,26 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
 
       const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-haiku-4-5-20251001",
+          model: "claude-sonnet-4-6",
           max_tokens: 8000,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],
         },
       });
       if (fnError) {
-        // HTTP 529 = Anthropic servers overloaded — transient, user should retry.
-        const msg = fnError.message ?? "";
-        if (msg.includes("529") || msg.toLowerCase().includes("non-2xx")) {
+        // FunctionsHttpError exposes the raw Response on .context — use its status
+        // code for accurate error routing rather than the generic message string.
+        const httpStatus = (fnError as any).context?.status as number | undefined;
+        if (httpStatus === 529) {
           throw new Error("Anthropic API is temporarily overloaded — please wait a moment and click Run AI again.");
         }
-        throw new Error("Claude proxy error: " + msg);
+        if (httpStatus === 401 || httpStatus === 403) {
+          throw new Error("AI proxy auth error — check Supabase Edge Function JWT settings.");
+        }
+        if (httpStatus === 500) {
+          throw new Error("AI proxy returned 500 — ANTHROPIC_API_KEY may be missing from Edge Function secrets.");
+        }
+        throw new Error(`Claude proxy error (HTTP ${httpStatus ?? "?"}): ${fnError.message}`);
       }
 
       // Pass-through proxy hands back the Anthropic error object verbatim when
