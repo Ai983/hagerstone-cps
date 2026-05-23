@@ -589,14 +589,10 @@ export default function Quotes() {
     const qRow = quoteRow as QuoteListRow;
     setReviewQuote(qRow);
 
-    // Load file URL — try Hub signed URL first, fall back to old project's public bucket
+    // Load file URL (Hub bucket is private — use signed URL)
     if (qRow.raw_file_path) {
       const { data: urlData } = await supabase.storage.from('cps-quotes').createSignedUrl(qRow.raw_file_path, 3600);
-      if (urlData?.signedUrl) {
-        setFileUrl(urlData.signedUrl);
-      } else {
-        setFileUrl(`https://orhbzvoqtingmqjbjzqw.supabase.co/storage/v1/object/public/cps-quotes/${qRow.raw_file_path}`);
-      }
+      if (urlData?.signedUrl) setFileUrl(urlData.signedUrl);
     }
 
     // Load PR line items for AI context
