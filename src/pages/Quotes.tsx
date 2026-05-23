@@ -1375,7 +1375,7 @@ Rules:
         reader.readAsDataURL(newVendorFile);
       });
       const { data: urlData } = await supabase.from("cps_config").select("value").eq("key", "supabase_url").maybeSingle();
-      const proxyUrl = `${import.meta.env.VITE_SUPABASE_URL ?? "https://orhbzvoqtingmqjbjzqw.supabase.co"}/functions/v1/claude-proxy`;
+      const proxyUrl = `${import.meta.env.VITE_SUPABASE_URL ?? "https://tpfvnerrjhqwipyonngf.supabase.co"}/functions/v1/claude-proxy`;
       const resp = await fetch(proxyUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -3769,7 +3769,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                               <Badge variant="outline" className="text-[10px]">{["1st","2nd","3rd","4th","5th"][idx] ?? `${idx+1}th`}</Badge>
                               {(t.quoteFileUrl || t.quoteFilePath) && (
                                 <a
-                                  href={t.quoteFileUrl ?? `https://orhbzvoqtingmqjbjzqw.supabase.co/storage/v1/object/public/cps-quotes/${t.quoteFilePath}`}
+                                  href={t.quoteFileUrl ?? `https://tpfvnerrjhqwipyonngf.supabase.co/storage/v1/object/public/cps-quotes/${t.quoteFilePath}`}
                                   target="_blank" rel="noopener noreferrer"
                                   className="text-[10px] text-blue-700 hover:underline"
                                 >View quote</a>
