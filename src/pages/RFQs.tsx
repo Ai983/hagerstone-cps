@@ -770,16 +770,19 @@ export default function RFQs() {
         .maybeSingle();
       const rfqSupplierId = (rfqSup as { id?: string } | null)?.id;
 
-      // Create a fresh token (valid for 7 days) — old tokens are left as-is; new one supersedes
+      // Upsert a fresh token (valid for 7 days) — regenerates token on resend
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const newToken = crypto.randomUUID();
       const { data: tokenRow, error: tokErr } = await supabase
         .from("cps_quote_upload_tokens")
-        .insert({
+        .upsert({
           rfq_id: reviewRfq.id,
           supplier_id: supplier.id,
           rfq_supplier_id: rfqSupplierId ?? null,
           expires_at: expiresAt,
-        })
+          token: newToken,
+          used_at: null,
+        }, { onConflict: "rfq_id,supplier_id" })
         .select("token")
         .single();
       if (tokErr || !tokenRow) throw tokErr ?? new Error("Failed to create token");
