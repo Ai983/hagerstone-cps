@@ -2037,12 +2037,19 @@ Rules:
                     <>
                       <Popover open={supplierPopOpen} onOpenChange={setSupplierPopOpen}>
                         <PopoverTrigger asChild>
-                          <Button variant="outline" role="combobox" className="w-full justify-between font-normal" disabled={suppliersLoading}>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            aria-expanded={supplierPopOpen}
+                            aria-controls="quotes-supplier-popover-content"
+                            className="w-full justify-between font-normal"
+                            disabled={suppliersLoading}
+                          >
                             {logForm.supplierId ? (suppliers.find(s => s.id === logForm.supplierId)?.name ?? "Select supplier") : "Select supplier"}
                             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                           </Button>
                         </PopoverTrigger>
-                        <PopoverContent className="w-[300px] p-0 z-[300]">
+                        <PopoverContent id="quotes-supplier-popover-content" className="w-[300px] p-0 z-[300]">
                           <Command>
                             <CommandInput placeholder="Search supplier..." value={supplierSearch} onValueChange={setSupplierSearch} />
                             <CommandList>

@@ -101,16 +101,6 @@ export default function InvoiceUpload() {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Access control — procurement_executive and above only
-  const canAccess = canManageSuppliers || user?.role === "management";
-  if (!canAccess) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <p className="text-muted-foreground">Access denied. Procurement team only.</p>
-      </div>
-    );
-  }
-
   // -------------------------------------------------------------------------
   // File handling
   // -------------------------------------------------------------------------
@@ -140,6 +130,18 @@ export default function InvoiceUpload() {
     const f = e.dataTransfer.files?.[0];
     if (f) handleFile(f);
   }, [handleFile]);
+
+  // Access control — procurement_executive and above only.
+  // Must run AFTER all hooks above so React's rules-of-hooks aren't violated
+  // by the early return.
+  const canAccess = canManageSuppliers || user?.role === "management";
+  if (!canAccess) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <p className="text-muted-foreground">Access denied. Procurement team only.</p>
+      </div>
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Parse via Claude

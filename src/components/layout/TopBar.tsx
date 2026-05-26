@@ -95,18 +95,20 @@ export function TopBar() {
 
   useEffect(() => {
     fetchNotifs();
-
-    if (!showBell) return undefined;
+    if (!showBell) return;
 
     // Listen for new audit log entries
-    const channel = supabase
-      .channel("topbar-notifs")
+    const channel = supabase.channel("topbar-notifs");
+    channel
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "cps_audit_log" }, () => {
         fetchNotifs();
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      channel.unsubscribe();
+      supabase.removeChannel(channel);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, showBell, fetchNotifs]);
 

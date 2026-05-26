@@ -1,0 +1,10 @@
+{
+  "ignore": {
+    "overrides": [
+      {
+        "files": ["src/components/ui/**"],
+        "rules": ["react-doctor/only-export-components"]
+      }
+    ]
+  }
+}

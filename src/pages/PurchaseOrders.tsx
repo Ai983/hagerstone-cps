@@ -476,8 +476,10 @@ export default function PurchaseOrders() {
     if (!pendingAutoResendPoId) return;
     if (!viewPo || viewPo.id !== pendingAutoResendPoId) return;
     setPendingAutoResendPoId(null);
-    // Defer one tick so supplier/rfq/etc. hydration in openView finishes first
-    setTimeout(() => { void resendFounderNotification(); }, 150);
+    // Defer one tick so supplier/rfq/etc. hydration in openView finishes first.
+    // Cleanup prevents a stale timer firing after re-run or unmount.
+    const timer = setTimeout(() => { void resendFounderNotification(); }, 150);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewPo, pendingAutoResendPoId]);
 
