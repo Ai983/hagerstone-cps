@@ -29,7 +29,7 @@ There is **no test runner configured** — no Vitest/Jest. `CPS_TEST_GUIDE.md` i
 | Styling | Tailwind CSS v3, Hagerstone brown/gold design tokens |
 | State | TanStack React Query v5 |
 | Routing | React Router DOM v7 |
-| Backend/DB | Supabase (PostgreSQL) — project ref `orhbzvoqtingmqjbjzqw` |
+| Backend/DB | Supabase (PostgreSQL) — Hub Project ref `tpfvnerrjhqwipyonngf` (schema: `cps`) |
 | Auth | Supabase Auth (email/password + Google OAuth) |
 | Forms | React Hook Form + Zod v4 |
 | PDF | jsPDF + jspdf-autotable (PO / WO / comparison documents) |
@@ -38,7 +38,7 @@ There is **no test runner configured** — no Vitest/Jest. `CPS_TEST_GUIDE.md` i
 | Toasts | Sonner |
 | AI parsing | Claude (Haiku 4.5 / Sonnet 4.6) via n8n webhooks — quote & WO document parsing |
 
-**Supabase URL:** `https://orhbzvoqtingmqjbjzqw.supabase.co`
+**Supabase URL:** `https://tpfvnerrjhqwipyonngf.supabase.co`
 
 ## Architecture
 

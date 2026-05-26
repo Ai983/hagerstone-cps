@@ -589,10 +589,15 @@ export default function Quotes() {
     const qRow = quoteRow as QuoteListRow;
     setReviewQuote(qRow);
 
-    // Load file URL (Hub bucket is private — use signed URL)
+    // Load file URL — try cps-quotes first, fall back to cps-quote-uploads (n8n WhatsApp bucket)
     if (qRow.raw_file_path) {
       const { data: urlData } = await supabase.storage.from('cps-quotes').createSignedUrl(qRow.raw_file_path, 3600);
-      if (urlData?.signedUrl) setFileUrl(urlData.signedUrl);
+      if (urlData?.signedUrl) {
+        setFileUrl(urlData.signedUrl);
+      } else {
+        const { data: urlData2 } = await supabase.storage.from('cps-quote-uploads').createSignedUrl(qRow.raw_file_path, 3600);
+        if (urlData2?.signedUrl) setFileUrl(urlData2.signedUrl);
+      }
     }
 
     // Load PR line items for AI context
