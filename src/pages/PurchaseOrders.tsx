@@ -1613,7 +1613,7 @@ export default function PurchaseOrders() {
             pr_id: viewPo.pr_id,
             supplier_id: viewPo.supplier_id,
             comparison_sheet_id: viewPo.comparison_sheet_id,
-            status: "pending_approval",
+            status: "draft",
             version: newVersion,
             project_code: viewPo.project_code,
             ship_to_address: viewPo.ship_to_address,
@@ -1684,136 +1684,12 @@ export default function PurchaseOrders() {
           logged_at: now,
         }]);
 
-        toast.success(`PO revised — v${newVersion} created. Founders ko approval ke liye bheja ja raha hai.`);
+        toast.success(`PO revised — v${newVersion} created as draft. Edit the PO then send to founders for approval.`);
         setReviseCancelOpen(false);
         setReviseCancelReason("");
         await fetchPoRows();
         // Open the new revision PO
         await openView(newPoId);
-
-        /* ── fire-and-forget: PDF + approval tokens + n8n webhook for the revision ── */
-        const _viewPo = viewPo;
-        (async () => {
-          try {
-            /* fetch portal_base_url from config */
-            const { data: baseUrlRow } = await supabase
-              .from("cps_config")
-              .select("value")
-              .eq("key", "portal_base_url")
-              .maybeSingle();
-            const origin = (baseUrlRow as any)?.value || window.location.origin;
-
-            /* generate PDF identical to Download PDF, and upload it */
-            const poPdfUrl = await regeneratePoPdfAndUpload(newPoId, newPoNumber);
-
-            /* supplier name for webhook payload */
-            let supplierName = viewSupplier?.name ?? "";
-            if (!supplierName && _viewPo.supplier_id) {
-              const { data: sup } = await supabase
-                .from("cps_suppliers")
-                .select("name")
-                .eq("id", _viewPo.supplier_id)
-                .maybeSingle();
-              supplierName = (sup as any)?.name ?? "";
-            }
-
-            /* Insert approval tokens for BOTH founders. Two single-row inserts in
-               parallel (matches the resend flow's known-good pattern, side-steps
-               any AFTER-INSERT trigger / RETURNING quirks of multi-row inserts). */
-            const insertOneRevisionToken = async (founderName: "Bhaskar" | "Dhruv"): Promise<string> => {
-              const { data, error } = await supabase
-                .from("cps_po_approval_tokens")
-                .insert([{ po_id: newPoId, po_number: newPoNumber, founder_name: founderName }])
-                .select("token")
-                .single();
-              if (error || !data) throw new Error(`Failed to mint ${founderName} approval token: ${error?.message ?? "no data"}`);
-              return (data as any).token as string;
-            };
-            const [bhaskarRevToken, dhruvRevToken] = await Promise.all([
-              insertOneRevisionToken("Bhaskar"),
-              insertOneRevisionToken("Dhruv"),
-            ]);
-
-            const bhaskarRevLink = `${origin}/approve-po?token=${bhaskarRevToken}`;
-            const dhruvRevLink   = `${origin}/approve-po?token=${dhruvRevToken}`;
-
-            const { data: cfgRows } = await supabase
-              .from("cps_config")
-              .select("key,value")
-              .in("key", ["webhook_po_founder_approval", "founder_whatsapp_bhaskar", "founder_whatsapp_dhruv"]);
-            const cfgMap: Record<string, string> = {};
-            (cfgRows ?? []).forEach((r: any) => { cfgMap[r.key] = r.value; });
-            const webhookUrl = cfgMap["webhook_po_founder_approval"];
-            if (!webhookUrl) return;
-            const bhaskarWA = cfgMap["founder_whatsapp_bhaskar"] || "919953001048";
-            const dhruvWA = cfgMap["founder_whatsapp_dhruv"] || "919910820078";
-
-            await supabase
-              .from("cps_purchase_orders")
-              .update({ founder_approval_status: "pending" })
-              .eq("id", newPoId);
-
-            /* fetch comparison sheet context (inherited from original PO) */
-            let comparisonPdfUrl: string | null = null;
-            let comparisonExtra: { total_quotes_received?: number; potential_savings?: number; reviewer_recommendation_reason?: string } = {};
-            if ((_viewPo as any).comparison_sheet_id) {
-              const { data: cs } = await supabase
-                .from("cps_comparison_sheets")
-                .select("comparison_pdf_url,total_quotes_received,potential_savings,reviewer_recommendation_reason")
-                .eq("id", (_viewPo as any).comparison_sheet_id)
-                .maybeSingle();
-              if (cs) {
-                comparisonPdfUrl = (cs as any).comparison_pdf_url ?? null;
-                comparisonExtra = cs as any;
-              }
-            }
-
-            /* cumulative approved PO total for this project (exclude this new revision) */
-            let totalProjectPoAmount: number | null = null;
-            if (_viewPo.project_code) {
-              const { data: poTotals } = await supabase
-                .from("cps_purchase_orders")
-                .select("grand_total")
-                .eq("project_code", _viewPo.project_code)
-                .in("status", ["approved", "sent", "acknowledged", "dispatched", "delivered", "closed"])
-                .neq("id", newPoId);
-              const sum = (poTotals ?? []).reduce((s: number, r: any) => s + (Number(r.grand_total) || 0), 0);
-              if (sum > 0) totalProjectPoAmount = sum;
-            }
-
-            await fetch(webhookUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                event: "po_revised",
-                po_id: newPoId,
-                po_number: newPoNumber,
-                supplier_name: supplierName,
-                site_name: _viewPo.ship_to_address?.split("\n")[0] ?? null,
-                project_code: _viewPo.project_code ?? null,
-                total_project_po_amount: totalProjectPoAmount,
-                grand_total: Number(_viewPo.grand_total ?? 0),
-                gst_amount: Number(_viewPo.gst_amount ?? 0),
-                total_value: Number(_viewPo.total_value ?? 0),
-                payment_terms: _viewPo.payment_terms || null,
-                delivery_date: _viewPo.delivery_date || null,
-                po_pdf_url: poPdfUrl,
-                bhaskar_approval_link: bhaskarRevLink,
-                bhaskar_whatsapp: bhaskarWA,
-                dhruv_approval_link: dhruvRevLink,
-                dhruv_whatsapp: dhruvWA,
-                comparison_pdf_url: comparisonPdfUrl ?? null,
-                rfq_number: (_viewPo as any).rfq_number ?? null,
-                total_quotes_received: comparisonExtra.total_quotes_received ?? null,
-                potential_savings: comparisonExtra.potential_savings ?? null,
-                reviewer_recommendation_reason: comparisonExtra.reviewer_recommendation_reason ?? null,
-                revision_reason: trimmedReason,
-              }),
-            });
-          } catch (_) {
-            /* non-blocking — silently ignore */
-          }
-        })();
       }
     } catch (e: any) {
       toast.error(e?.message || "Failed to process revision");
@@ -3695,6 +3571,24 @@ export default function PurchaseOrders() {
                           View Revised PO: {revisedByPo.po_number} →
                         </Button>
                       )}
+                    </div>
+                  )}
+
+                  {/* Draft revision banner — edit PO first, then send to founders */}
+                  {viewPo.status === "draft" && viewPo.parent_po_id && !viewPo.founder_approval_status && isProcurementHead && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 flex items-start justify-between gap-4 flex-wrap">
+                      <div className="space-y-1 flex-1">
+                        <div className="text-sm font-semibold text-blue-900">✏️ Draft Revision — Awaiting Your Edits</div>
+                        <div className="text-xs text-blue-700">Edit this PO as needed (rates, terms, line items), then click <strong>"Send to Founders"</strong> to request approval.</div>
+                      </div>
+                      <Button
+                        size="sm"
+                        className="bg-blue-700 hover:bg-blue-800 text-white flex-shrink-0"
+                        disabled={resending}
+                        onClick={resendFounderNotification}
+                      >
+                        {resending ? "Sending…" : "Send to Founders for Approval"}
+                      </Button>
                     </div>
                   )}
 
