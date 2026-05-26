@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useDebounce } from "@/hooks/useDebounce";
+import { CPS_UNITS } from "@/lib/units";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -107,7 +108,7 @@ type LineItem = {
 };
 
 const CPS_CATEGORIES = ["Electrical", "Civil", "MEP", "Furniture", "Interiors", "IT & Infra", "Safety", "Tools", "Plumbing", "HVAC", "General"];
-const CPS_UNITS = ["nos", "sqft", "rmt", "kg", "ltr", "set", "pair", "box", "mtr", "bag"];
+// CPS_UNITS now lives in @/lib/units (shared with PR Review + PO edit).
 
 type DetailLineItem = {
   id: string;

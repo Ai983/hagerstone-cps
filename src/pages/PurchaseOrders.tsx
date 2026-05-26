@@ -6,6 +6,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
+import { CPS_UNITS, normalizeUnit, isCanonicalUnit } from "@/lib/units";
 import logoUrl from "@/assets/optimisedlogo.png";
 
 import { Badge } from "@/components/ui/badge";
@@ -125,6 +126,9 @@ type PoLineItemRow = {
   total_value: number | null;
   hsn_code: string | null;
   sort_order: number | null;
+  // Edit-session only: original DB unit before this session's normalisation.
+  // Not persisted; lives only in editLineItems while the dialog is open.
+  _originalUnit?: string;
 };
 
 type UserRow = { id: string; name: string };
@@ -1725,7 +1729,11 @@ export default function PurchaseOrders() {
     setEditDeliveryDate(viewPo.delivery_date ?? "");
     setEditPaymentTerms(viewPo.payment_terms ?? "");
     setEditPenaltyClause(viewPo.penalty_clause ?? "");
-    setEditLineItems(viewPoLineItems.map((li) => ({ ...li })));
+    setEditLineItems(viewPoLineItems.map((li) => {
+      const rawUnit = li.unit ?? "";
+      const canonical = normalizeUnit(rawUnit);
+      return { ...li, unit: canonical ?? "", _originalUnit: rawUnit };
+    }));
     // Pre-fill bank details. Holder name defaults to supplier name when empty.
     setEditBankHolderName(viewPo.bank_account_holder_name ?? viewSupplier?.name ?? viewPo.supplier_name_text ?? "");
     setEditBankName(viewPo.bank_name ?? "");
@@ -1943,6 +1951,33 @@ export default function PurchaseOrders() {
 
   const saveEditPo = async () => {
     if (!viewPo || !user) return;
+
+    // Unit canonicalisation guard — every visible line must have a canonical
+    // unit before the PO can be saved. Builds audit rows for any normalised
+    // entries to insert alongside.
+    const invalidUnitLines = editLineItems
+      .map((li, idx) => ({ li, idx }))
+      .filter(({ li }) => !isCanonicalUnit(li.unit));
+    if (invalidUnitLines.length > 0) {
+      const rows = invalidUnitLines.map(({ idx }) => `#${idx + 1}`).join(", ");
+      toast.error(`Pick a valid unit for line ${rows} before saving the PO`);
+      return;
+    }
+    const unitAuditRows = editLineItems
+      .filter((li) => li._originalUnit && li._originalUnit !== (li.unit ?? ""))
+      .map((li) => ({
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+        action_type: "PO_LINE_UNIT_NORMALIZED",
+        entity_type: "purchase_order_line_item",
+        entity_id: li.id.startsWith("new-") ? null : li.id,
+        entity_number: viewPo.po_number ?? null,
+        description: `Unit normalized for "${(li.description ?? "").slice(0, 60)}": "${li._originalUnit}" → "${li.unit}"`,
+        severity: "info",
+        logged_at: new Date().toISOString(),
+      }));
+
     setEditSaving(true);
     try {
       const subTotal = editLineItems.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
@@ -2039,6 +2074,10 @@ export default function PurchaseOrders() {
       const refreshedUrl = await regeneratePoPdfAndUpload(viewPo.id, viewPo.po_number);
       if (!refreshedUrl) {
         toast.warning("PO save ho gaya, par PDF regenerate karne mein issue aaya. Founders ko bhejne se pehle dobara try karo.");
+      }
+
+      if (unitAuditRows.length) {
+        await supabase.from("cps_audit_log").insert(unitAuditRows);
       }
 
       toast.success("PO updated successfully");
@@ -3149,7 +3188,24 @@ export default function PurchaseOrders() {
                               </div>
                               <div className="flex flex-col gap-0.5">
                                 <span className="text-[10px] text-muted-foreground">Unit</span>
-                                <Input value={li.unit ?? ""} onChange={(e) => updateEditLineItem(idx, "unit", e.target.value)} placeholder="nos" className="h-8 text-sm w-20" />
+                                <select
+                                  value={li.unit ?? ""}
+                                  onChange={(e) => updateEditLineItem(idx, "unit", e.target.value)}
+                                  className={`h-8 text-sm rounded-md border bg-background px-2 w-24 ${!li.unit ? "border-destructive/70" : "border-input"}`}
+                                >
+                                  <option value="">— pick —</option>
+                                  {CPS_UNITS.map((u) => (
+                                    <option key={u} value={u}>{u}</option>
+                                  ))}
+                                </select>
+                                {li._originalUnit && li._originalUnit !== (li.unit ?? "") && (
+                                  <span className="text-[10px] text-muted-foreground italic" title={`Original: "${li._originalUnit}"`}>
+                                    was: "{li._originalUnit}"
+                                  </span>
+                                )}
+                                {!li.unit && li._originalUnit && (
+                                  <span className="text-[10px] text-amber-700">⚠ not recognized</span>
+                                )}
                               </div>
                               <div className="flex flex-col gap-0.5">
                                 <span className="text-[10px] text-muted-foreground">Rate (₹)</span>

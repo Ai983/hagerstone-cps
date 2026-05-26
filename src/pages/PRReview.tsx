@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { CPS_UNITS, normalizeUnit, isCanonicalUnit } from "@/lib/units";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,7 +46,8 @@ type LineItem = {
   item_id: string | null;
   description: string;
   quantity: string;
-  unit: string;
+  unit: string;            // canonical CPS unit (or "" if not yet resolved)
+  _originalUnit: string;   // raw value as the site staff typed it (DB original)
   specs: string; // CLEAN specs only (Images: ... segment stripped, preserved in _imageUrls)
   _imageUrls: string[]; // original site-reference image URLs to preserve on save
   preferred_brands: string;
@@ -255,13 +257,21 @@ export default function PRReview() {
         .eq("pr_id", pr.id)
         .order("sort_order", { ascending: true });
       if (error) throw error;
-      setLineItems((data ?? []).map((li: any) => ({
+      setLineItems((data ?? []).map((li: any) => {
+        const rawUnit = li.unit ?? "";
+        const canonical = normalizeUnit(rawUnit);
+        // If the DB had a non-canonical form (e.g. "Nos", "pieces") but it
+        // auto-resolves to a canonical, mark _dirty so the resolved canonical
+        // is persisted on the next save — flushing the bad string out of the DB.
+        const autoNormalized = canonical !== null && canonical !== rawUnit;
+        return ({
         id: li.id,
         pr_id: li.pr_id,
         item_id: li.item_id ?? null,
         description: li.description ?? "",
         quantity: String(li.quantity ?? ""),
-        unit: li.unit ?? "",
+        unit: canonical ?? "",
+        _originalUnit: rawUnit,
         specs: stripImagesFromSpecs(li.specs ?? ""),
         _imageUrls: parseReferenceImageUrls(li.specs ?? ""),
         preferred_brands: Array.isArray(li.preferred_brands)
@@ -279,9 +289,10 @@ export default function PRReview() {
         sort_order: li.sort_order ?? 0,
         source_type: li.source_type ?? null,
         out_of_scope_reason: li.out_of_scope_reason ?? null,
-        _dirty: false,
+        _dirty: autoNormalized,
         _deleted: false,
-      })));
+      });
+      }));
     } catch (e: any) {
       toast.error(e.message || "Failed to load line items");
     } finally {
@@ -308,7 +319,8 @@ export default function PRReview() {
         item_id: null,
         description: "",
         quantity: "1",
-        unit: "Nos",
+        unit: "nos",
+        _originalUnit: "",
         specs: "",
         _imageUrls: [],
         preferred_brands: "",
@@ -336,15 +348,47 @@ export default function PRReview() {
     });
   };
 
+  // ---------- unit validation + audit (shared by save / approve / create-rfq) ----------
+
+  // Block submit if any visible line item lacks a canonical unit, and build the
+  // audit-log rows for any normalisation that occurred during this review session.
+  // Returns null on failure (and toasts), or the audit rows to insert (possibly []).
+  const validateAndCollectUnitAudit = (toUpsert: LineItem[]): Array<Record<string, unknown>> | null => {
+    const invalid = lineItems
+      .map((li, idx) => ({ li, idx }))
+      .filter(({ li }) => !li._deleted && !isCanonicalUnit(li.unit));
+    if (invalid.length > 0) {
+      const rows = invalid.map(({ idx }) => `#${idx + 1}`).join(", ");
+      toast.error(`Pick a valid unit for line ${rows} before continuing`);
+      return null;
+    }
+    return toUpsert
+      .filter((li) => li._originalUnit && li._originalUnit !== li.unit)
+      .map((li) => ({
+        user_id: user?.id ?? null,
+        user_name: user?.name ?? null,
+        user_role: user?.role ?? null,
+        action_type: "PR_LINE_UNIT_NORMALIZED",
+        entity_type: "purchase_requisition_line_item",
+        entity_id: li.id,
+        entity_number: editPr?.pr_number ?? null,
+        description: `Unit normalized for "${li.description.slice(0, 60)}": "${li._originalUnit}" → "${li.unit}"`,
+        severity: "info",
+        logged_at: new Date().toISOString(),
+      }));
+  };
+
   // ---------- save ----------
 
   const handleSave = async () => {
     if (!editPr) return;
+    const toDelete = lineItems.filter((li) => li._deleted && li.id);
+    const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
+    const unitAuditRows = validateAndCollectUnitAudit(toUpsert);
+    if (unitAuditRows === null) return; // validation failed — already toasted
+
     setSaving(true);
     try {
-      const toDelete = lineItems.filter((li) => li._deleted && li.id);
-      const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
-
       if (toDelete.length) {
         await supabase
           .from("cps_pr_line_items")
@@ -362,7 +406,7 @@ export default function PRReview() {
           item_id: li.item_id,
           description: li.description.trim(),
           quantity: parseFloat(li.quantity) || 1,
-          unit: li.unit.trim() || "Nos",
+          unit: li.unit, // canonical — validated above
           specs: composeSpecsWithImages(li.specs, li._imageUrls ?? []),
           preferred_brands: li.preferred_brands
             ? li.preferred_brands.split(",").map((b) => b.trim()).filter(Boolean)
@@ -374,6 +418,10 @@ export default function PRReview() {
         }));
         const { error } = await supabase.from("cps_pr_line_items").upsert(payload);
         if (error) throw error;
+      }
+
+      if (unitAuditRows.length) {
+        await supabase.from("cps_audit_log").insert(unitAuditRows);
       }
 
       toast.success("PR line items saved");
@@ -388,11 +436,14 @@ export default function PRReview() {
 
   const handleApprove = async () => {
     if (!editPr) return;
+    // Save any pending line item changes first
+    const toDelete = lineItems.filter((li) => li._deleted && li.id);
+    const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
+    const unitAuditRows = validateAndCollectUnitAudit(toUpsert);
+    if (unitAuditRows === null) return;
+
     setApproving(true);
     try {
-      // Save any pending line item changes first
-      const toDelete = lineItems.filter((li) => li._deleted && li.id);
-      const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
       if (toDelete.length) {
         await supabase.from("cps_pr_line_items").delete().in("id", toDelete.map((li) => li.id!));
       }
@@ -405,7 +456,7 @@ export default function PRReview() {
           item_id: li.item_id,
           description: li.description.trim(),
           quantity: parseFloat(li.quantity) || 1,
-          unit: li.unit.trim() || "Nos",
+          unit: li.unit, // canonical — validated above
           specs: composeSpecsWithImages(li.specs, li._imageUrls ?? []),
           preferred_brands: li.preferred_brands ? li.preferred_brands.split(",").map((b) => b.trim()).filter(Boolean) : null,
           brand_make: li.brand_make.trim() || null,
@@ -424,17 +475,20 @@ export default function PRReview() {
         .eq("id", editPr.id);
       if (updateErr) throw updateErr;
 
-      // Audit log
-      await supabase.from("cps_audit_log").insert([{
-        user_id: user?.id, user_name: user?.name, user_role: user?.role,
-        action_type: "PR_APPROVED",
-        entity_type: "purchase_requisition",
-        entity_id: editPr.id,
-        entity_number: editPr.pr_number,
-        description: `PR ${editPr.pr_number} approved for RFQ by ${user?.name ?? user?.email}`,
-        severity: "info",
-        logged_at: new Date().toISOString(),
-      }]);
+      // Audit log (approval + any unit normalisations in one batch)
+      await supabase.from("cps_audit_log").insert([
+        {
+          user_id: user?.id, user_name: user?.name, user_role: user?.role,
+          action_type: "PR_APPROVED",
+          entity_type: "purchase_requisition",
+          entity_id: editPr.id,
+          entity_number: editPr.pr_number,
+          description: `PR ${editPr.pr_number} approved for RFQ by ${user?.name ?? user?.email}`,
+          severity: "info",
+          logged_at: new Date().toISOString(),
+        },
+        ...unitAuditRows,
+      ]);
 
       toast.success(`${editPr.pr_number} approved — now visible in RFQ page`);
       closeReviewDialog(false);
@@ -464,11 +518,14 @@ export default function PRReview() {
       return;
     }
 
+    // 1. Save any pending line item edits first
+    const toDelete = lineItems.filter((li) => li._deleted && li.id);
+    const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
+    const unitAuditRows = validateAndCollectUnitAudit(toUpsert);
+    if (unitAuditRows === null) return;
+
     setCreatingRfq(true);
     try {
-      // 1. Save any pending line item edits first
-      const toDelete = lineItems.filter((li) => li._deleted && li.id);
-      const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
       if (toDelete.length) {
         await supabase.from("cps_pr_line_items").delete().in("id", toDelete.map((li) => li.id!));
       }
@@ -481,7 +538,7 @@ export default function PRReview() {
           item_id: li.item_id,
           description: li.description.trim(),
           quantity: parseFloat(li.quantity) || 1,
-          unit: li.unit.trim() || "Nos",
+          unit: li.unit, // canonical — validated above
           specs: composeSpecsWithImages(li.specs, li._imageUrls ?? []),
           preferred_brands: li.preferred_brands ? li.preferred_brands.split(",").map((b) => b.trim()).filter(Boolean) : null,
           brand_make: li.brand_make.trim() || null,
@@ -491,6 +548,10 @@ export default function PRReview() {
         }));
         const { error } = await supabase.from("cps_pr_line_items").upsert(payload);
         if (error) throw error;
+      }
+
+      if (unitAuditRows.length) {
+        await supabase.from("cps_audit_log").insert(unitAuditRows);
       }
 
       // 2. Generate RFQ number
@@ -817,13 +878,35 @@ export default function PRReview() {
                                   />
                                 </TableCell>
                                 <TableCell>
-                                  <Input
-                                    className="h-8 text-sm w-24"
-                                    value={li.unit}
-                                    onChange={(e) => isEditable && updateItem(idx, { unit: e.target.value })}
-                                    readOnly={!isEditable}
-                                    placeholder="Nos / Rft / Sqft"
-                                  />
+                                  <div className="flex flex-col gap-0.5 min-w-[110px]">
+                                    {li._originalUnit && li._originalUnit !== li.unit && (
+                                      <span className="text-[10px] text-muted-foreground italic truncate" title={`Site entered: "${li._originalUnit}"`}>
+                                        was: "{li._originalUnit}"
+                                      </span>
+                                    )}
+                                    <select
+                                      className={`h-8 text-sm rounded-md border px-2 ${
+                                        !isEditable
+                                          ? "bg-muted border-input cursor-not-allowed"
+                                          : !li.unit
+                                            ? "border-destructive/70 bg-background"
+                                            : "border-input bg-background"
+                                      }`}
+                                      value={li.unit}
+                                      onChange={(e) => isEditable && updateItem(idx, { unit: e.target.value })}
+                                      disabled={!isEditable}
+                                    >
+                                      <option value="">— pick unit —</option>
+                                      {CPS_UNITS.map((u) => (
+                                        <option key={u} value={u}>{u}</option>
+                                      ))}
+                                    </select>
+                                    {isEditable && !li.unit && li._originalUnit && (
+                                      <span className="text-[10px] text-amber-700">
+                                        ⚠ not recognized
+                                      </span>
+                                    )}
+                                  </div>
                                 </TableCell>
                                 <TableCell>
                                   <Textarea
