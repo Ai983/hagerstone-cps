@@ -31,6 +31,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+// cps-quotes is a private bucket — resolve stored path or legacy public URL to a signed URL
+async function resolveToSignedUrl(storedValue: string): Promise<string | null> {
+  const marker = '/object/public/cps-quotes/';
+  const idx = storedValue.indexOf(marker);
+  const path = idx !== -1 ? storedValue.slice(idx + marker.length) : storedValue;
+  const { data } = await supabase.storage.from('cps-quotes').createSignedUrl(path, 3600);
+  return data?.signedUrl ?? null;
+}
+
 type ManualReviewStatus = "pending" | "in_review" | "reviewed" | "sent_for_approval";
 
 type ComparisonSheetRow = {
@@ -853,7 +862,12 @@ export default function ComparisonSheetPage() {
       setOverrideRequestedAt((rfqRow as any).min_quotes_override_requested_at ?? null);
       setOverrideAllowedAt((rfqRow as any).min_quotes_override_allowed_at ?? null);
       setOverrideAdminNote((rfqRow as any).min_quotes_override_admin_note ?? null);
-      setOverrideAttachmentUrl((rfqRow as any).min_quotes_override_attachment_url ?? null);
+      const rawAttachmentUrl = (rfqRow as any).min_quotes_override_attachment_url as string | null;
+      if (rawAttachmentUrl) {
+        resolveToSignedUrl(rawAttachmentUrl).then((signed) => setOverrideAttachmentUrl(signed));
+      } else {
+        setOverrideAttachmentUrl(null);
+      }
       const allowedById = (rfqRow as any).min_quotes_override_allowed_by as string | null;
       if (allowedById) {
         const { data: allowedUser } = await supabase
@@ -1369,8 +1383,8 @@ export default function ComparisonSheetPage() {
           setOverrideRequesting(false);
           return;
         }
-        const { data: pub } = supabase.storage.from("cps-quotes").getPublicUrl(path);
-        attachmentUrl = pub.publicUrl ?? null;
+        // cps-quotes is private — store path and generate signed URLs at display time
+        attachmentUrl = path;
       }
 
       const nowIso = new Date().toISOString();
@@ -1403,7 +1417,11 @@ export default function ComparisonSheetPage() {
 
       setOverrideStatus("requested");
       setOverrideRequestedAt(nowIso);
-      setOverrideAttachmentUrl(attachmentUrl);
+      if (attachmentUrl) {
+        resolveToSignedUrl(attachmentUrl).then((signed) => setOverrideAttachmentUrl(signed));
+      } else {
+        setOverrideAttachmentUrl(null);
+      }
       setOverrideAttachmentFile(null);
       setOverrideRequestOpen(false);
       toast.success("Request submit ho gayi. IT team ko bata do.");

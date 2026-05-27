@@ -110,6 +110,44 @@ type LineItem = {
 const CPS_CATEGORIES = ["Electrical", "Civil", "MEP", "Furniture", "Interiors", "IT & Infra", "Safety", "Tools", "Plumbing", "HVAC", "General"];
 // CPS_UNITS now lives in @/lib/units (shared with PR Review + PO edit).
 
+// cps-quotes is a private bucket — extract path from stored public URL to generate signed URLs
+function extractCpsQuotesPath(url: string): string {
+  const marker = '/object/public/cps-quotes/';
+  const idx = url.indexOf(marker);
+  if (idx !== -1) return url.slice(idx + marker.length);
+  return url;
+}
+
+function SignedRefImg({ url, className, alt }: { url: string; className?: string; alt?: string }) {
+  const [src, setSrc] = useState('');
+  useEffect(() => {
+    let active = true;
+    const path = extractCpsQuotesPath(url);
+    supabase.storage.from('cps-quotes').createSignedUrl(path, 3600).then(({ data }) => {
+      if (active && data?.signedUrl) setSrc(data.signedUrl);
+    });
+    return () => { active = false; };
+  }, [url]);
+  return src
+    ? <img src={src} className={className} alt={alt} />
+    : <div className={`${className ?? ''} bg-muted/30 animate-pulse rounded`} />;
+}
+
+function SignedRefAnchor({ url, className, children }: { url: string; className?: string; children: React.ReactNode }) {
+  const [href, setHref] = useState('');
+  useEffect(() => {
+    let active = true;
+    const path = extractCpsQuotesPath(url);
+    supabase.storage.from('cps-quotes').createSignedUrl(path, 3600).then(({ data }) => {
+      if (active && data?.signedUrl) setHref(data.signedUrl);
+    });
+    return () => { active = false; };
+  }, [url]);
+  return href
+    ? <a href={href} target="_blank" rel="noopener noreferrer" className={className}>{children}</a>
+    : <div className={className}>{children}</div>;
+}
+
 type DetailLineItem = {
   id: string;
   pr_id: string;
@@ -3132,34 +3170,30 @@ export default function PurchaseRequisitions() {
                                 const isDoc = /\.(xls|xlsx|doc|docx)$/i.test(lower);
                                 if (isPdf || isDoc) {
                                   return (
-                                    <a
+                                    <SignedRefAnchor
                                       key={idx}
-                                      href={url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
+                                      url={url}
                                       className="h-16 w-16 rounded border bg-white flex flex-col items-center justify-center gap-0.5 p-1 no-underline"
                                     >
                                       <span className="text-xl">{isPdf ? "📄" : "📎"}</span>
                                       <span className="text-[8px] text-center text-primary">
                                         {isPdf ? "PDF" : "Doc"} {idx + 1}
                                       </span>
-                                    </a>
+                                    </SignedRefAnchor>
                                   );
                                 }
                                 return (
-                                  <a
+                                  <SignedRefAnchor
                                     key={idx}
-                                    href={url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
+                                    url={url}
                                     className="block h-16 w-16"
                                   >
-                                    <img
-                                      src={url}
+                                    <SignedRefImg
+                                      url={url}
                                       alt={`Ref ${idx + 1}`}
                                       className="h-16 w-16 object-cover rounded border"
                                     />
-                                  </a>
+                                  </SignedRefAnchor>
                                 );
                               })}
                             </div>
@@ -3214,24 +3248,22 @@ export default function PurchaseRequisitions() {
                                       const isDoc = /\.(xls|xlsx|doc|docx)$/i.test(lower);
                                       if (isPdf || isDoc) {
                                         return (
-                                          <a
+                                          <SignedRefAnchor
                                             key={idx}
-                                            href={url}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
+                                            url={url}
                                             className="h-24 w-24 rounded border border-foreground/30 bg-white flex flex-col items-center justify-center gap-1 p-1 hover:bg-muted/40 no-underline"
                                           >
                                             <span className="text-2xl">{isPdf ? "📄" : "📎"}</span>
                                             <span className="text-[9px] text-center leading-tight text-primary break-all px-0.5">
                                               {isPdf ? "BOQ PDF" : "Document"} {idx + 1}
                                             </span>
-                                          </a>
+                                          </SignedRefAnchor>
                                         );
                                       }
                                       return (
-                                        <img
+                                        <SignedRefImg
                                           key={idx}
-                                          src={url}
+                                          url={url}
                                           alt={`Ref ${idx + 1}`}
                                           className="h-24 w-24 object-cover rounded border border-foreground/30 print:h-32 print:w-32"
                                         />

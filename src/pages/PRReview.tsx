@@ -95,6 +95,44 @@ const composeSpecsWithImages = (cleanSpecs: string, imageUrls: string[]): string
   return joined || null;
 };
 
+// cps-quotes is a private bucket — extract path from stored public URL to generate signed URLs
+function extractCpsQuotesPath(url: string): string {
+  const marker = '/object/public/cps-quotes/';
+  const idx = url.indexOf(marker);
+  if (idx !== -1) return url.slice(idx + marker.length);
+  return url; // already a raw path
+}
+
+function SignedRefImg({ url, className, alt }: { url: string; className?: string; alt?: string }) {
+  const [src, setSrc] = React.useState('');
+  React.useEffect(() => {
+    let active = true;
+    const path = extractCpsQuotesPath(url);
+    supabase.storage.from('cps-quotes').createSignedUrl(path, 3600).then(({ data }) => {
+      if (active && data?.signedUrl) setSrc(data.signedUrl);
+    });
+    return () => { active = false; };
+  }, [url]);
+  return src
+    ? <img src={src} className={className} alt={alt} />
+    : <div className={`${className ?? ''} bg-muted/30 animate-pulse rounded`} />;
+}
+
+function SignedRefAnchor({ url, className, children }: { url: string; className?: string; children: React.ReactNode }) {
+  const [href, setHref] = React.useState('');
+  React.useEffect(() => {
+    let active = true;
+    const path = extractCpsQuotesPath(url);
+    supabase.storage.from('cps-quotes').createSignedUrl(path, 3600).then(({ data }) => {
+      if (active && data?.signedUrl) setHref(data.signedUrl);
+    });
+    return () => { active = false; };
+  }, [url]);
+  return href
+    ? <a href={href} target="_blank" rel="noopener noreferrer" className={className}>{children}</a>
+    : <div className={className}>{children}</div>;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-blue-100 text-blue-800",
   pending_design: "bg-violet-100 text-violet-800",
@@ -962,21 +1000,17 @@ export default function PRReview() {
                                     return (
                                       <div className="flex flex-wrap gap-1 items-center">
                                         {urls.map((url, i) => (
-                                          <a
+                                          <SignedRefAnchor
                                             key={i}
-                                            href={url}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
+                                            url={url}
                                             className="h-10 w-10 rounded border border-border overflow-hidden hover:ring-2 hover:ring-primary/50 transition-all block"
-                                            title={`Site reference image ${i + 1} — click to view full size`}
                                           >
-                                            <img
-                                              src={url}
+                                            <SignedRefImg
+                                              url={url}
                                               alt={`Ref ${i + 1}`}
                                               className="h-full w-full object-cover"
-                                              loading="lazy"
                                             />
-                                          </a>
+                                          </SignedRefAnchor>
                                         ))}
                                         <span className="text-[10px] text-muted-foreground ml-1">{urls.length}</span>
                                       </div>

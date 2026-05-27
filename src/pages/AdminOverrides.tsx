@@ -60,6 +60,36 @@ type OverrideRow = {
   line_items: LineItem[];
 };
 
+// cps-quotes is a private bucket — resolve path or legacy public URL to signed URL for display
+function useCpsSignedUrl(url: string) {
+  const [signed, setSigned] = React.useState('');
+  React.useEffect(() => {
+    let active = true;
+    const marker = '/object/public/cps-quotes/';
+    const idx = url.indexOf(marker);
+    const path = idx !== -1 ? url.slice(idx + marker.length) : url;
+    supabase.storage.from('cps-quotes').createSignedUrl(path, 3600).then(({ data }) => {
+      if (active && data?.signedUrl) setSigned(data.signedUrl);
+    });
+    return () => { active = false; };
+  }, [url]);
+  return signed;
+}
+
+function SignedAttachmentLink({ url, className, children }: { url: string; className?: string; children: React.ReactNode }) {
+  const href = useCpsSignedUrl(url);
+  return href
+    ? <a href={href} target="_blank" rel="noopener noreferrer" className={className}>{children}</a>
+    : null;
+}
+
+function SignedAttachmentImg({ url }: { url: string }) {
+  const src = useCpsSignedUrl(url);
+  return src
+    ? <img src={src} alt="Override attachment" className="max-h-64 w-auto rounded border" />
+    : <div className="h-16 w-24 bg-muted/30 animate-pulse rounded" />;
+}
+
 const formatDateTime = (d: string | null | undefined) => {
   if (!d) return "—";
   try {
@@ -460,14 +490,12 @@ export default function AdminOverrides() {
                             <div className="text-xs whitespace-pre-wrap"><span className="text-muted-foreground">Reason:</span> {r.min_quotes_override_reason}</div>
                           )}
                           {r.min_quotes_override_attachment_url && (
-                            <a
-                              href={r.min_quotes_override_attachment_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <SignedAttachmentLink
+                              url={r.min_quotes_override_attachment_url}
                               className="inline-flex items-center gap-1 text-xs text-primary underline"
                             >
                               📎 View attachment
-                            </a>
+                            </SignedAttachmentLink>
                           )}
 
                           {isOpen && (
@@ -544,15 +572,12 @@ export default function AdminOverrides() {
                                 <TableCell className="text-xs max-w-[260px] whitespace-pre-wrap align-top">
                                   <div>{r.min_quotes_override_reason ?? "—"}</div>
                                   {r.min_quotes_override_attachment_url && (
-                                    <a
-                                      href={r.min_quotes_override_attachment_url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={(e) => e.stopPropagation()}
+                                    <SignedAttachmentLink
+                                      url={r.min_quotes_override_attachment_url}
                                       className="mt-1 inline-flex items-center gap-1 text-primary underline hover:text-primary/80"
                                     >
                                       📎 View attachment
-                                    </a>
+                                    </SignedAttachmentLink>
                                   )}
                                 </TableCell>
                                 <TableCell className="text-xs text-muted-foreground whitespace-nowrap align-top">{formatDateTime(r.min_quotes_override_requested_at)}</TableCell>
@@ -641,14 +666,12 @@ export default function AdminOverrides() {
                           {r.min_quotes_override_reason && <div className="text-xs whitespace-pre-wrap"><span className="text-muted-foreground">Procurement:</span> {r.min_quotes_override_reason}</div>}
                           {r.min_quotes_override_admin_note && <div className="text-xs whitespace-pre-wrap"><span className="text-muted-foreground">IT note:</span> {r.min_quotes_override_admin_note}</div>}
                           {r.min_quotes_override_attachment_url && (
-                            <a
-                              href={r.min_quotes_override_attachment_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <SignedAttachmentLink
+                              url={r.min_quotes_override_attachment_url}
                               className="inline-flex items-center gap-1 text-xs text-primary underline"
                             >
                               📎 View attachment
-                            </a>
+                            </SignedAttachmentLink>
                           )}
 
                           {isOpen && (
@@ -714,15 +737,12 @@ export default function AdminOverrides() {
                                   {r.min_quotes_override_reason && <div><span className="text-muted-foreground">Procurement:</span> {r.min_quotes_override_reason}</div>}
                                   {r.min_quotes_override_admin_note && <div className="mt-1"><span className="text-muted-foreground">IT team note:</span> {r.min_quotes_override_admin_note}</div>}
                                   {r.min_quotes_override_attachment_url && (
-                                    <a
-                                      href={r.min_quotes_override_attachment_url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={(e) => e.stopPropagation()}
+                                    <SignedAttachmentLink
+                                      url={r.min_quotes_override_attachment_url}
                                       className="mt-1 inline-flex items-center gap-1 text-primary underline hover:text-primary/80"
                                     >
                                       📎 View attachment
-                                    </a>
+                                    </SignedAttachmentLink>
                                   )}
                                 </TableCell>
                               </TableRow>
@@ -768,19 +788,16 @@ export default function AdminOverrides() {
           {decideRow?.min_quotes_override_attachment_url && (
             <div className="text-xs bg-muted/50 border rounded p-2 space-y-2">
               <div className="text-muted-foreground">Attachment:</div>
-              {/\.(pdf)$/i.test(decideRow.min_quotes_override_attachment_url) ? (
-                <a href={decideRow.min_quotes_override_attachment_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary underline">
-                  📄 Open PDF
-                </a>
-              ) : (
-                <a href={decideRow.min_quotes_override_attachment_url} target="_blank" rel="noopener noreferrer" className="block">
-                  <img
-                    src={decideRow.min_quotes_override_attachment_url}
-                    alt="Override attachment"
-                    className="max-h-64 w-auto rounded border"
-                  />
-                </a>
-              )}
+              <SignedAttachmentLink
+                url={decideRow.min_quotes_override_attachment_url}
+                className={/\.(pdf)$/i.test(decideRow.min_quotes_override_attachment_url)
+                  ? "inline-flex items-center gap-1 text-primary underline"
+                  : "block"}
+              >
+                {/\.(pdf)$/i.test(decideRow.min_quotes_override_attachment_url) ? "📄 Open PDF" : (
+                  <SignedAttachmentImg url={decideRow.min_quotes_override_attachment_url} />
+                )}
+              </SignedAttachmentLink>
             </div>
           )}
           <div className="space-y-2 py-1">
