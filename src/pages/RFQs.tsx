@@ -1174,6 +1174,7 @@ export default function RFQs() {
         {statusTabs.map((tab) => (
           <button
             key={tab.key}
+            type="button"
             onClick={() => setStatusFilter(tab.key)}
             className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
               statusFilter === tab.key
@@ -1281,7 +1282,7 @@ export default function RFQs() {
                     <TableRow className="hover:bg-muted/30">
                       <TableCell className="font-mono text-primary">
                         <div className="flex items-start gap-1">
-                          <button onClick={(e) => toggleExpand(r.id, e)} className="h-5 w-5 mt-0.5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
+                          <button type="button" onClick={(e) => toggleExpand(r.id, e)} className="h-5 w-5 mt-0.5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
                             {expandedRfqId === r.id ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                           </button>
                           <div className="flex flex-col gap-1">

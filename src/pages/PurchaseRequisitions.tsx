@@ -2002,7 +2002,7 @@ export default function PurchaseRequisitions() {
                     <TableRow className="hover:bg-muted/50 cursor-pointer" onClick={() => openDetail(pr)}>
                       <TableCell className="font-mono text-primary">
                         <div className="flex items-center gap-1">
-                          <button onClick={(e) => toggleExpand(pr.id, e)} className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
+                          <button type="button" onClick={(e) => toggleExpand(pr.id, e)} className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
                             {expandedPrId === pr.id ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                           </button>
                           {pr.pr_number}
@@ -2161,6 +2161,7 @@ export default function PurchaseRequisitions() {
                 {wizardStep <= WIZARD_STEPS ? `${wizardStep} / ${WIZARD_STEPS}` : ""}
               </span>
               <button
+                type="button"
                 onClick={() => setWizardOpen(false)}
                 className="h-8 w-8 rounded-full flex items-center justify-center hover:bg-muted transition-colors"
                 aria-label="Close"
@@ -2369,6 +2370,7 @@ export default function PurchaseRequisitions() {
                           <span className="text-sm font-medium text-muted-foreground">{lang === 'hi' ? `Saman ${idx + 1}` : `Item ${idx + 1}`}</span>
                           {wizLineItems.length > 1 && (
                             <button
+                              type="button"
                               className="h-7 w-7 rounded-full flex items-center justify-center hover:bg-destructive/10 text-destructive transition-colors"
                               onClick={() => setWizLineItems((prev) => prev.filter((r) => r.rowKey !== li.rowKey))}
                             >
@@ -2406,6 +2408,7 @@ export default function PurchaseRequisitions() {
                                 .map((m) => (
                                   <button
                                     key={m.id}
+                                    type="button"
                                     className="w-full px-3 py-2.5 text-left hover:bg-muted/60 flex items-start gap-2 border-b border-border/40 last:border-0"
                                     onMouseDown={(e) => {
                                       e.preventDefault();
@@ -2437,6 +2440,7 @@ export default function PurchaseRequisitions() {
                                 <div>
                                   <div className="px-3 py-2 text-xs text-muted-foreground">No match found in item master</div>
                                   <button
+                                    type="button"
                                     className="w-full px-3 py-2.5 text-left hover:bg-primary/5 text-sm text-primary font-medium flex items-center gap-2 border-t border-border/40"
                                     onMouseDown={(e) => {
                                       e.preventDefault();
@@ -2459,7 +2463,7 @@ export default function PurchaseRequisitions() {
                           <div className="border border-primary/20 rounded-lg p-4 bg-primary/5 space-y-3">
                             <div className="flex items-center justify-between">
                               <span className="text-sm font-medium text-primary">📦 Request New Item</span>
-                              <button className="text-muted-foreground hover:text-foreground" onClick={() => setWizNewItemFormOpen(prev => ({ ...prev, [li.rowKey]: false }))}>
+                              <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setWizNewItemFormOpen(prev => ({ ...prev, [li.rowKey]: false }))}>
                                 <X className="h-4 w-4" />
                               </button>
                             </div>

@@ -1019,6 +1019,7 @@ export default function PRReview() {
                                 </TableCell>
                                 <TableCell>
                                   <button
+                                    type="button"
                                     className="h-7 w-7 flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                                     onClick={() => removeItem(idx)}
                                     title="Remove item"

@@ -695,7 +695,7 @@ export default function InvoiceUpload() {
                           <Input type="number" value={item.gst_percent} onChange={e => setLineItem(i, "gst_percent", parseFloat(e.target.value) || 0)} className="h-7 text-xs" />
                         </TableCell>
                         <TableCell className="p-1">
-                          <button onClick={() => removeLineItem(i)} className="text-destructive hover:opacity-80 p-1">
+                          <button type="button" onClick={() => removeLineItem(i)} className="text-destructive hover:opacity-80 p-1">
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </TableCell>

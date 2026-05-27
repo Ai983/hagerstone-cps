@@ -4013,7 +4013,7 @@ function PoTableRows({
           }>
             <TableCell className="font-mono text-primary">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <button onClick={(e) => toggleExpandPo(r.id, e)} className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
+                <button type="button" onClick={(e) => toggleExpandPo(r.id, e)} className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted shrink-0" title="Quick preview">
                   {expandedPoId === r.id ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                 </button>
                 {r.po_number}
