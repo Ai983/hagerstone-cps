@@ -13,6 +13,7 @@ export const CPS_UNITS = [
   "mtr",
   "bag",
   "darjan",
+  "cum",
 ] as const;
 
 export type CpsUnit = (typeof CPS_UNITS)[number];
@@ -32,6 +33,7 @@ const UNIT_ALIASES: Record<CpsUnit, readonly string[]> = {
   mtr: ["mtr", "m", "mt", "metre", "meter", "metres", "meters"],
   bag: ["bag", "bg", "bags"],
   darjan: ["darjan", "darzan", "dozen", "doz", "dz"],
+  cum: ["cum", "cu m", "cu.m", "cbm", "cubic metre", "cubic meter", "cubic metres", "cubic meters", "m3", "m³"],
 };
 
 // Normalize a free-text alias for lookup: lowercase, strip whitespace, punctuation, apostrophes.
