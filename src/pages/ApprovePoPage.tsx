@@ -342,6 +342,7 @@ export default function ApprovePoPage() {
 
           <div className="grid grid-cols-2 gap-3">
             <button
+              type="button"
               onClick={() => setChoice("approved")}
               className={`rounded-lg border-2 py-4 text-sm font-semibold transition-all ${
                 choice === "approved"
@@ -352,6 +353,7 @@ export default function ApprovePoPage() {
               ✅ Approve
             </button>
             <button
+              type="button"
               onClick={() => setChoice("rejected")}
               className={`rounded-lg border-2 py-4 text-sm font-semibold transition-all ${
                 choice === "rejected"
@@ -378,6 +380,7 @@ export default function ApprovePoPage() {
           </div>
 
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={!choice || (choice === "rejected" && !reason.trim()) || submitting}
             className="w-full rounded-lg py-3 text-sm font-semibold bg-[hsl(20,50%,35%)] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[hsl(20,50%,30%)] transition-colors"

@@ -593,6 +593,7 @@ export default function VendorUploadQuote() {
               <div className="font-medium text-gray-800">{file.name}</div>
               <div className="text-xs text-gray-400">{(file.size / 1024 / 1024).toFixed(2)} MB</div>
               <button
+                type="button"
                 className="text-xs text-gray-400 underline mt-1"
                 onClick={(e) => { e.stopPropagation(); setFile(null); setAiStatus("idle"); if (fileInputRef.current) fileInputRef.current.value = ""; }}
               >Remove</button>
@@ -610,6 +611,7 @@ export default function VendorUploadQuote() {
       <div className="flex justify-between items-center mt-6">
         <div />
         <button
+          type="button"
           className="text-sm text-gray-400 underline"
           onClick={goNext}
         >
@@ -635,6 +637,7 @@ export default function VendorUploadQuote() {
         {["30 days credit", "50% advance", "100% advance", "Against delivery"].map((opt) => (
           <button
             key={opt}
+            type="button"
             className="px-3 py-1.5 rounded-full border text-sm transition-colors"
             style={paymentTerms === opt
               ? { background: "hsl(20,50%,35%)", color: "#fff", borderColor: "hsl(20,50%,35%)" }
@@ -668,6 +671,7 @@ export default function VendorUploadQuote() {
         {["3", "7", "14", "21", "30"].map((d) => (
           <button
             key={d}
+            type="button"
             className="px-3 py-1.5 rounded-full border text-sm transition-colors"
             style={deliveryDays === d
               ? { background: "hsl(20,50%,35%)", color: "#fff", borderColor: "hsl(20,50%,35%)" }
@@ -909,10 +913,11 @@ export default function VendorUploadQuote() {
         </div>
         <p className="text-xs text-gray-400 mt-3 text-center">By submitting you confirm this is your best price.</p>
         <div className="flex justify-between items-center mt-5">
-          <button className="text-sm text-gray-400 underline flex items-center gap-1" onClick={goBack}>
+          <button type="button" className="text-sm text-gray-400 underline flex items-center gap-1" onClick={goBack}>
             <ArrowLeft className="h-3.5 w-3.5" /> Edit
           </button>
           <button
+            type="button"
             className="px-8 py-3 rounded-xl font-semibold text-white transition-opacity disabled:opacity-50"
             style={{ background: "hsl(20,50%,35%)" }}
             onClick={handleSubmit}
@@ -1072,6 +1077,7 @@ function StepActions({
   return (
     <div className="flex justify-between items-center mt-8">
       <button
+        type="button"
         className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-600 transition-colors"
         onClick={onBack}
       >
@@ -1079,9 +1085,10 @@ function StepActions({
       </button>
       <div className="flex items-center gap-3">
         {skipLabel && onSkip && (
-          <button className="text-sm text-gray-400 underline" onClick={onSkip}>{skipLabel}</button>
+          <button type="button" className="text-sm text-gray-400 underline" onClick={onSkip}>{skipLabel}</button>
         )}
         <button
+          type="button"
           className="px-6 py-2.5 rounded-xl font-medium text-white text-sm transition-opacity disabled:opacity-50"
           style={{ background: "hsl(20,50%,35%)" }}
           onClick={onNext}
