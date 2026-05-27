@@ -72,6 +72,7 @@ export function BottomNav() {
             </NavLink>
           ))}
           <button
+            type="button"
             onClick={() => setMoreOpen(true)}
             className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] min-h-[44px] text-sidebar-foreground/60"
           >
@@ -99,6 +100,7 @@ export function BottomNav() {
                 </div>
               </div>
               <button
+                type="button"
                 onClick={async () => { await signOut(); navigate("/login"); setMoreOpen(false); }}
                 className="flex items-center gap-1.5 text-sm px-4 py-2 rounded-md border border-sidebar-border text-sidebar-foreground/70 hover:bg-sidebar-accent transition-colors"
               >
@@ -130,6 +132,7 @@ export function BottomNav() {
           </NavLink>
         ))}
         <button
+          type="button"
           onClick={() => setMoreOpen(true)}
           className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] min-h-[44px] text-sidebar-foreground/60"
         >
@@ -175,6 +178,7 @@ export function BottomNav() {
               </div>
             </div>
             <button
+              type="button"
               onClick={async () => { await signOut(); navigate("/login"); setMoreOpen(false); }}
               className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-md border border-sidebar-border text-sidebar-foreground/70 hover:bg-sidebar-accent transition-colors"
             >

@@ -21,6 +21,7 @@ export class ErrorBoundary extends React.Component<
             {this.state.error?.message}
           </div>
           <button
+            type="button"
             className="px-4 py-2 bg-primary text-primary-foreground rounded-md text-sm"
             onClick={() => this.setState({ hasError: false })}
           >

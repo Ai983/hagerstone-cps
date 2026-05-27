@@ -173,6 +173,7 @@ export function TopBar() {
           {showBell && (
             <div className="relative" ref={panelRef}>
               <button
+                type="button"
                 onClick={handleOpenToggle}
                 className="relative h-8 w-8 flex items-center justify-center rounded-full hover:bg-muted transition-colors"
               >
@@ -192,6 +193,7 @@ export function TopBar() {
                     <div className="flex items-center gap-2">
                       {unread > 0 && (
                         <button
+                          type="button"
                           onClick={markAllRead}
                           className="text-[11px] text-primary hover:underline flex items-center gap-1"
                         >
@@ -253,6 +255,7 @@ export function TopBar() {
                   {/* Footer */}
                   <div className="px-4 py-2 border-t border-border">
                     <button
+                      type="button"
                       className="text-xs text-primary hover:underline w-full text-center"
                       onClick={() => { setOpen(false); navigate("/audit"); }}
                     >

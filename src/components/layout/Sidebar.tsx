@@ -58,7 +58,7 @@ export function AppSidebar() {
           </div>
         )}
         {collapsed && <Building2 className="h-5 w-5 text-sidebar-primary mx-auto" />}
-        <button onClick={() => setCollapsed(!collapsed)} className={cn("h-6 w-6 flex items-center justify-center rounded text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent", collapsed && "mx-auto mt-0")}>
+        <button type="button" onClick={() => setCollapsed(!collapsed)} className={cn("h-6 w-6 flex items-center justify-center rounded text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent", collapsed && "mx-auto mt-0")}>
           {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </button>
       </div>
@@ -92,13 +92,13 @@ export function AppSidebar() {
                 <p className="text-xs font-semibold text-sidebar-foreground truncate">{user?.name}</p>
               </div>
             </div>
-            <button onClick={async () => { await signOut(); navigate("/login"); }}
+            <button type="button" onClick={async () => { await signOut(); navigate("/login"); }}
               className="w-full flex items-center justify-center gap-2 text-xs px-3 py-1.5 rounded-md border border-sidebar-border text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors">
               <LogOut className="h-3.5 w-3.5" /> Sign Out
             </button>
           </div>
         ) : (
-          <button onClick={async () => { await signOut(); navigate("/login"); }}
+          <button type="button" onClick={async () => { await signOut(); navigate("/login"); }}
             className="w-full flex items-center justify-center p-2 rounded-md text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
             title="Sign Out">
             <LogOut className="h-4 w-4" />
