@@ -3,7 +3,10 @@
     "overrides": [
       {
         "files": ["src/components/ui/**"],
-        "rules": ["react-doctor/only-export-components"]
+        "rules": [
+          "react-doctor/only-export-components",
+          "react-doctor/no-react19-deprecated-apis"
+        ]
       }
     ]
   }
