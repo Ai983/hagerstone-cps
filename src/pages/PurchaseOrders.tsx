@@ -92,6 +92,11 @@ type PoRow = {
   finance_dispatch_sent_at?: string | null;
   finance_paid_at?: string | null;
   finance_paid_amount?: number | null;
+  finance_payment_status?: string | null;
+  finance_balance_due?: number | null;
+  finance_payment_reference?: string | null;
+  finance_payment_note?: string | null;
+  finance_payment_history?: Array<{ paid_amount: number; payment_status: string; balance_due: number; reference?: string; note?: string; recorded_at: string }> | null;
   // Amendment fields
   revision_reason?: string | null;
   cancel_reason?: string | null;
@@ -585,7 +590,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,finance_payment_status,finance_balance_due,finance_payment_reference,finance_payment_note,finance_payment_history,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
         )
         .order("created_at", { ascending: false });
 
@@ -1202,7 +1207,7 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,finance_payment_status,finance_balance_due,finance_payment_reference,finance_payment_note,finance_payment_history,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
         )
         .eq("id", poId)
         .single();
@@ -3556,26 +3561,66 @@ export default function PurchaseOrders() {
                     </div>
                   )}
 
-                  {viewPo.finance_paid_at && (() => {
+                  {viewPo.finance_dispatch_status === "sent" && (() => {
+                    const payStatus = viewPo.finance_payment_status || "awaiting";
                     const paidAmt = Number(viewPo.finance_paid_amount ?? 0);
                     const poTotal = Number(viewPo.grand_total ?? 0);
-                    const isPartial = paidAmt > 0 && poTotal > 0 && paidAmt < poTotal;
+                    const balanceDue = Number(viewPo.finance_balance_due ?? Math.max(0, poTotal - paidAmt));
+                    const history = viewPo.finance_payment_history ?? [];
+
+                    if (payStatus === "awaiting") {
+                      return (
+                        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-1">
+                          <div className="text-sm font-semibold text-blue-900">⏳ Awaiting Payment</div>
+                          <div className="text-xs text-blue-700">PO sent to Finance. No payment has been recorded yet.</div>
+                          <div className="text-xs font-semibold text-blue-800">Balance Due: ₹{poTotal.toLocaleString("en-IN")}</div>
+                        </div>
+                      );
+                    }
+
+                    const isPartial = payStatus === "partial";
                     return (
-                      <div className={`rounded-lg border p-4 space-y-1 ${isPartial ? "border-amber-200 bg-amber-50" : "border-green-200 bg-green-50"}`}>
+                      <div className={`rounded-lg border p-4 space-y-2 ${isPartial ? "border-amber-200 bg-amber-50" : "border-green-200 bg-green-50"}`}>
                         <div className={`text-sm font-semibold ${isPartial ? "text-amber-900" : "text-green-900"}`}>
-                          {isPartial ? "⚠️ Partially Paid" : "✅ Finance Paid"}
+                          {isPartial ? "⚠️ Partially Paid" : "✅ Fully Paid"}
                         </div>
-                        <div className={`text-xs ${isPartial ? "text-amber-700" : "text-green-700"}`}>
-                          Payment {isPartial ? "recorded" : "confirmed"} by Finance team on{" "}
-                          {new Date(viewPo.finance_paid_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}.
-                        </div>
-                        {viewPo.finance_paid_amount != null && (
-                          <div className={`text-xs font-semibold ${isPartial ? "text-amber-800" : "text-green-800"}`}>
-                            Amount Paid: ₹{paidAmt.toLocaleString("en-IN")}
-                            {isPartial && (
-                              <> of ₹{poTotal.toLocaleString("en-IN")} — Balance Due ₹{(poTotal - paidAmt).toLocaleString("en-IN")}</>
-                            )}
+                        {viewPo.finance_paid_at && (
+                          <div className={`text-xs ${isPartial ? "text-amber-700" : "text-green-700"}`}>
+                            Last payment recorded on{" "}
+                            {new Date(viewPo.finance_paid_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
                           </div>
+                        )}
+                        <div className={`text-xs font-semibold ${isPartial ? "text-amber-800" : "text-green-800"}`}>
+                          Paid: ₹{paidAmt.toLocaleString("en-IN")} of ₹{poTotal.toLocaleString("en-IN")}
+                          {isPartial && (
+                            <span className="text-red-700 ml-2">— Balance Due: ₹{balanceDue.toLocaleString("en-IN")}</span>
+                          )}
+                        </div>
+                        {viewPo.finance_payment_reference && (
+                          <div className={`text-xs ${isPartial ? "text-amber-700" : "text-green-700"}`}>
+                            Ref: {viewPo.finance_payment_reference}
+                          </div>
+                        )}
+                        {viewPo.finance_payment_note && (
+                          <div className={`text-xs italic ${isPartial ? "text-amber-600" : "text-green-600"}`}>
+                            Note: {viewPo.finance_payment_note}
+                          </div>
+                        )}
+                        {history.length > 1 && (
+                          <details className="mt-1">
+                            <summary className={`text-xs cursor-pointer ${isPartial ? "text-amber-700" : "text-green-700"}`}>
+                              Payment history ({history.length} entries)
+                            </summary>
+                            <div className="mt-1 space-y-1">
+                              {history.map((h, i) => (
+                                <div key={i} className={`text-xs ${isPartial ? "text-amber-700" : "text-green-700"}`}>
+                                  {new Date(h.recorded_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                                  {" — "}₹{Number(h.paid_amount).toLocaleString("en-IN")} ({h.payment_status})
+                                  {h.reference && ` · ${h.reference}`}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
                         )}
                       </div>
                     );
@@ -4012,13 +4057,20 @@ function PoTableRows({
                         ⚠ Dispatch failed
                       </span>
                     )}
-                    {r.finance_paid_at && (() => {
+                    {r.finance_dispatch_status === "sent" && (() => {
+                      const payStatus = r.finance_payment_status || "awaiting";
                       const paidAmt = Number(r.finance_paid_amount ?? 0);
-                      const poTotal = Number(r.grand_total ?? 0);
-                      const isPartial = paidAmt > 0 && poTotal > 0 && paidAmt < poTotal;
+                      if (payStatus === "awaiting") {
+                        return (
+                          <span className="text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit bg-blue-50 text-blue-700 border-blue-200">
+                            ⏳ Awaiting Payment
+                          </span>
+                        );
+                      }
+                      const isPartial = payStatus === "partial";
                       return (
                         <span className={`text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit ${isPartial ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-green-50 text-green-700 border-green-200"}`}>
-                          {isPartial ? "◐ Partially Paid" : "✓ Finance Paid"}
+                          {isPartial ? `◐ ₹${paidAmt.toLocaleString("en-IN")} paid` : "✓ Finance Paid"}
                         </span>
                       );
                     })()}
