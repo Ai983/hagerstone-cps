@@ -256,12 +256,13 @@ For any field not found on the card, use empty string. For phone, if the card sh
     return { total, active, blacklisted };
   }, [allSuppliers]);
 
-  // A supplier is "complete" when it has a name, at least one category, and a phone.
-  // Complete ones are usable for RFQs; the rest are treated as still-pending.
+  // Ready for RFQ = has name + at least one category + phone/whatsapp + city or state.
+  // All four are needed for RFQ auto-suggestion (contact to send, location to match, category to filter).
   const isSupplierComplete = (s: Supplier) =>
     !!(s.name && s.name.trim()) &&
     ((s.categories ?? []).filter(Boolean).length > 0) &&
-    !!(s.phone && s.phone.trim());
+    !!(s.phone?.trim() || s.whatsapp?.trim()) &&
+    !!(s.city?.trim() || s.state?.trim());
 
   const completenessCounts = useMemo(() => {
     let complete = 0;
@@ -438,7 +439,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Pending Registration</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Not Ready for RFQ</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-foreground">{completenessCounts.incomplete}</div>
@@ -546,7 +547,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
                       <TableCell>
                         <div className="flex flex-col gap-1">
                           {complete ? (
-                            <Badge className="text-xs border-0 bg-green-100 text-green-800 w-fit">Complete</Badge>
+                            <Badge className="text-xs border-0 bg-green-100 text-green-800 w-fit">Ready for RFQ</Badge>
                           ) : (
                             <Badge className="text-xs border-0 bg-amber-100 text-amber-800 w-fit">Pending Registration</Badge>
                           )}
@@ -601,7 +602,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
                     {complete ? (
-                      <Badge className="text-xs border-0 bg-green-100 text-green-800">Complete</Badge>
+                      <Badge className="text-xs border-0 bg-green-100 text-green-800">Ready for RFQ</Badge>
                     ) : (
                       <Badge className="text-xs border-0 bg-amber-100 text-amber-800">Pending</Badge>
                     )}
@@ -628,7 +629,7 @@ For any field not found on the card, use empty string. For phone, if the card sh
       <div className="flex items-start justify-between gap-2 lg:gap-4 flex-wrap">
         <div>
           <h1 className="text-xl lg:text-2xl font-bold text-foreground">Supplier Master</h1>
-          <p className="text-muted-foreground text-xs lg:text-sm mt-1">{stats.total} suppliers · {completenessCounts.incomplete} pending registration</p>
+          <p className="text-muted-foreground text-xs lg:text-sm mt-1">{stats.total} suppliers · {completenessCounts.complete} ready for RFQ · {completenessCounts.incomplete} pending</p>
         </div>
         {canManageSuppliers && (
           <Button onClick={openAdd}><Plus className="h-4 w-4 mr-2" />Naya Supplier Add Karo</Button>
@@ -638,10 +639,10 @@ For any field not found on the card, use empty string. For phone, if the card sh
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="complete">
-            Complete{completenessCounts.complete > 0 ? ` (${completenessCounts.complete})` : ""}
+            Ready for RFQ{completenessCounts.complete > 0 ? ` (${completenessCounts.complete})` : ""}
           </TabsTrigger>
           <TabsTrigger value="incomplete">
-            Pending Registrations{completenessCounts.incomplete > 0 ? ` (${completenessCounts.incomplete})` : ""}
+            Pending Registration{completenessCounts.incomplete > 0 ? ` (${completenessCounts.incomplete})` : ""}
           </TabsTrigger>
         </TabsList>
         <TabsContent value="complete" className="mt-4 space-y-6">{suppliersContent}</TabsContent>
