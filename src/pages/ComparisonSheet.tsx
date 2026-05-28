@@ -2612,10 +2612,15 @@ export default function ComparisonSheetPage() {
         .from("cps-comparison-pdfs")
         .upload(path, pdfBlob, { contentType: "application/pdf", upsert: true });
       if (error) return null;
-      const { data } = supabase.storage.from("cps-comparison-pdfs").getPublicUrl(path);
+      // cps-comparison-pdfs is private — sign a long-lived URL so the founder
+      // WhatsApp flow (Maytapi fetches the file) and the in-app viewer can load it.
+      const { data } = await supabase.storage
+        .from("cps-comparison-pdfs")
+        .createSignedUrl(path, 365 * 24 * 3600);
+      const signedUrl = data?.signedUrl ?? null;
       await supabase.from("cps_comparison_sheets")
-        .update({ comparison_pdf_url: data.publicUrl }).eq("id", sheetId);
-      return data.publicUrl;
+        .update({ comparison_pdf_url: signedUrl }).eq("id", sheetId);
+      return signedUrl;
     } catch {
       return null;
     }

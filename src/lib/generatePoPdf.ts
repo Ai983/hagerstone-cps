@@ -761,22 +761,26 @@ export async function uploadPoPdf(
   const path = `${poId}/${safeName}.pdf`;
 
   const { error } = await supabase.storage
-    .from("cps-po-pdfs")
+    .from("cps-po-documents")
     .upload(path, pdfBlob, { contentType: "application/pdf", upsert: true });
 
   if (error) {
     return null;
   }
 
-  const { data } = supabase.storage.from("cps-po-pdfs").getPublicUrl(path);
-  const publicUrl = data.publicUrl ?? null;
+  // cps-po-documents is private — sign a long-lived URL so the founder WhatsApp
+  // flow (Maytapi fetches the file) and the in-app PO viewer can both load it.
+  const { data } = await supabase.storage
+    .from("cps-po-documents")
+    .createSignedUrl(path, 365 * 24 * 3600);
+  const signedUrl = data?.signedUrl ?? null;
 
-  if (publicUrl) {
+  if (signedUrl) {
     await supabase
       .from("cps_purchase_orders")
-      .update({ po_pdf_url: publicUrl })
+      .update({ po_pdf_url: signedUrl })
       .eq("id", poId);
   }
 
-  return publicUrl;
+  return signedUrl;
 }
