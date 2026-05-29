@@ -52,6 +52,9 @@ interface VendorGroup {
 const inr = (v: number) =>
   '₹' + Math.round(v).toLocaleString('en-IN');
 
+const fmtDate = (d?: string | null) =>
+  d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—';
+
 function deriveStatus(po: PoRecord): 'paid' | 'partial' | 'awaiting' {
   if (po.finance_payment_status === 'paid') return 'paid';
   if (po.finance_payment_status === 'partial') return 'partial';
@@ -235,40 +238,42 @@ export default function BudgetList() {
           rs(amtWithGst),
           po.po_number,
           deriveStatus(po),
+          fmtDate(po.finance_paid_at),
         ]);
       });
       // Vendor subtotal row
       body.push([
         { content: `${group.supplierName} — Total`, colSpan: 7, styles: { fontStyle: 'bold', fillColor: subtleFill } },
         { content: rs(group.subtotal), styles: { fontStyle: 'bold', halign: 'right', fillColor: subtleFill } },
-        { content: `Paid ${rs(group.paidTotal)}${group.balance > 0.5 ? ` | Due ${rs(group.balance)}` : ''}`, colSpan: 2, styles: { fillColor: subtleFill, fontStyle: 'bold' } },
+        { content: `Paid ${rs(group.paidTotal)}${group.balance > 0.5 ? ` | Due ${rs(group.balance)}` : ''}`, colSpan: 3, styles: { fillColor: subtleFill, fontStyle: 'bold' } },
       ]);
     });
     // Grand total row
     body.push([
       { content: 'GRAND TOTAL', colSpan: 7, styles: { fontStyle: 'bold', fillColor: gold, textColor: brown } },
       { content: rs(summary.totalValue), styles: { fontStyle: 'bold', halign: 'right', fillColor: gold, textColor: brown } },
-      { content: `Paid ${rs(summary.totalPaid)}${summary.totalBalance > 0.5 ? ` | Due ${rs(summary.totalBalance)}` : ''}`, colSpan: 2, styles: { fillColor: gold, textColor: brown, fontStyle: 'bold' } },
+      { content: `Paid ${rs(summary.totalPaid)}${summary.totalBalance > 0.5 ? ` | Due ${rs(summary.totalBalance)}` : ''}`, colSpan: 3, styles: { fillColor: gold, textColor: brown, fontStyle: 'bold' } },
     ]);
 
     autoTable(doc, {
       startY: 42,
-      head: [['S.No', 'Vendor Name', 'Item', 'Qty', 'Unit', 'Rate', 'GST%', 'Amount', 'PO #', 'Status']],
+      head: [['S.No', 'Vendor Name', 'Item', 'Qty', 'Unit', 'Rate', 'GST%', 'Amount', 'PO #', 'Status', 'Paid On']],
       body,
       theme: 'grid',
       styles: { fontSize: 7.5, cellPadding: 1.5, overflow: 'linebreak', valign: 'middle', lineColor: [220, 215, 210], lineWidth: 0.1 },
       headStyles: { fillColor: brown, textColor: 255, fontSize: 8, fontStyle: 'bold', halign: 'center' },
       columnStyles: {
         0: { cellWidth: 10, halign: 'center' },  // S.No
-        1: { cellWidth: 40 },                      // Vendor
-        2: { cellWidth: 52 },                      // Item
-        3: { cellWidth: 13, halign: 'right' },    // Qty
-        4: { cellWidth: 13, halign: 'center' },   // Unit
-        5: { cellWidth: 28, halign: 'right' },    // Rate
-        6: { cellWidth: 13, halign: 'right' },    // GST%
-        7: { cellWidth: 34, halign: 'right' },    // Amount
-        8: { cellWidth: 38 },                      // PO #
-        9: { cellWidth: 22, halign: 'center' },   // Status
+        1: { cellWidth: 38 },                      // Vendor
+        2: { cellWidth: 46 },                      // Item
+        3: { cellWidth: 12, halign: 'right' },    // Qty
+        4: { cellWidth: 12, halign: 'center' },   // Unit
+        5: { cellWidth: 26, halign: 'right' },    // Rate
+        6: { cellWidth: 12, halign: 'right' },    // GST%
+        7: { cellWidth: 32, halign: 'right' },    // Amount
+        8: { cellWidth: 34 },                      // PO #
+        9: { cellWidth: 21, halign: 'center' },   // Status
+        10: { cellWidth: 22, halign: 'center' },  // Paid On
       },
       margin: { left: M, right: M },
     });
@@ -380,7 +385,7 @@ export default function BudgetList() {
               <table className="w-full text-sm min-w-[900px]">
                 <thead>
                   <tr className="bg-muted/60 border-b">
-                    {['S.No', 'Vendor Name', 'Items', 'Qty', 'Unit', 'Rate', 'GST%', 'Amount (incl. GST)', 'PO #', 'Status'].map(h => (
+                    {['S.No', 'Vendor Name', 'Items', 'Qty', 'Unit', 'Rate', 'GST%', 'Amount (incl. GST)', 'PO #', 'Status', 'Paid On'].map(h => (
                       <th
                         key={h}
                         className={`px-3 py-2.5 font-semibold text-xs text-muted-foreground whitespace-nowrap
@@ -425,6 +430,7 @@ export default function BudgetList() {
                               <td className="px-3 py-2 text-right font-medium tabular-nums">{inr(amtWithGst)}</td>
                               <td className="px-3 py-2 text-xs text-muted-foreground font-mono">{po.po_number}</td>
                               <td className="px-3 py-2"><StatusBadge po={po} /></td>
+                              <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{fmtDate(po.finance_paid_at)}</td>
                             </tr>
                           );
                         })}
@@ -436,7 +442,7 @@ export default function BudgetList() {
                           </td>
                           <td className="px-3 py-2.5" colSpan={5} />
                           <td className="px-3 py-2.5 text-right font-bold tabular-nums">{inr(group.subtotal)}</td>
-                          <td className="px-3 py-2.5" colSpan={2}>
+                          <td className="px-3 py-2.5" colSpan={3}>
                             <span className="text-xs text-green-700 font-medium">Paid: {inr(group.paidTotal)}</span>
                             {group.balance > 0.5 && (
                               <span className="text-xs text-red-600 font-medium ml-3">Due: {inr(group.balance)}</span>
@@ -447,7 +453,7 @@ export default function BudgetList() {
                         {/* Spacer between vendors */}
                         {gi < vendorGroups.length - 1 && (
                           <tr className="bg-muted/40">
-                            <td colSpan={10} className="py-1" />
+                            <td colSpan={11} className="py-1" />
                           </tr>
                         )}
                       </Fragment>
@@ -461,7 +467,7 @@ export default function BudgetList() {
                     </td>
                     <td className="px-3 py-3" colSpan={5} />
                     <td className="px-3 py-3 text-right font-bold text-base tabular-nums">{inr(summary.totalValue)}</td>
-                    <td className="px-3 py-3" colSpan={2}>
+                    <td className="px-3 py-3" colSpan={3}>
                       <span className="text-sm text-green-700 font-semibold">Paid: {inr(summary.totalPaid)}</span>
                       {summary.totalBalance > 0.5 && (
                         <span className="text-sm text-red-600 font-semibold ml-3">Due: {inr(summary.totalBalance)}</span>
