@@ -70,6 +70,7 @@ const SiteStock = lazyWithRetry(() => import("@/pages/SiteStock"));
 const SiteQuotes = lazyWithRetry(() => import("@/pages/SiteQuotes"));
 const ProjectBOQ = lazyWithRetry(() => import("@/pages/ProjectBOQ"));
 const StockOverview = lazyWithRetry(() => import("@/pages/StockOverview"));
+const BudgetList = lazyWithRetry(() => import("@/pages/BudgetList"));
 const AdminOverrides = lazyWithRetry(() => import("@/pages/AdminOverrides"));
 const NotFound = lazyWithRetry(() => import("@/pages/NotFound"));
 
@@ -123,6 +124,7 @@ const App = () => (
               <Route path="/site-quotes" element={<Protected><SiteQuotes /></Protected>} />
               <Route path="/boq" element={<Protected><ProjectBOQ /></Protected>} />
               <Route path="/stock-overview" element={<Protected><StockOverview /></Protected>} />
+              <Route path="/budget-list" element={<Protected><BudgetList /></Protected>} />
               <Route path="/admin/overrides" element={<Protected><AdminOverrides /></Protected>} />
               <Route path="*" element={<NotFound />} />
             </Routes>

@@ -1,0 +1,463 @@
+// src/pages/BudgetList.tsx
+import { useState, useEffect, useMemo, Fragment } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
+import { Loader2, Building2, FileDown } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+
+// ── Types ──────────────────────────────────────────────────────────────────
+interface LineItem {
+  id: string;
+  description: string;
+  quantity: number;
+  unit: string;
+  rate: number;
+  gst_percent: number;
+  total_value: number;
+  sort_order: number;
+}
+
+interface PoRecord {
+  id: string;
+  po_number: string;
+  ship_to_address: string;
+  grand_total: number;
+  status: string;
+  finance_payment_status: string | null;
+  finance_paid_amount: number | null;
+  finance_balance_due: number | null;
+  finance_paid_at: string | null;
+  payment_terms_type: string | null;
+  cps_suppliers: { id: string; name: string } | null;
+  cps_purchase_requisitions: { project_site: string; project_code: string } | null;
+  cps_po_line_items: LineItem[];
+}
+
+interface VendorGroup {
+  supplierName: string;
+  pos: PoRecord[];
+  subtotal: number;
+  paidTotal: number;
+  balance: number;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+const inr = (v: number) =>
+  '₹' + Math.round(v).toLocaleString('en-IN');
+
+function deriveStatus(po: PoRecord): 'paid' | 'partial' | 'awaiting' {
+  if (po.finance_payment_status === 'paid') return 'paid';
+  if (po.finance_payment_status === 'partial') return 'partial';
+  const paid = Number(po.finance_paid_amount ?? 0);
+  const total = Number(po.grand_total ?? 0);
+  if (paid > 0 && paid >= total - 0.01) return 'paid';
+  if (paid > 0) return 'partial';
+  return 'awaiting';
+}
+
+// Deduplicate line items that were double-inserted (same description + rate + gst)
+function dedupeItems(items: LineItem[]): LineItem[] {
+  const seen = new Set<string>();
+  return items.filter(item => {
+    const key = `${(item.description ?? '').trim()}|${item.rate}|${item.gst_percent}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function StatusBadge({ po }: { po: PoRecord }) {
+  const s = deriveStatus(po);
+  if (s === 'paid')
+    return <Badge className="bg-green-100 text-green-700 border-green-200 text-[10px] font-medium">Paid</Badge>;
+  if (s === 'partial')
+    return <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[10px] font-medium">Partial</Badge>;
+  return <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-[10px] font-medium">Awaiting</Badge>;
+}
+
+// Resolve the canonical project name for a PO — prefer project_code, fall
+// back to the free-text address so a PO without a project link is never lost.
+function projectKeyOf(po: PoRecord): string {
+  return (po.cps_purchase_requisitions?.project_code ?? '').trim() || po.ship_to_address || 'Unassigned';
+}
+
+// ── Component ──────────────────────────────────────────────────────────────
+export default function BudgetList() {
+  const [selectedSite, setSelectedSite] = useState<string>('');
+  const [allPos, setAllPos] = useState<PoRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // ── Load all paid POs once ─────────────────────────────────────────────
+  useEffect(() => {
+    async function loadData() {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('cps_purchase_orders')
+        .select(`
+          id, po_number, ship_to_address, grand_total, status,
+          finance_payment_status, finance_paid_amount, finance_balance_due, finance_paid_at,
+          payment_terms_type,
+          cps_suppliers(id, name),
+          cps_purchase_requisitions(project_site, project_code),
+          cps_po_line_items(id, description, quantity, unit, rate, gst_percent, total_value, sort_order)
+        `)
+        .eq('finance_dispatch_status', 'sent')
+        .not('finance_paid_amount', 'is', null)
+        .gt('finance_paid_amount', 0)
+        .neq('status', 'cancelled')
+        .order('created_at', { ascending: true });
+
+      if (error) { toast.error('Failed to load budget data'); setLoading(false); return; }
+      setAllPos((data ?? []) as unknown as PoRecord[]);
+      setLoading(false);
+    }
+    loadData();
+  }, []);
+
+  // ── Distinct projects (grouped by canonical project name) ──────────────
+  const sites = useMemo(() => {
+    const seen = new Set<string>();
+    const list: { value: string; label: string }[] = [];
+    allPos.forEach(po => {
+      const key = projectKeyOf(po);
+      if (seen.has(key)) return;
+      seen.add(key);
+      list.push({ value: key, label: key });
+    });
+    return list.sort((a, b) => a.label.localeCompare(b.label));
+  }, [allPos]);
+
+  // ── POs for the selected project ───────────────────────────────────────
+  const pos = useMemo(
+    () => (selectedSite ? allPos.filter(po => projectKeyOf(po) === selectedSite) : []),
+    [allPos, selectedSite]
+  );
+  const sitesLoading = loading;
+
+  // ── Group by vendor ────────────────────────────────────────────────────
+  const vendorGroups = useMemo<VendorGroup[]>(() => {
+    const map = new Map<string, VendorGroup>();
+    pos.forEach(po => {
+      const name = po.cps_suppliers?.name ?? po.po_number;
+      const key = po.cps_suppliers?.id ?? name;
+      if (!map.has(key)) {
+        map.set(key, { supplierName: name, pos: [], subtotal: 0, paidTotal: 0, balance: 0 });
+      }
+      const g = map.get(key)!;
+      g.pos.push(po);
+      g.subtotal += Number(po.grand_total ?? 0);
+      g.paidTotal += Number(po.finance_paid_amount ?? 0);
+      g.balance += Number(
+        po.finance_balance_due ?? Math.max(0, Number(po.grand_total ?? 0) - Number(po.finance_paid_amount ?? 0))
+      );
+    });
+    return Array.from(map.values()).sort((a, b) => a.supplierName.localeCompare(b.supplierName));
+  }, [pos]);
+
+  const summary = useMemo(() => ({
+    totalValue:   vendorGroups.reduce((s, g) => s + g.subtotal,   0),
+    totalPaid:    vendorGroups.reduce((s, g) => s + g.paidTotal,  0),
+    totalBalance: vendorGroups.reduce((s, g) => s + g.balance,    0),
+    vendorCount:  vendorGroups.length,
+    poCount:      pos.length,
+  }), [vendorGroups, pos]);
+
+  const siteLabel = sites.find(s => s.value === selectedSite)?.label ?? selectedSite;
+  let serial = 0;
+
+  // ── Download the current site's budget as a PDF ─────────────────────────
+  function downloadPdf() {
+    if (!selectedSite || vendorGroups.length === 0) return;
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const W = doc.internal.pageSize.getWidth();
+    const brown = [101, 56, 35] as [number, number, number];
+    const gold = [212, 168, 85] as [number, number, number];
+
+    // Header band
+    doc.setFillColor(...brown);
+    doc.rect(0, 0, W, 20, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(13);
+    doc.text('HAGERSTONE INTERNATIONAL — BUDGET LIST', 14, 8);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.text(siteLabel, 14, 14);
+    doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, W - 14, 14, { align: 'right' });
+    doc.setTextColor(0, 0, 0);
+
+    // Summary line
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.text(
+      `Total PO Value: ${inr(summary.totalValue)}    Paid: ${inr(summary.totalPaid)}    Balance Due: ${inr(summary.totalBalance)}`,
+      14, 27
+    );
+
+    // Build table body grouped by vendor with subtotal rows
+    const body: any[] = [];
+    let sn = 0;
+    vendorGroups.forEach(group => {
+      const rows: { li: LineItem; po: PoRecord }[] = [];
+      group.pos.forEach(po => {
+        dedupeItems([...(po.cps_po_line_items ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)))
+          .forEach(li => rows.push({ li, po }));
+      });
+      rows.forEach(({ li, po }, idx) => {
+        sn++;
+        const amtWithGst = Number(li.total_value ?? 0) * (1 + Number(li.gst_percent ?? 0) / 100);
+        body.push([
+          String(sn),
+          idx === 0 ? group.supplierName : '"',
+          li.description || '—',
+          Number(li.quantity ?? 0).toLocaleString('en-IN'),
+          li.unit || '—',
+          inr(Number(li.rate ?? 0)),
+          `${Number(li.gst_percent ?? 0)}%`,
+          inr(amtWithGst),
+          po.po_number,
+          deriveStatus(po),
+        ]);
+      });
+      // Vendor subtotal row
+      body.push([
+        { content: `${group.supplierName} — Total`, colSpan: 7, styles: { fontStyle: 'bold', fillColor: [245, 240, 235] } },
+        { content: inr(group.subtotal), styles: { fontStyle: 'bold', halign: 'right', fillColor: [245, 240, 235] } },
+        { content: `Paid ${inr(group.paidTotal)}${group.balance > 0.5 ? ` / Due ${inr(group.balance)}` : ''}`, colSpan: 2, styles: { fillColor: [245, 240, 235], fontSize: 7 } },
+      ]);
+    });
+    // Grand total row
+    body.push([
+      { content: 'GRAND TOTAL', colSpan: 7, styles: { fontStyle: 'bold', fillColor: gold } },
+      { content: inr(summary.totalValue), styles: { fontStyle: 'bold', halign: 'right', fillColor: gold } },
+      { content: `Paid ${inr(summary.totalPaid)}${summary.totalBalance > 0.5 ? ` / Due ${inr(summary.totalBalance)}` : ''}`, colSpan: 2, styles: { fillColor: gold, fontSize: 7 } },
+    ]);
+
+    autoTable(doc, {
+      startY: 32,
+      head: [['S.No', 'Vendor', 'Item', 'Qty', 'Unit', 'Rate', 'GST%', 'Amount', 'PO #', 'Status']],
+      body,
+      styles: { fontSize: 7, cellPadding: 1.5 },
+      headStyles: { fillColor: brown, textColor: 255, fontSize: 7.5 },
+      columnStyles: {
+        0: { cellWidth: 9 },
+        3: { halign: 'right' },
+        5: { halign: 'right' },
+        6: { halign: 'right' },
+        7: { halign: 'right' },
+      },
+      margin: { left: 8, right: 8 },
+    });
+
+    const safeName = siteLabel.replace(/[^a-z0-9]+/gi, '_').slice(0, 40);
+    doc.save(`BudgetList_${safeName}_${new Date().toISOString().slice(0, 10)}.pdf`);
+  }
+
+  return (
+    <div className="p-6 space-y-6 max-w-[1500px] mx-auto">
+
+      {/* ── Header ── */}
+      <div className="flex items-start justify-between flex-wrap gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Budget List</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Site-wise PO spend tracker — auto-updated from Finance payments
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="w-72">
+            {sitesLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground h-10">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading sites…
+              </div>
+            ) : (
+              <Select value={selectedSite} onValueChange={setSelectedSite}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a site / project" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sites.length === 0 && (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">
+                      No sites with payments yet
+                    </div>
+                  )}
+                  {sites.map(s => (
+                    <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            onClick={downloadPdf}
+            disabled={!selectedSite || vendorGroups.length === 0}
+          >
+            <FileDown className="h-4 w-4 mr-2" />
+            Download PDF
+          </Button>
+        </div>
+      </div>
+
+      {/* ── Empty state ── */}
+      {!selectedSite && (
+        <div className="flex flex-col items-center justify-center py-24 text-muted-foreground">
+          <Building2 className="h-14 w-14 mb-4 opacity-25" />
+          <p className="text-sm font-medium">Select a site to view its budget list</p>
+          <p className="text-xs mt-1 opacity-70">Sites appear here once the first payment is recorded in Finance</p>
+        </div>
+      )}
+
+      {selectedSite && (
+        <>
+          {/* ── Summary cards ── */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            {[
+              { label: 'Total PO Value',  value: inr(summary.totalValue),   color: 'text-foreground' },
+              { label: 'Total Paid',      value: inr(summary.totalPaid),    color: 'text-green-700' },
+              { label: 'Balance Due',     value: inr(summary.totalBalance), color: 'text-red-600' },
+              { label: 'Vendors',         value: String(summary.vendorCount), color: 'text-foreground' },
+              { label: 'POs',            value: String(summary.poCount),    color: 'text-foreground' },
+            ].map(card => (
+              <Card key={card.label}>
+                <CardContent className="pt-4 pb-3">
+                  <div className="text-xs text-muted-foreground">{card.label}</div>
+                  <div className={`text-xl font-bold mt-1 ${card.color}`}>{card.value}</div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {/* ── Site title ── */}
+          <div className="text-center py-1">
+            <div className="text-base font-semibold text-foreground">{siteLabel}</div>
+            {selectedSite !== siteLabel && (
+              <div className="text-xs text-muted-foreground mt-0.5">{selectedSite}</div>
+            )}
+          </div>
+
+          {/* ── Loading ── */}
+          {loading && (
+            <div className="flex justify-center py-20">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          )}
+
+          {/* ── Empty data ── */}
+          {!loading && vendorGroups.length === 0 && (
+            <div className="text-center py-16 text-sm text-muted-foreground">
+              No paid POs found for this site.
+            </div>
+          )}
+
+          {/* ── Budget Table ── */}
+          {!loading && vendorGroups.length > 0 && (
+            <div className="rounded-lg border overflow-x-auto">
+              <table className="w-full text-sm min-w-[900px]">
+                <thead>
+                  <tr className="bg-muted/60 border-b">
+                    {['S.No', 'Vendor Name', 'Items', 'Qty', 'Unit', 'Rate', 'GST%', 'Amount (incl. GST)', 'PO #', 'Status'].map(h => (
+                      <th
+                        key={h}
+                        className={`px-3 py-2.5 font-semibold text-xs text-muted-foreground whitespace-nowrap
+                          ${['Qty','Rate','GST%','Amount (incl. GST)'].includes(h) ? 'text-right' : 'text-left'}`}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {vendorGroups.map((group, gi) => {
+                    // Flatten all line items across vendor's POs, deduped per PO
+                    const allRows: { li: LineItem; po: PoRecord }[] = [];
+                    group.pos.forEach(po => {
+                      const items = dedupeItems(
+                        [...(po.cps_po_line_items ?? [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+                      );
+                      items.forEach(li => allRows.push({ li, po }));
+                    });
+
+                    return (
+                      <Fragment key={group.supplierName}>
+                        {/* ── Line item rows ── */}
+                        {allRows.map(({ li, po }, idx) => {
+                          serial++;
+                          const amtWithGst = Number(li.total_value ?? 0) * (1 + Number(li.gst_percent ?? 0) / 100);
+                          return (
+                            <tr
+                              key={`${po.id}-${li.id}-${idx}`}
+                              className={idx % 2 === 0 ? 'bg-background' : 'bg-muted/20'}
+                            >
+                              <td className="px-3 py-2 text-muted-foreground tabular-nums text-xs">{serial}</td>
+                              <td className="px-3 py-2 font-medium text-foreground">
+                                {idx === 0 ? group.supplierName : <span className="text-muted-foreground text-xs">〃</span>}
+                              </td>
+                              <td className="px-3 py-2 text-foreground">{li.description || '—'}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">{Number(li.quantity ?? 0).toLocaleString('en-IN')}</td>
+                              <td className="px-3 py-2 text-muted-foreground">{li.unit || '—'}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">{inr(Number(li.rate ?? 0))}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">{Number(li.gst_percent ?? 0)}%</td>
+                              <td className="px-3 py-2 text-right font-medium tabular-nums">{inr(amtWithGst)}</td>
+                              <td className="px-3 py-2 text-xs text-muted-foreground font-mono">{po.po_number}</td>
+                              <td className="px-3 py-2"><StatusBadge po={po} /></td>
+                            </tr>
+                          );
+                        })}
+
+                        {/* ── Vendor subtotal ── */}
+                        <tr className="bg-primary/5 border-t border-b border-primary/10">
+                          <td className="px-3 py-2.5" colSpan={2}>
+                            <span className="text-xs font-semibold text-primary">{group.supplierName} — Total</span>
+                          </td>
+                          <td className="px-3 py-2.5" colSpan={5} />
+                          <td className="px-3 py-2.5 text-right font-bold tabular-nums">{inr(group.subtotal)}</td>
+                          <td className="px-3 py-2.5" colSpan={2}>
+                            <span className="text-xs text-green-700 font-medium">Paid: {inr(group.paidTotal)}</span>
+                            {group.balance > 0.5 && (
+                              <span className="text-xs text-red-600 font-medium ml-3">Due: {inr(group.balance)}</span>
+                            )}
+                          </td>
+                        </tr>
+
+                        {/* Spacer between vendors */}
+                        {gi < vendorGroups.length - 1 && (
+                          <tr className="bg-muted/40">
+                            <td colSpan={10} className="py-1" />
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+
+                  {/* ── Grand total ── */}
+                  <tr className="bg-primary/10 border-t-2 border-primary/20">
+                    <td className="px-3 py-3" colSpan={2}>
+                      <span className="font-bold text-foreground">GRAND TOTAL</span>
+                    </td>
+                    <td className="px-3 py-3" colSpan={5} />
+                    <td className="px-3 py-3 text-right font-bold text-base tabular-nums">{inr(summary.totalValue)}</td>
+                    <td className="px-3 py-3" colSpan={2}>
+                      <span className="text-sm text-green-700 font-semibold">Paid: {inr(summary.totalPaid)}</span>
+                      {summary.totalBalance > 0.5 && (
+                        <span className="text-sm text-red-600 font-semibold ml-3">Due: {inr(summary.totalBalance)}</span>
+                      )}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
