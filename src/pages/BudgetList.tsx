@@ -176,30 +176,38 @@ export default function BudgetList() {
   function downloadPdf() {
     if (!selectedSite || vendorGroups.length === 0) return;
 
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const W = doc.internal.pageSize.getWidth();
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const W = doc.internal.pageSize.getWidth();   // 297mm
+    const M = 10;                                  // page margin
     const brown = [101, 56, 35] as [number, number, number];
     const gold = [212, 168, 85] as [number, number, number];
+    const subtleFill = [245, 240, 235] as [number, number, number];
 
     // Header band
     doc.setFillColor(...brown);
-    doc.rect(0, 0, W, 20, 'F');
+    doc.rect(0, 0, W, 22, 'F');
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text('HAGERSTONE INTERNATIONAL — BUDGET LIST', 14, 8);
-    doc.setFontSize(9);
+    doc.setFontSize(14);
+    doc.text('HAGERSTONE INTERNATIONAL', M, 9);
+    doc.setFontSize(10);
     doc.setFont('helvetica', 'normal');
-    doc.text(siteLabel, 14, 14);
-    doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, W - 14, 14, { align: 'right' });
+    doc.text('Budget List', M, 15);
+    doc.setFontSize(8);
+    doc.text(`Generated: ${new Date().toLocaleString('en-IN')}`, W - M, 9, { align: 'right' });
     doc.setTextColor(0, 0, 0);
 
+    // Site name
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.text(siteLabel, M, 30, { maxWidth: W - 2 * M });
+
     // Summary line
-    doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
     doc.text(
-      `Total PO Value: ${inr(summary.totalValue)}    Paid: ${inr(summary.totalPaid)}    Balance Due: ${inr(summary.totalBalance)}`,
-      14, 27
+      `Total PO Value: ${inr(summary.totalValue)}     Paid: ${inr(summary.totalPaid)}     Balance Due: ${inr(summary.totalBalance)}     |     Vendors: ${summary.vendorCount}     POs: ${summary.poCount}`,
+      M, 37
     );
 
     // Build table body grouped by vendor with subtotal rows
@@ -229,32 +237,38 @@ export default function BudgetList() {
       });
       // Vendor subtotal row
       body.push([
-        { content: `${group.supplierName} — Total`, colSpan: 7, styles: { fontStyle: 'bold', fillColor: [245, 240, 235] } },
-        { content: inr(group.subtotal), styles: { fontStyle: 'bold', halign: 'right', fillColor: [245, 240, 235] } },
-        { content: `Paid ${inr(group.paidTotal)}${group.balance > 0.5 ? ` / Due ${inr(group.balance)}` : ''}`, colSpan: 2, styles: { fillColor: [245, 240, 235], fontSize: 7 } },
+        { content: `${group.supplierName} — Total`, colSpan: 7, styles: { fontStyle: 'bold', fillColor: subtleFill } },
+        { content: inr(group.subtotal), styles: { fontStyle: 'bold', halign: 'right', fillColor: subtleFill } },
+        { content: `Paid ${inr(group.paidTotal)}${group.balance > 0.5 ? ` | Due ${inr(group.balance)}` : ''}`, colSpan: 2, styles: { fillColor: subtleFill, fontStyle: 'bold' } },
       ]);
     });
     // Grand total row
     body.push([
-      { content: 'GRAND TOTAL', colSpan: 7, styles: { fontStyle: 'bold', fillColor: gold } },
-      { content: inr(summary.totalValue), styles: { fontStyle: 'bold', halign: 'right', fillColor: gold } },
-      { content: `Paid ${inr(summary.totalPaid)}${summary.totalBalance > 0.5 ? ` / Due ${inr(summary.totalBalance)}` : ''}`, colSpan: 2, styles: { fillColor: gold, fontSize: 7 } },
+      { content: 'GRAND TOTAL', colSpan: 7, styles: { fontStyle: 'bold', fillColor: gold, textColor: brown } },
+      { content: inr(summary.totalValue), styles: { fontStyle: 'bold', halign: 'right', fillColor: gold, textColor: brown } },
+      { content: `Paid ${inr(summary.totalPaid)}${summary.totalBalance > 0.5 ? ` | Due ${inr(summary.totalBalance)}` : ''}`, colSpan: 2, styles: { fillColor: gold, textColor: brown, fontStyle: 'bold' } },
     ]);
 
     autoTable(doc, {
-      startY: 32,
-      head: [['S.No', 'Vendor', 'Item', 'Qty', 'Unit', 'Rate', 'GST%', 'Amount', 'PO #', 'Status']],
+      startY: 42,
+      head: [['S.No', 'Vendor Name', 'Item', 'Qty', 'Unit', 'Rate', 'GST%', 'Amount', 'PO #', 'Status']],
       body,
-      styles: { fontSize: 7, cellPadding: 1.5 },
-      headStyles: { fillColor: brown, textColor: 255, fontSize: 7.5 },
+      theme: 'grid',
+      styles: { fontSize: 7.5, cellPadding: 1.5, overflow: 'linebreak', valign: 'middle', lineColor: [220, 215, 210], lineWidth: 0.1 },
+      headStyles: { fillColor: brown, textColor: 255, fontSize: 8, fontStyle: 'bold', halign: 'center' },
       columnStyles: {
-        0: { cellWidth: 9 },
-        3: { halign: 'right' },
-        5: { halign: 'right' },
-        6: { halign: 'right' },
-        7: { halign: 'right' },
+        0: { cellWidth: 11, halign: 'center' },  // S.No
+        1: { cellWidth: 42 },                      // Vendor
+        2: { cellWidth: 60 },                      // Item
+        3: { cellWidth: 14, halign: 'right' },    // Qty
+        4: { cellWidth: 14, halign: 'center' },   // Unit
+        5: { cellWidth: 24, halign: 'right' },    // Rate
+        6: { cellWidth: 14, halign: 'right' },    // GST%
+        7: { cellWidth: 28, halign: 'right' },    // Amount
+        8: { cellWidth: 38 },                      // PO #
+        9: { cellWidth: 22, halign: 'center' },   // Status
       },
-      margin: { left: 8, right: 8 },
+      margin: { left: M, right: M },
     });
 
     const safeName = siteLabel.replace(/[^a-z0-9]+/gi, '_').slice(0, 40);
