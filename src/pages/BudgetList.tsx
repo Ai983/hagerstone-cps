@@ -182,6 +182,8 @@ export default function BudgetList() {
     const brown = [101, 56, 35] as [number, number, number];
     const gold = [212, 168, 85] as [number, number, number];
     const subtleFill = [245, 240, 235] as [number, number, number];
+    // jsPDF's Helvetica has no ₹ glyph — use "Rs" so numbers render & measure correctly
+    const rs = (v: number) => 'Rs ' + Math.round(v).toLocaleString('en-IN');
 
     // Header band
     doc.setFillColor(...brown);
@@ -206,7 +208,7 @@ export default function BudgetList() {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.text(
-      `Total PO Value: ${inr(summary.totalValue)}     Paid: ${inr(summary.totalPaid)}     Balance Due: ${inr(summary.totalBalance)}     |     Vendors: ${summary.vendorCount}     POs: ${summary.poCount}`,
+      `Total PO Value: ${rs(summary.totalValue)}     Paid: ${rs(summary.totalPaid)}     Balance Due: ${rs(summary.totalBalance)}     |     Vendors: ${summary.vendorCount}     POs: ${summary.poCount}`,
       M, 37
     );
 
@@ -228,9 +230,9 @@ export default function BudgetList() {
           li.description || '—',
           Number(li.quantity ?? 0).toLocaleString('en-IN'),
           li.unit || '—',
-          inr(Number(li.rate ?? 0)),
+          rs(Number(li.rate ?? 0)),
           `${Number(li.gst_percent ?? 0)}%`,
-          inr(amtWithGst),
+          rs(amtWithGst),
           po.po_number,
           deriveStatus(po),
         ]);
@@ -238,15 +240,15 @@ export default function BudgetList() {
       // Vendor subtotal row
       body.push([
         { content: `${group.supplierName} — Total`, colSpan: 7, styles: { fontStyle: 'bold', fillColor: subtleFill } },
-        { content: inr(group.subtotal), styles: { fontStyle: 'bold', halign: 'right', fillColor: subtleFill } },
-        { content: `Paid ${inr(group.paidTotal)}${group.balance > 0.5 ? ` | Due ${inr(group.balance)}` : ''}`, colSpan: 2, styles: { fillColor: subtleFill, fontStyle: 'bold' } },
+        { content: rs(group.subtotal), styles: { fontStyle: 'bold', halign: 'right', fillColor: subtleFill } },
+        { content: `Paid ${rs(group.paidTotal)}${group.balance > 0.5 ? ` | Due ${rs(group.balance)}` : ''}`, colSpan: 2, styles: { fillColor: subtleFill, fontStyle: 'bold' } },
       ]);
     });
     // Grand total row
     body.push([
       { content: 'GRAND TOTAL', colSpan: 7, styles: { fontStyle: 'bold', fillColor: gold, textColor: brown } },
-      { content: inr(summary.totalValue), styles: { fontStyle: 'bold', halign: 'right', fillColor: gold, textColor: brown } },
-      { content: `Paid ${inr(summary.totalPaid)}${summary.totalBalance > 0.5 ? ` | Due ${inr(summary.totalBalance)}` : ''}`, colSpan: 2, styles: { fillColor: gold, textColor: brown, fontStyle: 'bold' } },
+      { content: rs(summary.totalValue), styles: { fontStyle: 'bold', halign: 'right', fillColor: gold, textColor: brown } },
+      { content: `Paid ${rs(summary.totalPaid)}${summary.totalBalance > 0.5 ? ` | Due ${rs(summary.totalBalance)}` : ''}`, colSpan: 2, styles: { fillColor: gold, textColor: brown, fontStyle: 'bold' } },
     ]);
 
     autoTable(doc, {
@@ -257,14 +259,14 @@ export default function BudgetList() {
       styles: { fontSize: 7.5, cellPadding: 1.5, overflow: 'linebreak', valign: 'middle', lineColor: [220, 215, 210], lineWidth: 0.1 },
       headStyles: { fillColor: brown, textColor: 255, fontSize: 8, fontStyle: 'bold', halign: 'center' },
       columnStyles: {
-        0: { cellWidth: 11, halign: 'center' },  // S.No
-        1: { cellWidth: 42 },                      // Vendor
-        2: { cellWidth: 60 },                      // Item
-        3: { cellWidth: 14, halign: 'right' },    // Qty
-        4: { cellWidth: 14, halign: 'center' },   // Unit
-        5: { cellWidth: 24, halign: 'right' },    // Rate
-        6: { cellWidth: 14, halign: 'right' },    // GST%
-        7: { cellWidth: 28, halign: 'right' },    // Amount
+        0: { cellWidth: 10, halign: 'center' },  // S.No
+        1: { cellWidth: 40 },                      // Vendor
+        2: { cellWidth: 52 },                      // Item
+        3: { cellWidth: 13, halign: 'right' },    // Qty
+        4: { cellWidth: 13, halign: 'center' },   // Unit
+        5: { cellWidth: 28, halign: 'right' },    // Rate
+        6: { cellWidth: 13, halign: 'right' },    // GST%
+        7: { cellWidth: 34, halign: 'right' },    // Amount
         8: { cellWidth: 38 },                      // PO #
         9: { cellWidth: 22, halign: 'center' },   // Status
       },
