@@ -778,7 +778,15 @@ export default function Quotes() {
       // 4. Delete line items
       await supabase.from("cps_quote_line_items").delete().eq("quote_id", reviewQuote.id);
 
-      // 5. Reset response_status on rfq_suppliers so they can submit another
+      // 5. Release the upload token (RESTRICT FK -> blocks the quote delete otherwise).
+      //    Reopening it (quote_id + used_at null) also lets the vendor resubmit via
+      //    the same link if it hasn't expired.
+      await supabase
+        .from("cps_quote_upload_tokens")
+        .update({ quote_id: null, used_at: null })
+        .eq("quote_id", reviewQuote.id);
+
+      // 6. Reset response_status on rfq_suppliers so they can submit another
       if (reviewQuote.supplier_id) {
         await supabase
           .from("cps_rfq_suppliers")
@@ -787,7 +795,7 @@ export default function Quotes() {
           .eq("supplier_id", reviewQuote.supplier_id);
       }
 
-      // 6. Delete the quote itself
+      // 7. Delete the quote itself
       const { error: delErr } = await supabase.from("cps_quotes").delete().eq("id", reviewQuote.id);
       if (delErr) throw delErr;
 
@@ -1146,7 +1154,31 @@ Rules:
       }).eq("id", reviewQuote.id);
       if (quoteErr) { toast.error("Failed to save review"); setSavingReview(false); return; }
 
-      await supabase.from("cps_quote_line_items").delete().eq("quote_id", reviewQuote.id);
+      // Replace the existing line items. Verify the delete actually removed rows
+      // (with .select()) — a silently-denied delete here previously left the old
+      // rows in place, so the subsequent insert DOUBLED the quote's line items.
+      const { data: deletedRows, error: delLiErr } = await supabase
+        .from("cps_quote_line_items")
+        .delete()
+        .eq("quote_id", reviewQuote.id)
+        .select("id");
+      if (delLiErr) {
+        toast.error("Failed to clear old line items — review not saved");
+        setSavingReview(false);
+        return;
+      }
+      // Defensive: if rows existed but none were deleted, the delete was blocked
+      // (e.g. missing RLS policy). Abort rather than insert duplicates.
+      const { count: remainingLi } = await supabase
+        .from("cps_quote_line_items")
+        .select("id", { count: "exact", head: true })
+        .eq("quote_id", reviewQuote.id);
+      if ((remainingLi ?? 0) > 0) {
+        toast.error("Could not replace old line items (delete blocked) — review not saved");
+        setSavingReview(false);
+        return;
+      }
+      void deletedRows;
 
       const lineItems = items.map((item: any) => {
         const matchedPr = item.matched_pr_item_index != null ? prLineItems[item.matched_pr_item_index] : null;

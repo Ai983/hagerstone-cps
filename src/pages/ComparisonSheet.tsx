@@ -2908,8 +2908,30 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
       ]);
       if (qliErr) throw qliErr;
 
+      // Defensive de-dup: a quote can carry duplicate line-item rows (e.g. a
+      // re-review that failed to clear the old rows). The comparison sheet hides
+      // this because it keys cells by PR-line × supplier, but the PO is built
+      // 1:1 from these rows — so duplicates would double every line on the PO.
+      // Collapse rows that share the same PR line item (or the same
+      // description+brand+rate when unlinked) before building the PO.
+      const seenLiKeys = new Set<string>();
+      const dedupedQuoteLineItems = (quoteLineItems ?? []).filter((li: any) => {
+        const key = li.pr_line_item_id
+          ? `pr:${li.pr_line_item_id}`
+          : `d:${String(li.original_description ?? "").trim().toLowerCase()}|${String(li.brand ?? "").trim().toLowerCase()}|${Number(li.rate ?? 0)}`;
+        if (seenLiKeys.has(key)) return false;
+        seenLiKeys.add(key);
+        return true;
+      });
+      if (dedupedQuoteLineItems.length !== (quoteLineItems ?? []).length) {
+        console.warn(
+          `Quote ${quote.id} had ${(quoteLineItems ?? []).length} line items, ` +
+          `${dedupedQuoteLineItems.length} after de-dup — duplicate rows skipped for PO.`,
+        );
+      }
+
       // Compute totals from quote line items so they're stored on the PO and line items
-      const poLineItemsToInsert = (quoteLineItems ?? []).map((li: any) => {
+      const poLineItemsToInsert = dedupedQuoteLineItems.map((li: any) => {
         const qty      = Number(li.quantity   ?? 0);
         const rate     = Number(li.rate       ?? 0);
         const gstPct   = Number(li.gst_percent ?? 0);
