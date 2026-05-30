@@ -799,7 +799,24 @@ export default function Quotes() {
       const { error: delErr } = await supabase.from("cps_quotes").delete().eq("id", reviewQuote.id);
       if (delErr) throw delErr;
 
-      // 7. Audit log
+      // 8. Roll back the RFQ's status if it no longer has enough approved quotes.
+      //    The RFQ is auto-promoted to "comparison_ready" at >= 3 approved quotes;
+      //    deleting a quote can drop it below that, so revert to "sent" to keep the
+      //    status consistent (it re-promotes automatically when a 3rd quote lands).
+      const { count: approvedAfterDelete } = await supabase
+        .from("cps_quotes")
+        .select("id", { count: "exact", head: true })
+        .eq("rfq_id", reviewQuote.rfq_id)
+        .eq("parse_status", "approved");
+      if ((approvedAfterDelete ?? 0) < 3) {
+        await supabase
+          .from("cps_rfqs")
+          .update({ status: "sent" })
+          .eq("id", reviewQuote.rfq_id)
+          .eq("status", "comparison_ready");
+      }
+
+      // 9. Audit log
       await supabase.from("cps_audit_log").insert({
         user_id: user.id,
         user_name: user.name,
