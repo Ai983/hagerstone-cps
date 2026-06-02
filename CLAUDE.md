@@ -195,4 +195,6 @@ Projects live **only** in `cps_projects` — every project dropdown/filter app-w
 - `CPS_PRD_FOR_CURSOR.md` — original 21-step ideal; superseded on PR-status enums, audit column, email-first
 - `SCOPE_CHANGE_REPORT.md` — why reality diverged from the PRD (email→WhatsApp, no scraping, human checkpoints)
 
-> 15 stale/parked/superseded docs (old handoffs, cross-schema plan, Typeform & Google-auth tasks, RFQ bug-fix notes, founder-additions, master-task, presentation brief) were **deleted 2026-06**; their useful content is folded into this file. `CPS_PROJECTS.md` is referenced in spots but is currently **MISSING** from the repo — recreate from `cps_projects` or drop the references.
+- `CPS_PROJECTS.md` — canonical project list + address-quality notes (regenerated from live `cps_projects`, 2026-06-03)
+
+> 15 stale/parked/superseded docs (old handoffs, cross-schema plan, Typeform & Google-auth tasks, RFQ bug-fix notes, founder-additions, master-task, presentation brief) were **deleted 2026-06**; their useful content is folded into this file.
