@@ -100,6 +100,7 @@ type PoHeader = {
 
 type PoLine = {
   id: string;
+  item_id: string | null;
   description: string | null;
   brand: string | null;
   quantity: number | null;
@@ -123,6 +124,21 @@ const formatDate = (d: string | null | undefined) =>
 const waLink = (v: VendorRow | SupplierDetail) => {
   const num = (v.whatsapp || v.phone || "").replace(/\D/g, "");
   return num ? `https://wa.me/${num}` : null;
+};
+
+// Does a PO line correspond to the item being sourced? item_id is the reliable
+// signal (only ~26% of lines are id-linked), so fall back to a description match.
+const itemLineMatches = (sourced: ExplorerItem | null, lineItemId: string | null, description: string | null) => {
+  if (!sourced) return false;
+  if (lineItemId && lineItemId === sourced.id) return true;
+  const desc = (description ?? "").toLowerCase().trim();
+  const name = (sourced.name ?? "").toLowerCase().trim();
+  if (!desc || !name) return false;
+  if (desc === name) return true;
+  // one contains the other, but only when the shorter string is specific
+  // enough (>= 4 chars) to avoid spurious matches on tiny tokens.
+  const shorter = desc.length <= name.length ? desc : name;
+  return shorter.length >= 4 && (desc.includes(name) || name.includes(desc));
 };
 
 const statusBadgeClass = (status: string) =>
@@ -152,6 +168,7 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
   // View 2 — vendor detail + PO history
   const [supplier, setSupplier] = useState<SupplierDetail | null>(null);
   const [supplierPOs, setSupplierPOs] = useState<SupplierPO[]>([]);
+  const [posWithItem, setPosWithItem] = useState<Set<string>>(new Set());
   const [vendorLoading, setVendorLoading] = useState(false);
 
   // View 3 — PO read-only summary
@@ -280,6 +297,7 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
       setVendorLoading(true);
       setSupplier(null);
       setSupplierPOs([]);
+      setPosWithItem(new Set());
       const [{ data: s }, { data: pos }] = await Promise.all([
         supabase
           .from("cps_suppliers")
@@ -294,16 +312,32 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
           .eq("supplier_id", selectedSupplierId)
           .order("created_at", { ascending: false }),
       ]);
+
+      // Flag which of these POs actually contain the sourced item, so the
+      // user knows which PO to open.
+      const poList = (pos ?? []) as SupplierPO[];
+      let matched = new Set<string>();
+      if (item && poList.length > 0) {
+        const { data: lines } = await supabase
+          .from("cps_po_line_items")
+          .select("po_id,item_id,description")
+          .in("po_id", poList.map((p) => p.id));
+        (lines ?? []).forEach((l: any) => {
+          if (itemLineMatches(item, l.item_id, l.description)) matched.add(l.po_id);
+        });
+      }
+
       if (!cancelled) {
         setSupplier((s as SupplierDetail) ?? null);
-        setSupplierPOs((pos ?? []) as SupplierPO[]);
+        setSupplierPOs(poList);
+        setPosWithItem(matched);
         setVendorLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [view, selectedSupplierId]);
+  }, [view, selectedSupplierId, item?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // View 3 data — PO read-only summary
   useEffect(() => {
@@ -323,7 +357,7 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
           .maybeSingle(),
         supabase
           .from("cps_po_line_items")
-          .select("id,description,brand,quantity,unit,rate,gst_percent,total_value,hsn_code,sort_order")
+          .select("id,item_id,description,brand,quantity,unit,rate,gst_percent,total_value,hsn_code,sort_order")
           .eq("po_id", selectedPoId)
           .order("sort_order", { ascending: true }),
       ]);
@@ -353,6 +387,9 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
     if (view === "po") setView("vendor");
     else if (view === "vendor") setView("vendors");
   };
+
+  const lineMatchesItem = (l: PoLine) => itemLineMatches(item, l.item_id, l.description);
+  const hasLineMatch = poLines.some(lineMatchesItem);
 
   const renderTrend = (trend: string | null | undefined) => {
     if (!trend) return null;
@@ -567,10 +604,16 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
 
                 {/* PO history */}
                 <div className="border-t pt-3">
-                  <div className="flex items-center gap-2 mb-3">
+                  <div className="flex items-center gap-2 mb-3 flex-wrap">
                     <ShoppingCart className="h-4 w-4 text-primary" />
                     <h3 className="text-sm font-semibold">Purchase Order History</h3>
                     <Badge variant="outline" className="text-xs">{supplierPOs.length} POs</Badge>
+                    {posWithItem.size > 0 && (
+                      <span className="inline-flex items-center gap-1 text-xs text-amber-700">
+                        <span className="inline-block h-2.5 w-2.5 rounded-sm bg-amber-200 ring-1 ring-amber-400" />
+                        {posWithItem.size} contain{posWithItem.size === 1 ? "s" : ""} this item
+                      </span>
+                    )}
                   </div>
                   {supplierPOs.length === 0 ? (
                     <div className="text-center py-6 text-muted-foreground text-sm">No purchase orders with this vendor yet.</div>
@@ -587,16 +630,28 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {supplierPOs.map((po) => (
-                          <TableRow key={po.id} className="cursor-pointer hover:bg-muted/40" onClick={() => goPo(po.id)}>
-                            <TableCell className="font-mono text-primary text-xs">{po.po_number}</TableCell>
+                        {supplierPOs.map((po) => {
+                          const hasItem = posWithItem.has(po.id);
+                          return (
+                          <TableRow
+                            key={po.id}
+                            className={`cursor-pointer ${hasItem ? "bg-amber-100/70 hover:bg-amber-100" : "hover:bg-muted/40"}`}
+                            onClick={() => goPo(po.id)}
+                          >
+                            <TableCell className="font-mono text-primary text-xs">
+                              <div className="flex items-center gap-1.5">
+                                {po.po_number}
+                                {hasItem && <Badge className="bg-amber-200 text-amber-900 border-0 text-[9px] px-1">this item</Badge>}
+                              </div>
+                            </TableCell>
                             <TableCell className="text-sm">{po.project_code ?? "—"}</TableCell>
                             <TableCell className="text-xs text-muted-foreground">{formatDate(po.created_at)}</TableCell>
                             <TableCell><Badge className={`text-[10px] border-0 ${statusBadgeClass(po.status)}`}>{po.status}</Badge></TableCell>
                             <TableCell className="text-right text-sm">{formatINR(po.grand_total)}</TableCell>
                             <TableCell><ChevronRight className="h-4 w-4 text-muted-foreground" /></TableCell>
                           </TableRow>
-                        ))}
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   )}
@@ -628,7 +683,15 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
                 </div>
 
                 <div className="border-t pt-3">
-                  <h3 className="text-sm font-semibold mb-2">Line Items</h3>
+                  <div className="flex items-center gap-2 mb-2">
+                    <h3 className="text-sm font-semibold">Line Items</h3>
+                    {hasLineMatch && (
+                      <span className="inline-flex items-center gap-1 text-xs text-amber-700">
+                        <span className="inline-block h-2.5 w-2.5 rounded-sm bg-amber-200 ring-1 ring-amber-400" />
+                        highlighted = {item?.name}
+                      </span>
+                    )}
+                  </div>
                   {poLines.length === 0 ? (
                     <div className="text-center py-6 text-muted-foreground text-sm">No line items.</div>
                   ) : (
@@ -644,16 +707,24 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {poLines.map((l) => (
-                          <TableRow key={l.id}>
-                            <TableCell className="text-sm">{l.description ?? "—"}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{l.brand ?? "—"}</TableCell>
-                            <TableCell className="text-right text-sm">{l.quantity ?? "—"}{l.unit ? ` ${l.unit}` : ""}</TableCell>
-                            <TableCell className="text-right text-sm">{formatINR(l.rate)}</TableCell>
-                            <TableCell className="text-right text-sm text-muted-foreground">{l.gst_percent ?? "—"}</TableCell>
-                            <TableCell className="text-right text-sm">{formatINR(l.total_value)}</TableCell>
-                          </TableRow>
-                        ))}
+                        {poLines.map((l) => {
+                          const match = lineMatchesItem(l);
+                          return (
+                            <TableRow
+                              key={l.id}
+                              className={match ? "bg-amber-100/70 hover:bg-amber-100" : undefined}
+                            >
+                              <TableCell className={`text-sm ${match ? "font-semibold text-amber-900" : ""}`}>
+                                {l.description ?? "—"}
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{l.brand ?? "—"}</TableCell>
+                              <TableCell className="text-right text-sm">{l.quantity ?? "—"}{l.unit ? ` ${l.unit}` : ""}</TableCell>
+                              <TableCell className="text-right text-sm">{formatINR(l.rate)}</TableCell>
+                              <TableCell className="text-right text-sm text-muted-foreground">{l.gst_percent ?? "—"}</TableCell>
+                              <TableCell className="text-right text-sm">{formatINR(l.total_value)}</TableCell>
+                            </TableRow>
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   )}
