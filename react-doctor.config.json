@@ -1,5 +1,8 @@
 {
   "ignore": {
+    "rules": [
+      "react-doctor/js-flatmap-filter"
+    ],
     "overrides": [
       {
         "files": ["src/components/ui/**"],

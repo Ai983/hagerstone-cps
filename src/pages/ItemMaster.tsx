@@ -20,6 +20,8 @@ import { Plus, Search } from "lucide-react";
 
 import { format } from "date-fns";
 
+import ItemVendorExplorer from "@/components/items/ItemVendorExplorer";
+
 type Item = {
   id: string;
   code: string | null;
@@ -92,6 +94,11 @@ export default function ItemMaster() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Item -> vendor sourcing explorer (clicking an item name)
+  const [explorerItem, setExplorerItem] = useState<Item | null>(null);
+  // Per-item vendor counts (distinct suppliers with history for the exact item)
+  const [vendorCounts, setVendorCounts] = useState<Record<string, number>>({});
+
   // Pending item requests state
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
   const [pendingLoading, setPendingLoading] = useState(false);
@@ -136,6 +143,19 @@ export default function ItemMaster() {
 
     setItems((data ?? []) as Item[]);
     setLoading(false);
+  };
+
+  const fetchVendorCounts = async () => {
+    // One cheap pull of the supplier<->item map (~hundreds of rows); count distinct vendors per item.
+    const { data } = await supabase.from("cps_supplier_items").select("item_id, supplier_id");
+    const sets: Record<string, Set<string>> = {};
+    (data ?? []).forEach((r: any) => {
+      if (!r.item_id || !r.supplier_id) return;
+      (sets[r.item_id] ??= new Set()).add(r.supplier_id);
+    });
+    const counts: Record<string, number> = {};
+    Object.entries(sets).forEach(([k, v]) => { counts[k] = v.size; });
+    setVendorCounts(counts);
   };
 
   const fetchPendingRequests = async () => {
@@ -227,6 +247,7 @@ export default function ItemMaster() {
 
   useEffect(() => {
     fetchItems();
+    fetchVendorCounts();
     if (canManageRequests) fetchPendingRequests();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -528,7 +549,25 @@ export default function ItemMaster() {
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="font-mono text-muted-foreground">{it.code ?? "—"}</span>
-                            <span className="font-semibold">{it.name}</span>
+                            <button
+                              type="button"
+                              className="font-semibold text-left hover:text-primary hover:underline"
+                              onClick={() => setExplorerItem(it)}
+                              title="Find vendors for this item"
+                            >
+                              {it.name}
+                            </button>
+                            {vendorCounts[it.id] > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setExplorerItem(it)}
+                                title="View vendors with history for this item"
+                              >
+                                <Badge variant="outline" className="text-[10px] cursor-pointer hover:bg-muted">
+                                  {vendorCounts[it.id]} {vendorCounts[it.id] === 1 ? "vendor" : "vendors"}
+                                </Badge>
+                              </button>
+                            )}
                           </div>
                         </div>
                       </TableCell>
@@ -579,7 +618,21 @@ export default function ItemMaster() {
             <Card key={it.id} className="p-4">
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <div className="font-semibold text-sm">{it.name}</div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      className="font-semibold text-sm text-left hover:text-primary hover:underline"
+                      onClick={() => setExplorerItem(it)}
+                      title="Find vendors for this item"
+                    >
+                      {it.name}
+                    </button>
+                    {vendorCounts[it.id] > 0 && (
+                      <Badge variant="outline" className="text-[10px]" onClick={() => setExplorerItem(it)}>
+                        {vendorCounts[it.id]} {vendorCounts[it.id] === 1 ? "vendor" : "vendors"}
+                      </Badge>
+                    )}
+                  </div>
                   <div className="text-xs text-muted-foreground mt-0.5">{it.category ?? "—"}{it.sub_category ? ` · ${it.sub_category}` : ''} · {it.unit ?? "—"}</div>
                   {canViewPrices && it.last_purchase_rate != null && (
                     <div className="text-xs text-muted-foreground mt-0.5">Last Purchase: ₹{it.last_purchase_rate}</div>
@@ -822,6 +875,9 @@ export default function ItemMaster() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Item -> vendor sourcing explorer */}
+      <ItemVendorExplorer item={explorerItem} onClose={() => setExplorerItem(null)} />
     </div>
   );
 }
