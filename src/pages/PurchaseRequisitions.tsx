@@ -808,9 +808,14 @@ export default function PurchaseRequisitions() {
   const PR_ASSIGNEE_EMAILS = [
     "procurement@hagerstone.com",   // Avisha
     "ajitreddy916@gmail.com",        // Ajit
-    "mep@hagerstone.com",            // Deepak
+    "dba88795@gmail.com",            // Deepak Bansal (shown as "Deepak B")
     "sakshamkaloya109@gmail.com",    // Saksham
+    // "mep@hagerstone.com" (Deepak) hidden — on emergency leave; user row & history retained.
   ];
+  // Display-label overrides for the PR assignee pills (stored name may differ).
+  const PR_ASSIGNEE_LABELS: Record<string, string> = {
+    "dba88795@gmail.com": "Deepak B",
+  };
   const [wizAssignees, setWizAssignees] = useState<Array<{ id: string; name: string; email: string; role: string; department: string | null }>>([]);
   const [wizLineItems, setWizLineItems] = useState<LineItem[]>([]);
   const [wizNotes, setWizNotes] = useState("");
@@ -2323,7 +2328,7 @@ export default function PurchaseRequisitions() {
                               : "bg-background border-border text-foreground hover:border-primary/50"
                           }`}
                         >
-                          {u.name}
+                          {PR_ASSIGNEE_LABELS[u.email] ?? u.name}
                         </button>
                       ))}
                     </div>
