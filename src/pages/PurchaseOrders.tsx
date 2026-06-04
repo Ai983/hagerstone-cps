@@ -2332,6 +2332,7 @@ export default function PurchaseOrders() {
 
       {paymentTermsModal && (
         <PaymentTermsModal
+          key={paymentTermsModal.poId}
           {...paymentTermsModal}
           onSuccess={() => {
             setPaymentTermsModal(null);

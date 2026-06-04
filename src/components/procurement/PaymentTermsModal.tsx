@@ -86,17 +86,13 @@ export function PaymentTermsModal({
     }
   });
 
-  // Reset state when modal opens for a different PO
+  // Run AI extraction once on mount. The parent (PurchaseOrders.tsx) renders
+  // this component conditionally with `key={poId}`, so it mounts fresh per PO
+  // open — no prop-syncing effect needed and no risk of a stale-render flash.
   useEffect(() => {
-    if (open && !aiAttempted) {
-      runAiExtraction();
-    }
-    if (!open) {
-      setAiAttempted(false);
-      setAiResult(null);
-      form.reset();
-    }
-  }, [open]);
+    runAiExtraction();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function runAiExtraction() {
     setAiLoading(true);

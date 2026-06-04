@@ -89,6 +89,54 @@ Protected pages render inside `<Protected>` = `<ProtectedRoute><Layout>…</Layo
   - Secondary (gold): `hsl(45, 85%, 65%)`
   - Sidebar bg: `hsl(20, 40%, 22%)`
 
+## React State Patterns (avoid the danger-zone anti-patterns)
+
+React Doctor flags `no-adjust-state-on-prop-change` as an **error** in this codebase. Several modal components (LegacyPOUploadModal, LegacyQuoteUploadModal, PaymentTermsModal, etc.) historically used `useState(prop) + useEffect(setX, [prop])` to sync state from props — this causes a one-frame flash of stale values and compounds bugs as state grows. When adding state, follow the patterns below.
+
+**✅ DO — initialize state, reset via mount/key, derive from props**
+
+```tsx
+// Initialize in useState defaults (runs once per mount).
+// Parent uses key={someId} or conditional render so the component remounts when it should reset.
+const [tranches, setTranches] = useState<Tranche[]>([]);
+
+// Derive on render — no state, no effect, no flash.
+const isSinglePayment = !aiResult?.payment_terms_json?.installments?.length;
+
+// One-shot setup on mount.
+useEffect(() => {
+  loadDefaults();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+// Effects triggered by user-edited state, not by props.
+useEffect(() => {
+  recomputeTotal();
+}, [tranches]);
+```
+
+**❌ DON'T — sync state from props in an effect**
+
+```tsx
+// RD will flag this as no-adjust-state-on-prop-change (error severity in this repo):
+const [tranches, setTranches] = useState<Tranche[]>(aiResult?.installments ?? []);
+useEffect(() => {
+  setTranches(aiResult?.installments ?? []);  // ← stale-render flash
+}, [aiResult]);
+
+// Reset-on-close inside an effect — dead code if parent unmounts on close, anti-pattern otherwise:
+useEffect(() => {
+  if (!open) {
+    setSomething(null);
+    form.reset();
+  }
+}, [open]);
+```
+
+**If a modal needs fresh state per "instance":** the parent should render conditionally (`{state && <Modal {...state} />}`) AND/OR pass `key={state.id}` so React unmounts/remounts. The modal then keeps its `useState` defaults as the single source of truth and never copies props into state via an effect.
+
+**If you genuinely need to populate form fields from async data** (e.g. AI extraction result), call `form.setValue(...)` inside the async handler, not in a useEffect that watches a prop.
+
 ## Routes
 **Public (no auth):** `/login`, `/vendor/upload-quote?token=xxx`, `/approve-po?token=xxx`
 **Protected:** `/dashboard`, `/kanban`, `/analytics`, `/requisitions`, `/pr-review`, `/rfqs`, `/quotes`, `/comparison`, `/comparison/:rfqId`, `/purchase-orders`, `/work-orders`, `/delivery`, `/boq`, `/stock`, `/stock-overview`, `/site-quotes`, `/suppliers`, `/items`, `/invoices/upload`, `/audit`, `/admin/overrides`
