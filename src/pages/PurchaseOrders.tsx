@@ -548,6 +548,7 @@ export default function PurchaseOrders() {
   const [markPaidMode, setMarkPaidMode] = useState("NEFT/RTGS");
   const [markPaidRef, setMarkPaidRef] = useState("");
   const [markPaidSaving, setMarkPaidSaving] = useState(false);
+  const [releasingId, setReleasingId] = useState<string | null>(null);
 
   // Revised-by link: when viewing a superseded PO, shows link to the new revision
   const [revisedByPo, setRevisedByPo] = useState<{ id: string; po_number: string } | null>(null);
@@ -1285,6 +1286,7 @@ export default function PurchaseOrders() {
           .from("cps_po_approval_tokens")
           .select("id,founder_name,response,reason,used_at")
           .eq("po_id", poId)
+          .eq("scope", "po_approval")
           .order("created_at", { ascending: true }),
       ]);
 
@@ -1482,11 +1484,12 @@ export default function PurchaseOrders() {
 
       toast.success("Approval message resent to Bhaskar Sir + Dhruv Sir");
 
-      /* refresh token display */
+      /* refresh token display (PO-approval responses only — not Gate-2 release tokens) */
       const { data: freshTokens } = await supabase
         .from("cps_po_approval_tokens")
         .select("id,founder_name,response,reason,used_at")
         .eq("po_id", poId)
+        .eq("scope", "po_approval")
         .order("created_at", { ascending: true });
       setViewPoTokens((freshTokens ?? []) as Array<{ id: string; founder_name: string; response: string | null; reason: string | null; used_at: string | null }>);
 
@@ -1568,6 +1571,81 @@ export default function PurchaseOrders() {
       toast.error(e?.message || "Failed to update payment");
     } finally {
       setMarkPaidSaving(false);
+    }
+  };
+
+  // SPEC-PAY-01 Gate-2: procurement requests a payment release for a due/scheduled
+  // installment → pending 'release' authorization + tokens (both founders) + WhatsApp.
+  const requestRelease = async (row: PaymentScheduleRow) => {
+    if (!viewPo || !user) return;
+    setReleasingId(row.id);
+    try {
+      // 1) pending release authorization (also flips the tranche to release_requested)
+      const { data: authData, error: authErr } = await supabase.rpc("cps_issue_authorization", {
+        p_auth_type: "release", p_po_id: viewPo.id, p_tranche_id: row.id, p_advance_id: null,
+        p_amount: null, p_status: "pending", p_approved_by: null,
+        p_reason: "Gate-2 release request", p_created_by: user.id,
+      });
+      if (authErr) throw authErr;
+      const auth: any = Array.isArray(authData) ? authData[0] : authData;
+      if (!auth?.id) throw new Error("Could not create authorization");
+
+      // 2) config + PO details
+      const { data: cfgRows } = await supabase.from("cps_config").select("key,value")
+        .in("key", ["webhook_payment_release", "founder_whatsapp_bhaskar", "founder_whatsapp_dhruv", "payment_release_valid_hours", "portal_base_url"]);
+      const cfg: Record<string, string> = {}; (cfgRows ?? []).forEach((r: any) => { cfg[r.key] = r.value; });
+      const validHours = Number(cfg["payment_release_valid_hours"] || "72");
+      const expiresAt = new Date(Date.now() + validHours * 3600 * 1000).toISOString();
+      // Match Gate-1 (createPO): use the current origin so links resolve where the
+      // user actually is (localhost in test, prod once deployed).
+      const origin = window.location.origin;
+
+      const { data: poFull } = await supabase.from("cps_purchase_orders")
+        .select("po_number,grand_total,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,supplier_id")
+        .eq("id", viewPo.id).maybeSingle();
+      let supplierName = "";
+      if ((poFull as any)?.supplier_id) {
+        const { data: s } = await supabase.from("cps_suppliers").select("name").eq("id", (poFull as any).supplier_id).maybeSingle();
+        supplierName = (s as any)?.name ?? "";
+      }
+
+      // 3) two tokens (Dhruv + Bhaskar) → same authorization (any one approves)
+      const mkToken = async (founder: "Bhaskar" | "Dhruv") => {
+        const { data, error } = await supabase.from("cps_po_approval_tokens")
+          .insert([{ po_id: viewPo.id, po_number: viewPo.po_number, founder_name: founder, scope: "payment_release", authorization_id: auth.id, expires_at: expiresAt }])
+          .select("token").single();
+        if (error || !data) throw new Error(`Token (${founder}) failed: ${error?.message ?? "no data"}`);
+        return (data as any).token as string;
+      };
+      const [bhaskarTok, dhruvTok] = await Promise.all([mkToken("Bhaskar"), mkToken("Dhruv")]);
+
+      // 4) fire-and-forget webhook to n8n
+      const webhookUrl = cfg["webhook_payment_release"];
+      if (webhookUrl) {
+        await fetch(webhookUrl, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "payment_release_request",
+            po_id: viewPo.id, po_number: viewPo.po_number, supplier_name: supplierName,
+            installment_name: row.milestone_name, release_amount: row.amount,
+            trigger_type: row.due_trigger, grand_total: (poFull as any)?.grand_total ?? null,
+            po_pdf_url: (poFull as any)?.po_pdf_url ?? "", auth_number: auth.auth_number,
+            bank_account_holder_name: (poFull as any)?.bank_account_holder_name ?? null,
+            bank_name: (poFull as any)?.bank_name ?? null, bank_ifsc: (poFull as any)?.bank_ifsc ?? null,
+            bank_account_number: (poFull as any)?.bank_account_number ?? null,
+            bhaskar_approval_link: `${origin}/approve-release?token=${bhaskarTok}`,
+            dhruv_approval_link: `${origin}/approve-release?token=${dhruvTok}`,
+            bhaskar_whatsapp: cfg["founder_whatsapp_bhaskar"] || "919953001048",
+            dhruv_whatsapp: cfg["founder_whatsapp_dhruv"] || "919910820078",
+          }),
+        }).catch(() => {});
+      }
+      toast.success("Release request founder ko bhej diya");
+      await openView(viewPo.id);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to request release");
+    } finally {
+      setReleasingId(null);
     }
   };
 
@@ -3400,14 +3478,22 @@ export default function PurchaseOrders() {
                                  row.due_date ? formatDate(row.due_date) : "Custom"}
                               </TableCell>
                               <TableCell>
-                                <span className={`text-xs font-medium px-1.5 py-0.5 rounded border leading-none ${
-                                  row.status === "paid" ? "bg-green-100 text-green-800 border-green-200" :
-                                  row.status === "overdue" ? "bg-red-100 text-red-800 border-red-200" :
-                                  row.status === "waived" ? "bg-muted text-muted-foreground border-border/60 italic" :
-                                  "bg-muted text-muted-foreground border-border/60"
-                                }`}>
-                                  {row.status === "paid" ? "Paid ✓" : row.status === "overdue" ? "Overdue" : row.status === "waived" ? "Waived" : "Pending"}
-                                </span>
+                                {(() => {
+                                  const st = String(row.status);
+                                  const map: Record<string, [string, string]> = {
+                                    paid: ["bg-green-100 text-green-800 border-green-200", "Paid ✓"],
+                                    partially_paid: ["bg-green-50 text-green-700 border-green-200", "Partial"],
+                                    overdue: ["bg-red-100 text-red-800 border-red-200", "Overdue"],
+                                    waived: ["bg-muted text-muted-foreground border-border/60 italic", "Waived"],
+                                    authorized: ["bg-blue-100 text-blue-800 border-blue-200", "Authorized ✓"],
+                                    release_requested: ["bg-amber-100 text-amber-800 border-amber-200", "Release sent ⏳"],
+                                    due: ["bg-amber-100 text-amber-800 border-amber-200", "Due"],
+                                    on_hold: ["bg-slate-100 text-slate-700 border-slate-200", "On hold"],
+                                    scheduled: ["bg-muted text-muted-foreground border-border/60", "Scheduled"],
+                                  };
+                                  const [cls, label] = map[st] ?? ["bg-muted text-muted-foreground border-border/60", "Pending"];
+                                  return <span className={`text-xs font-medium px-1.5 py-0.5 rounded border leading-none ${cls}`}>{label}</span>;
+                                })()}
                               </TableCell>
                               <TableCell className="text-xs text-muted-foreground">
                                 {row.paid_at ? formatDate(row.paid_at) : "—"}
@@ -3415,7 +3501,17 @@ export default function PurchaseOrders() {
                               </TableCell>
                               {isProcurementHead && (
                                 <TableCell className="text-right">
-                                  {row.status === "pending" && (
+                                  {(row.status === "scheduled" || row.status === "due") && (
+                                    <Button size="sm" variant="outline" disabled={releasingId === row.id}
+                                      className="h-7 text-xs border-amber-300 text-amber-700 hover:bg-amber-50"
+                                      onClick={() => requestRelease(row)}>
+                                      {releasingId === row.id ? "Sending…" : "Request Release"}
+                                    </Button>
+                                  )}
+                                  {row.status === "release_requested" && (
+                                    <span className="text-xs text-amber-700">Founder ke paas ⏳</span>
+                                  )}
+                                  {(row.status === "authorized" || row.status === "pending") && (
                                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => openMarkPaid(row)}>
                                       Mark Paid
                                     </Button>
@@ -3556,7 +3652,7 @@ export default function PurchaseOrders() {
                     <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-1">
                       <div className="text-sm font-semibold text-green-900">✅ Founder Approved</div>
                       <div className="text-xs text-green-700">
-                        Close this dialog and click <strong>"Set Payment Terms"</strong> on the PO row to forward to Finance.
+                        Terms locked. Payment installments are in the <strong>Payment Schedule</strong> above — use <strong>"Request Release"</strong> on a due installment to send it to the founder for payment release.
                       </div>
                       {viewPo.approved_at && (
                         <div className="text-xs text-green-600">Approved: {formatDateTime(viewPo.approved_at)}</div>
@@ -4097,16 +4193,9 @@ function PoTableRows({
                 <Button variant="ghost" size="sm" onClick={() => onView(r.id)}>
                   View
                 </Button>
-                {r.founder_approval_status === "approved" && !["sent","closed","cancelled","rejected"].includes(String(r.status)) && !r.payment_terms_type && canApprove && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="border-amber-300 text-amber-700 hover:bg-amber-50 text-xs"
-                    onClick={() => onSetPaymentTerms(r, supplier?.name ?? (r.supplier_name_text || ""))}
-                  >
-                    Set Payment Terms
-                  </Button>
-                )}
+                {/* "Set Payment Terms" removed — the payment plan (installments) is now
+                    captured in the Comparison Sheet "Send to Founder" flow (SPEC-PAY-01),
+                    so the founder sees it at approval. No post-PO terms entry here. */}
                 {/* In-app PO approval has been removed — all approvals must come via the
                     founder approval link (cps_po_approval_tokens). Only the Reject action
                     is available here for procurement so they can stop a PO before the

@@ -63,6 +63,7 @@ const AuditLog = lazyWithRetry(() => import("@/pages/AuditLog"));
 const VendorUploadQuote = lazyWithRetry(() => import("@/pages/VendorUploadQuote"));
 const InvoiceUpload = lazyWithRetry(() => import("@/pages/InvoiceUpload"));
 const ApprovePoPage = lazyWithRetry(() => import("@/pages/ApprovePoPage"));
+const ApproveReleasePage = lazyWithRetry(() => import("@/pages/ApproveReleasePage"));
 const PRReview = lazyWithRetry(() => import("@/pages/PRReview"));
 const KanbanBoard = lazyWithRetry(() => import("@/pages/KanbanBoard"));
 const Analytics = lazyWithRetry(() => import("@/pages/Analytics"));
@@ -96,6 +97,7 @@ const App = () => (
             <Routes>
               <Route path="/vendor/upload-quote" element={<VendorUploadQuote />} />
               <Route path="/approve-po" element={<ApprovePoPage />} />
+              <Route path="/approve-release" element={<ApproveReleasePage />} />
               <Route path="/login" element={<Login />} />
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />

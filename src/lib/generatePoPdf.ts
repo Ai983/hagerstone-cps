@@ -369,7 +369,11 @@ export function buildPoPdf(data: PoPdfData): Blob {
     ry += projLines.length * 3.8 + 2;
   }
 
-  /* PO meta */
+  /* PO meta — prefer an installment-derived summary so this line matches the
+     Payment Schedule table (avoids showing stale free-text after a founder edit). */
+  const paymentSummary = (data.installments && data.installments.length)
+    ? data.installments.map((it) => (it.percentage != null ? `${it.percentage}% ` : "") + (it.milestone_name ?? "")).join(" + ")
+    : (data.paymentTerms ?? "—");
   const metaRows: [string, string][] = [
     ["PO No", data.poNumber + (data.version && data.version > 1 ? ` (v${data.version})` : "")],
     ...(data.prNumber ? [["PR Ref", data.prNumber] as [string, string]] : []),
@@ -377,7 +381,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
     ["Po upto", poUpto],
     ["Valid Upto", validUpto],
     ["Mode of Payment", "NEFT/RTGS"],
-    ["Payment Terms", data.paymentTerms ?? "—"],
+    ["Payment Terms", paymentSummary],
     ["Eff.Dt", poDate],
     ["Delivery Sch", delivSch],
   ];
