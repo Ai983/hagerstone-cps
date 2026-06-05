@@ -28,6 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { TranchePlanEditor, computeAmounts, type Tranche } from "@/components/procurement/TranchePlanEditor";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -313,6 +314,9 @@ export default function ComparisonSheetPage() {
   // Manual review state
   const [reviewNotes, setReviewNotes] = useState("");
   const [recommendedSupplierId, setRecommendedSupplierId] = useState<string>("");
+  // SPEC-PAY-01 Gate 1 — procurement's payment plan (tranches) the founder will approve.
+  const [paymentPlan, setPaymentPlan] = useState<Tranche[]>([]);
+  const [poTotalForPlan, setPoTotalForPlan] = useState<number>(0);
   const [recommendReason, setRecommendReason] = useState("");
   const [overrideNotesByPrLineId, setOverrideNotesByPrLineId] = useState<Record<string, string>>({});
   const [aboveMarketJustification, setAboveMarketJustification] = useState("");
@@ -492,6 +496,7 @@ export default function ComparisonSheetPage() {
       const subTotal = calcLineItems.reduce((s, li) => s + li.total_value, 0);
       const gstAmount = calcLineItems.reduce((s, li) => s + (li.gst_amount ?? 0), 0);
       const grandTotal = subTotal + gstAmount;
+      setPoTotalForPlan(grandTotal); // feed the Gate-1 tranche editor
 
       // Optional logo (best-effort)
       let logoBase64: string | undefined;
@@ -516,6 +521,7 @@ export default function ComparisonSheetPage() {
       // Mirror the exact PoPdfData shape buildPoPdfFromDb produces, so the
       // preview is byte-for-byte the PDF the founder will see (modulo the
       // poNumber, which is finalised at Send-to-Founder time).
+      const planAmounts = computeAmounts(paymentPlan, grandTotal);
       const previewBlob = buildPoPdf({
         poNumber: "PREVIEW (will assign on send)",
         prNumber: (prData as any)?.pr_number ?? null,
@@ -537,6 +543,14 @@ export default function ComparisonSheetPage() {
         subTotal,
         gstAmount,
         grandTotal,
+        installments: paymentPlan.map((p, i) => ({
+          milestone_name: p.milestone_name,
+          basis: p.basis,
+          percentage: p.basis === "percent" ? (Number(p.value) || 0) : null,
+          amount: planAmounts[i] ?? 0,
+          trigger_type: p.trigger_type,
+          trigger_offset_days: p.trigger_offset_days ?? null,
+        })),
         logoBase64,
         hagerstoneGstin: "09AAECH3768B1ZM",
         createdByName: user?.name ?? user?.email ?? null,
@@ -3038,6 +3052,19 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
         if (poLiErr) throw poLiErr;
       }
 
+      // SPEC-PAY-01 Gate 1: persist the canonical payment plan + materialize tranches
+      // so the founder sees it at approval. Non-fatal if the schedule call fails.
+      if (paymentPlan.length > 0) {
+        await supabase.from("cps_purchase_orders")
+          .update({ payment_terms_json: { installments: paymentPlan } as any, payment_terms_source: "manual" })
+          .eq("id", poId);
+        const { error: trErr } = await supabase.rpc("cps_generate_tranches", {
+          p_po_id: poId,
+          p_tranches: paymentPlan as any,
+        });
+        if (trErr) toast.error("PO created, but tranche schedule failed: " + trErr.message);
+      }
+
       // Persist bank details on the supplier master so the dialog pre-fills on
       // the next PO for this supplier without hunting through past POs.
       if (bankHolderName.trim() || bankName.trim() || bankIfsc.trim() || bankAccountNumber.trim()) {
@@ -3191,6 +3218,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               });
             } catch (_) { /* logo optional */ }
 
+            const planAmounts2 = computeAmounts(paymentPlan, grandTotal);
             const pdfBlob = buildPoPdf({
               poNumber,
               prNumber: (prData as any)?.pr_number ?? null,
@@ -3210,6 +3238,14 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               subTotal,
               gstAmount: gstTotal,
               grandTotal,
+              installments: paymentPlan.map((p, i) => ({
+                milestone_name: p.milestone_name,
+                basis: p.basis,
+                percentage: p.basis === "percent" ? (Number(p.value) || 0) : null,
+                amount: planAmounts2[i] ?? 0,
+                trigger_type: p.trigger_type,
+                trigger_offset_days: p.trigger_offset_days ?? null,
+              })),
               logoBase64,
               hagerstoneGstin: "09AAECH3768B1ZM",
               createdByName: user?.name ?? user?.email ?? null,
@@ -3266,6 +3302,16 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               project_code: prData?.project_code ?? null,
               total_project_po_amount: totalProjectPoAmount,
               payment_terms: _paymentTerms,
+              payment_plan: paymentPlan.map((p, i) => ({
+                name: p.milestone_name,
+                percent: p.basis === "percent" ? (Number(p.value) || 0) : null,
+                amount: computeAmounts(paymentPlan, grandTotal)[i] ?? 0,
+                when: p.trigger_type,
+                offset_days: p.trigger_offset_days ?? null,
+              })),
+              payment_plan_summary: paymentPlan.length
+                ? paymentPlan.map((p) => (p.basis === "percent" ? `${p.value}% ${p.milestone_name}` : p.milestone_name)).join(" + ")
+                : (_paymentTerms ?? null),
               delivery_date: _deliveryDate,
               total_value: subTotal,
               gst_amount: gstTotal,
@@ -4349,6 +4395,21 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 <li>After reviewing, click <span className="font-semibold">Send to Founder</span> to dispatch it. This freezes every number on this comparison sheet permanently.</li>
                 <li>If something looks wrong, click <span className="font-semibold">Reject Comparison</span> to send the sheet back to In Review.</li>
               </ol>
+            </div>
+
+            {/* SPEC-PAY-01 Gate 1: capture the payment plan the founder will approve */}
+            <div className="rounded-lg border border-border p-3">
+              {hasViewedPo ? (
+                <TranchePlanEditor
+                  totalAmount={poTotalForPlan}
+                  value={paymentPlan}
+                  onChange={setPaymentPlan}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground italic">
+                  Pehle <span className="font-semibold">View PO</span> dekho — phir founder ke approval ke liye Payment Plan (Installments) set karo.
+                </p>
+              )}
             </div>
 
             <div className="flex items-center gap-3 flex-wrap">

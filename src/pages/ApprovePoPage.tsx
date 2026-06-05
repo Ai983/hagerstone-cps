@@ -1,6 +1,63 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import logoUrl from "@/assets/optimisedlogo.png";
+import { buildPoPdf } from "@/lib/generatePoPdf";
+import { TranchePlanEditor, computeAmounts, type Tranche, type TriggerType } from "@/components/procurement/TranchePlanEditor";
+
+/* installment "when" → short Hinglish label for the read-only plan view */
+const WHEN_SHORT: Record<string, string> = {
+  advance_on_po: "Advance (PO ke saath)",
+  before_dispatch: "Dispatch se pehle",
+  on_dispatch_lr: "Dispatch pe (LR)",
+  on_delivery_grn: "Delivery pe",
+  credit_days_from_invoice: "Udhaar (invoice se)",
+  credit_days_from_grn: "Udhaar (delivery se)",
+};
+const whenShort = (t?: string | null, days?: number | null) => {
+  const base = WHEN_SHORT[t ?? ""] ?? (t ?? "—");
+  return days ? `${base} ${days} din` : base;
+};
+
+/* Seed the editor from a PO's stored payment_terms_json — tolerant of both the
+   canonical installment shape and the older AI {description,percent,trigger} shape. */
+function normalizeInstallments(ptj: any): Tranche[] {
+  const arr = ptj?.installments;
+  if (!Array.isArray(arr) || arr.length === 0) return [];
+  return arr.map((it: any, i: number): Tranche => {
+    if (it.trigger_type || it.basis) {
+      return {
+        milestone_name: it.milestone_name ?? `Installment ${i + 1}`,
+        basis: it.basis ?? "percent",
+        value: it.value ?? it.percentage ?? null,
+        trigger_type: (it.trigger_type ?? "on_delivery_grn") as TriggerType,
+        trigger_offset_days: it.trigger_offset_days ?? null,
+      };
+    }
+    const t = String(it.trigger ?? "").toLowerCase();
+    const trig: TriggerType = t.includes("order") || t.includes("advance") ? "advance_on_po"
+      : t.includes("dispatch") ? "on_dispatch_lr"
+      : t.includes("deliver") ? "on_delivery_grn"
+      : t.includes("credit") || t.includes("net") ? "credit_days_from_invoice"
+      : "on_delivery_grn";
+    return {
+      milestone_name: it.description ?? `Installment ${i + 1}`,
+      basis: "percent",
+      value: it.percent ?? null,
+      trigger_type: trig,
+      trigger_offset_days: it.days ?? null,
+    };
+  });
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onloadend = () => { const s = fr.result as string; res(s.split(",")[1] ?? s); };
+    fr.onerror = rej;
+    fr.readAsDataURL(blob);
+  });
+}
 
 /* ── tiny style block ─────────────────────────────────────────── */
 const STYLES = `
@@ -26,11 +83,13 @@ type TokenRow = {
 type PoSummary = {
   po_number: string;
   payment_terms: string | null;
+  payment_terms_json: any;
   delivery_date: string | null;
   grand_total: number | null;
   gst_amount: number | null;
   total_value: number | null;
   supplier_name: string | null;
+  supplier_id?: string | null;
   project_code: string | null;
   ship_to_address: string | null;
 };
@@ -98,6 +157,12 @@ export default function ApprovePoPage() {
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
 
+  /* payment plan (installments) — seeded from the PO; the founder may edit it */
+  const [plan, setPlan] = useState<Tranche[]>([]);
+  const [originalPlanStr, setOriginalPlanStr] = useState<string>("[]");
+  const [editingPlan, setEditingPlan] = useState(false);
+  const [regenMsg, setRegenMsg] = useState<string>("");
+
   /* ── load token ── */
   useEffect(() => {
     if (!token) { setError("No approval token provided."); setLoading(false); return; }
@@ -119,7 +184,7 @@ export default function ApprovePoPage() {
       const [poRes, lineRes] = await Promise.all([
         supabase
           .from("cps_purchase_orders")
-          .select("po_number,payment_terms,delivery_date,grand_total,gst_amount,total_value,supplier_id,project_code,ship_to_address")
+          .select("po_number,payment_terms,payment_terms_json,delivery_date,grand_total,gst_amount,total_value,supplier_id,project_code,ship_to_address")
           .eq("id", tok.po_id)
           .single(),
         supabase
@@ -147,6 +212,11 @@ export default function ApprovePoPage() {
       setPo(poSummary);
       setLineItems((lineRes.data ?? []) as PoLineItem[]);
 
+      /* seed the installment editor from the PO's stored plan */
+      const seeded = normalizeInstallments((poData as any).payment_terms_json);
+      setPlan(seeded);
+      setOriginalPlanStr(JSON.stringify(seeded));
+
       /* fetch cumulative approved PO total for this project */
       if (poData.project_code) {
         const { data: poTotals } = await supabase
@@ -163,54 +233,115 @@ export default function ApprovePoPage() {
     })();
   }, [token]);
 
-  /* ── submit ── */
-  const handleSubmit = async () => {
-    if (!choice) return;
-    if (choice === "rejected" && !reason.trim()) return;
-    if (!tokenRow) return;
+  /* whether the founder changed the payment plan from what was sent */
+  const planChanged = JSON.stringify(plan) !== originalPlanStr;
 
+  /* Rebuild the PO PDF in-browser (reusing buildPoPdf — same code as the preview) and
+     hand the bytes to the regenerate-po-pdf edge function for the privileged storage
+     write. Best-effort: the founder-final terms are already persisted by the RPC; if
+     this fails the PO stays flagged pdf_stale for a later authenticated regen. */
+  const regeneratePdfAfterEdit = async (poId: string, poNumber: string) => {
+    try {
+      const [{ data: poFull }, { data: lineRows }] = await Promise.all([
+        supabase.from("cps_purchase_orders")
+          .select("po_number,created_at,ship_to_address,project_code,payment_terms,delivery_date,total_value,gst_amount,grand_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,advance_payments,advance_paid_total,version,revision_reason,supplier_id")
+          .eq("id", poId).single(),
+        supabase.from("cps_po_line_items")
+          .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code,sort_order")
+          .eq("po_id", poId).order("sort_order"),
+      ]);
+      if (!poFull) return;
+      let supplier: any = {};
+      if ((poFull as any).supplier_id) {
+        const { data: s } = await supabase.from("cps_suppliers")
+          .select("name,gstin,state,address_text,phone,email").eq("id", (poFull as any).supplier_id).maybeSingle();
+        supplier = s ?? {};
+      }
+      let logoBase64: string | null = null;
+      try { logoBase64 = await blobToBase64(await (await fetch(logoUrl)).blob()); } catch { /* logo optional */ }
+
+      const grand = Number((poFull as any).grand_total ?? 0);
+      const amounts = computeAmounts(plan, grand);
+      const blob = buildPoPdf({
+        poNumber: (poFull as any).po_number,
+        poDate: (poFull as any).created_at,
+        supplierName: supplier.name ?? "",
+        supplierGstin: supplier.gstin ?? null,
+        supplierState: supplier.state ?? null,
+        supplierAddress: supplier.address_text ?? null,
+        supplierPhone: supplier.phone ?? null,
+        supplierEmail: supplier.email ?? null,
+        shipToAddress: (poFull as any).ship_to_address ?? null,
+        inspAt: (poFull as any).ship_to_address?.split("\n")[0] ?? null,
+        paymentTerms: (poFull as any).payment_terms,
+        deliveryDate: (poFull as any).delivery_date,
+        projectCode: (poFull as any).project_code ?? null,
+        projectName: (poFull as any).project_code ?? null,
+        subTotal: Number((poFull as any).total_value ?? 0),
+        gstAmount: Number((poFull as any).gst_amount ?? 0),
+        grandTotal: grand,
+        hagerstoneGstin: (poFull as any).hagerstone_gstin ?? "09AAECH3768B1ZM",
+        bankAccountHolderName: (poFull as any).bank_account_holder_name,
+        bankName: (poFull as any).bank_name,
+        bankIfsc: (poFull as any).bank_ifsc,
+        bankAccountNumber: (poFull as any).bank_account_number,
+        advancePayments: Array.isArray((poFull as any).advance_payments) ? (poFull as any).advance_payments : [],
+        advancePaidTotal: Number((poFull as any).advance_paid_total ?? 0),
+        version: (poFull as any).version,
+        revisionReason: (poFull as any).revision_reason,
+        logoBase64,
+        installments: plan.map((p, i) => ({
+          milestone_name: p.milestone_name,
+          basis: p.basis,
+          percentage: p.basis === "percent" ? (Number(p.value) || 0) : null,
+          amount: amounts[i] ?? 0,
+          trigger_type: p.trigger_type,
+          trigger_offset_days: p.trigger_offset_days ?? null,
+        })),
+        lineItems: (lineRows ?? []).map((li: any) => ({
+          description: li.description ?? "",
+          quantity: Number(li.quantity ?? 0),
+          unit: li.unit,
+          rate: Number(li.rate ?? 0),
+          gst_percent: Number(li.gst_percent ?? 0),
+          gst_amount: li.gst_amount,
+          total_value: Number(li.total_value ?? 0),
+          hsn_code: li.hsn_code,
+          brand: li.brand,
+        })),
+      });
+      const pdf_base64 = await blobToBase64(blob);
+      await supabase.functions.invoke("regenerate-po-pdf", {
+        body: { token, po_id: poId, po_number: poNumber, pdf_base64 },
+      });
+    } catch { /* non-fatal — pdf_stale flag remains for fallback regen */ }
+  };
+
+  /* ── submit (token-gated SECURITY DEFINER RPC: handles token, edits, aggregate
+     status, Gate-1 lock + advance window, and the finance terms sync) ── */
+  const handleSubmit = async () => {
+    if (!choice || !tokenRow) return;
+    if (choice === "rejected" && !reason.trim()) return;
+    if (planChanged && !reason.trim()) {
+      alert("Aapne payment terms badle hain — team ke liye ek chhota note likhna zaroori hai.");
+      return;
+    }
     setSubmitting(true);
     try {
-      /* 1. mark this founder's token as used */
-      const { error: tokUpdErr } = await supabase
-        .from("cps_po_approval_tokens")
-        .update({ used_at: new Date().toISOString(), response: choice, reason: reason.trim() || null })
-        .eq("id", tokenRow.id);
-      if (tokUpdErr) throw tokUpdErr;
+      const { data, error } = await supabase.rpc("cps_founder_finalize_po", {
+        p_token: token,
+        p_decision: choice,
+        p_note: reason.trim() || null,
+        p_edited_plan: planChanged ? plan : null,
+      });
+      if (error) throw error;
+      const res = data as any;
+      if (!res?.success) throw new Error(res?.error ?? "Could not record your decision");
 
-      /* 2. re-fetch all tokens for this PO to compute aggregate status.
-         Rule: any rejection → rejected (sticky). Otherwise any approval → approved.
-         Otherwise pending. So the first rejection blocks the PO; the first approval moves it forward. */
-      const { data: allTokens } = await supabase
-        .from("cps_po_approval_tokens")
-        .select("response,reason,used_at,founder_name")
-        .eq("po_id", tokenRow.po_id);
-
-      const responses = (allTokens ?? []).map((t: any) => t.response as string | null);
-      let finalStatus: "approved" | "rejected" | "pending" = "pending";
-      let finalReason: string | null = null;
-
-      if (responses.includes("rejected")) {
-        finalStatus = "rejected";
-        // surface the rejection reason at the PO level — pick the most recent rejection
-        const rejected = (allTokens ?? [])
-          .filter((t: any) => t.response === "rejected")
-          .sort((a: any, b: any) => new Date(b.used_at ?? 0).getTime() - new Date(a.used_at ?? 0).getTime())[0];
-        finalReason = (rejected as any)?.reason ?? null;
-      } else if (responses.includes("approved")) {
-        finalStatus = "approved";
-        finalReason = null;
+      if (res.edited && res.final_status === "approved") {
+        setRegenMsg("PO document update ho raha hai…");
+        await regeneratePdfAfterEdit(tokenRow.po_id, po?.po_number ?? "");
       }
-
-      /* 3. update PO founder_approval_status with the aggregate decision */
-      await supabase
-        .from("cps_purchase_orders")
-        .update({
-          founder_approval_status: finalStatus,
-          founder_approval_reason: finalReason,
-        })
-        .eq("id", tokenRow.po_id);
-
       setDone(true);
     } catch (e: any) {
       alert("Failed to submit: " + (e?.message ?? "unknown error"));
@@ -336,6 +467,49 @@ export default function ApprovePoPage() {
           </div>
         )}
 
+        {/* Payment Plan (Installments) — founder can review & edit */}
+        <div className="rounded-xl border border-border bg-card p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Payment Plan (Installments)</p>
+            {!editingPlan && (
+              <button type="button" onClick={() => setEditingPlan(true)}
+                className="text-xs font-semibold text-[hsl(20,50%,35%)] hover:underline">
+                Edit Payment Terms
+              </button>
+            )}
+          </div>
+
+          {editingPlan ? (
+            <>
+              <TranchePlanEditor totalAmount={Number(po?.grand_total ?? 0)} value={plan} onChange={setPlan} />
+              <p className="text-xs text-amber-700">
+                Terms badalne par neeche <span className="font-semibold">note likhna zaroori</span> hai — team ko dikhega.
+              </p>
+            </>
+          ) : plan.length > 0 ? (
+            <div className="space-y-1">
+              {plan.map((p, i) => (
+                <div key={i} className="flex justify-between items-baseline text-sm border-b border-border/30 py-1 last:border-0">
+                  <span className="font-medium">
+                    {p.milestone_name}{p.basis === "percent" && p.value != null ? ` (${p.value}%)` : ""}
+                  </span>
+                  <span className="text-xs text-muted-foreground">{whenShort(p.trigger_type, p.trigger_offset_days)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground italic">
+              Koi payment plan set nahi hai — "Edit Payment Terms" se add kar sakte ho.
+            </p>
+          )}
+
+          {planChanged && (
+            <p className="text-xs font-medium text-amber-700">
+              ⚠ Aapne terms badle hain — approve karne par yahi final terms PO aur Finance dono me update ho jayenge.
+            </p>
+          )}
+        </div>
+
         {/* Decision */}
         <div className="rounded-xl border border-border bg-card p-5 space-y-4">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Your Decision</p>
@@ -368,7 +542,8 @@ export default function ApprovePoPage() {
           {/* Reason */}
           <div>
             <label className="text-xs text-muted-foreground block mb-1.5">
-              Reason / Comment {choice === "rejected" && <span className="text-destructive">*</span>}
+              Reason / Note {(choice === "rejected" || planChanged) && <span className="text-destructive">*</span>}
+              {planChanged && <span className="text-amber-700"> (terms badle — note zaroori)</span>}
             </label>
             <textarea
               value={reason}
@@ -382,10 +557,10 @@ export default function ApprovePoPage() {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={!choice || (choice === "rejected" && !reason.trim()) || submitting}
+            disabled={!choice || (choice === "rejected" && !reason.trim()) || (planChanged && !reason.trim()) || submitting}
             className="w-full rounded-lg py-3 text-sm font-semibold bg-[hsl(20,50%,35%)] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[hsl(20,50%,30%)] transition-colors"
           >
-            {submitting ? "Submitting…" : "Submit Response"}
+            {submitting ? (regenMsg || "Submitting…") : "Submit Response"}
           </button>
         </div>
       </div>
