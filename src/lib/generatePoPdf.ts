@@ -57,6 +57,16 @@ export interface PoPdfData {
   }> | null;
   advancePaidTotal?: number | null;
 
+  /* payment schedule (installments) — the founder-approved plan, rendered as a table */
+  installments?: Array<{
+    milestone_name: string;
+    basis?: string | null;
+    percentage?: number | null;
+    amount: number;
+    trigger_type?: string | null;
+    trigger_offset_days?: number | null;
+  }> | null;
+
   lineItems: PoPdfLineItem[];
 
   /* supplier bank account (filled by procurement head before approval) */
@@ -99,6 +109,20 @@ const addDays = (d: string | null | undefined, n: number): string => {
 const INR = (n: number | null | undefined): string => {
   if (n == null || isNaN(n)) return "—";
   return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+/* Installment "when" → Hinglish label for the PO payment-schedule table */
+const WHEN_LABEL: Record<string, string> = {
+  advance_on_po: "Advance (PO ke saath)",
+  before_dispatch: "Dispatch se pehle",
+  on_dispatch_lr: "Dispatch pe (LR/Bilty)",
+  on_delivery_grn: "Delivery pe (maal aane par)",
+  credit_days_from_invoice: "Udhaar (invoice se)",
+  credit_days_from_grn: "Udhaar (delivery se)",
+};
+const whenLabel = (t?: string | null, days?: number | null): string => {
+  const base = WHEN_LABEL[t ?? ""] ?? (t ?? "—");
+  return days ? `${base} ${days} din` : base;
 };
 
 /* Indian number to words */
@@ -659,6 +683,48 @@ export function buildPoPdf(data: PoPdfData): Blob {
         { content: fmtPlain(advanceTotal), styles: { fontStyle: "bold", halign: "right", fillColor: [245, 245, 245] } },
       ]],
       styles: { fontSize: 7, cellPadding: 1.5, lineColor: [180, 180, 180], lineWidth: 0.2, overflow: "linebreak" },
+    });
+    y = (doc as any).lastAutoTable.finalY + 3;
+  }
+
+  /* ── 6a. Payment Schedule (Installments) ── */
+  const installments = (data.installments ?? []).filter((it) => it && Number(it.amount) >= 0);
+  if (installments.length > 0) {
+    doc.setLineWidth(0.3);
+    doc.setDrawColor(180);
+    doc.line(ML, y, W - MR, y);
+    y += 4;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.5);
+    doc.setTextColor(20, 20, 20);
+    doc.text("Payment Schedule (Installments)", ML, y);
+    y += 2;
+
+    autoTable(doc, {
+      startY: y,
+      margin: { left: ML, right: MR },
+      head: [[
+        { content: "No.", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+        { content: "Installment", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+        { content: "Payment Kab (When)", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+        { content: "%", styles: { fontStyle: "bold", fillColor: [245, 245, 245], halign: "right" } },
+        { content: "Amount", styles: { fontStyle: "bold", fillColor: [245, 245, 245], halign: "right" } },
+      ]],
+      body: installments.map((it, i) => [
+        { content: String(i + 1) },
+        { content: String(it.milestone_name ?? "—") },
+        { content: whenLabel(it.trigger_type, it.trigger_offset_days) },
+        { content: it.percentage != null ? `${it.percentage}%` : "—", styles: { halign: "right" } },
+        { content: fmtPlain(Number(it.amount) || 0), styles: { halign: "right" } },
+      ]),
+      styles: { fontSize: 7, cellPadding: 1.5, lineColor: [180, 180, 180], lineWidth: 0.2, overflow: "linebreak" },
+      columnStyles: {
+        0: { cellWidth: 8, halign: "center" },
+        2: { cellWidth: 50 },
+        3: { cellWidth: 14, halign: "right" },
+        4: { cellWidth: 28, halign: "right" },
+      },
     });
     y = (doc as any).lastAutoTable.finalY + 3;
   }

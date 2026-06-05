@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { callClaude } from '@/lib/claudeProxy';
+import { TranchePlanEditor, type Tranche, type TriggerType } from './TranchePlanEditor';
 import { toast } from 'sonner';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
@@ -64,6 +65,35 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
+// Map the AI installment vocabulary → canonical tranche trigger_type
+function mapTrigger(t?: string): TriggerType {
+  switch ((t || '').toLowerCase()) {
+    case 'on_order': case 'advance': case 'advance_on_po': return 'advance_on_po';
+    case 'before_dispatch': return 'before_dispatch';
+    case 'on_dispatch': case 'on_dispatch_lr': case 'on_lr': return 'on_dispatch_lr';
+    case 'on_delivery': case 'on_delivery_grn': case 'on_grn': return 'on_delivery_grn';
+    case 'credit': case 'net_days': case 'credit_days_from_invoice': return 'credit_days_from_invoice';
+    case 'credit_days_from_grn': return 'credit_days_from_grn';
+    default: return 'on_delivery_grn';
+  }
+}
+
+function mapInstallmentsToTranches(r: PaymentTermsResult | null): Tranche[] {
+  const inst = r?.payment_terms_json?.installments;
+  if (!inst?.length) return [];
+  const netDays = r?.payment_terms_json?.net_days ?? null;
+  return inst.map((it, idx) => {
+    const trigger_type = mapTrigger(it.trigger);
+    return {
+      milestone_name: it.description || `Tranche ${idx + 1}`,
+      basis: 'percent' as const,
+      value: it.percent ?? null,
+      trigger_type,
+      trigger_offset_days: it.days ?? (trigger_type.startsWith('credit') ? netDays : null),
+    };
+  });
+}
+
 // ── Component ──────────────────────────────────────────────────────────────
 export function PaymentTermsModal({
   open, poId, poNumber, supplierName, totalAmount,
@@ -74,6 +104,8 @@ export function PaymentTermsModal({
   const [aiResult, setAiResult] = useState<PaymentTermsResult | null>(null);
   const [aiAttempted, setAiAttempted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // Controlled tranche plan (user-driven; never synced from a prop in an effect).
+  const [tranches, setTranches] = useState<Tranche[]>([]);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -170,6 +202,9 @@ If you cannot find any payment terms, set confidence to 0 and leave payment_term
             JSON.stringify(parsed.payment_terms_json.installments, null, 2));
         }
       }
+      // Suggest a canonical tranche plan from the AI installments (user can edit/clear).
+      const mapped = mapInstallmentsToTranches(parsed);
+      if (mapped.length) setTranches(mapped);
     } catch {
       setAiResult(null);
     } finally {
@@ -211,6 +246,16 @@ If you cannot find any payment terms, set confidence to 0 and leave payment_term
         .eq('id', poId);
 
       if (updateError) throw updateError;
+
+      // Materialize the canonical tranche array → cps_po_payment_schedules (SPEC-PAY-01).
+      // Non-fatal: terms are already saved; a schedule failure is surfaced but doesn't block.
+      if (tranches.length) {
+        const { error: trErr } = await supabase.rpc('cps_generate_tranches', {
+          p_po_id: poId,
+          p_tranches: tranches,
+        });
+        if (trErr) toast.error('Terms saved, but tranche schedule failed: ' + trErr.message);
+      }
 
       await supabase.from('cps_audit_log').insert({
         user_id: user.id,
@@ -432,28 +477,13 @@ If you cannot find any payment terms, set confidence to 0 and leave payment_term
               )}
             />
 
-            <details className="text-sm">
-              <summary className="cursor-pointer text-muted-foreground hover:text-foreground py-1">
-                Installment breakdown (optional JSON)
-              </summary>
-              <FormField
-                control={form.control}
-                name="installments_json"
-                render={({ field }) => (
-                  <FormItem className="mt-2">
-                    <FormControl>
-                      <Textarea
-                        rows={5}
-                        className="font-mono text-xs"
-                        placeholder={`[\n  { "description": "On order", "percent": 50, "trigger": "on_order" },\n  { "description": "On delivery", "percent": 50, "trigger": "on_delivery" }\n]`}
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
+            <div className="rounded-lg border border-border p-3">
+              <TranchePlanEditor
+                totalAmount={totalAmount}
+                value={tranches}
+                onChange={setTranches}
               />
-            </details>
+            </div>
 
             <FormField
               control={form.control}

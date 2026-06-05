@@ -266,7 +266,7 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
     .single();
   if (poErr || !po) throw new Error("PO not found: " + (poErr?.message ?? ""));
 
-  const [supplierRes, prRes, linesRes, creatorRes] = await Promise.all([
+  const [supplierRes, prRes, linesRes, creatorRes, schedulesRes] = await Promise.all([
     (po as any).supplier_id
       ? supabase.from("cps_suppliers").select("name,gstin,state,address_text,phone,email").eq("id", (po as any).supplier_id).maybeSingle()
       : Promise.resolve({ data: null } as any),
@@ -277,12 +277,14 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
     (po as any).created_by
       ? supabase.from("cps_users").select("name,email").eq("id", (po as any).created_by).maybeSingle()
       : Promise.resolve({ data: null } as any),
+    supabase.from("cps_po_payment_schedules").select("milestone_name,milestone_order,amount,percentage,basis,trigger_type,trigger_offset_days,due_trigger").eq("po_id", poId).order("milestone_order"),
   ]);
 
   const supplier: any = (supplierRes as any).data ?? {};
   const pr: any = (prRes as any).data ?? {};
   const lines: any[] = (linesRes as any).data ?? [];
   const creator: any = (creatorRes as any).data ?? {};
+  const schedules: any[] = (schedulesRes as any).data ?? [];
 
   // Logo (optional; if it fails to load the PDF still renders without it)
   let logoBase64: string | null = null;
@@ -330,6 +332,14 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
     advancePaidTotal: Number((po as any).advance_paid_total ?? 0),
     version: (po as any).version,
     revisionReason: (po as any).revision_reason,
+    installments: schedules.map((s) => ({
+      milestone_name: s.milestone_name ?? "",
+      basis: s.basis ?? null,
+      percentage: s.percentage != null ? Number(s.percentage) : null,
+      amount: Number(s.amount ?? 0),
+      trigger_type: s.trigger_type ?? s.due_trigger ?? null,
+      trigger_offset_days: s.trigger_offset_days ?? null,
+    })),
     lineItems: lines.map((li) => ({
       description: li.description ?? "",
       quantity: Number(li.quantity ?? 0),
