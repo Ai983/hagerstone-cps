@@ -32,6 +32,13 @@ interface PendingGrn {
   created_at: string;
 }
 
+interface ValidationResults {
+  grn_id: string;
+  variance?: { detected: boolean; percent?: number; message?: string };
+  partial_delivery?: { detected: boolean; percent?: number; message?: string };
+  po_total?: number;
+}
+
 export default function GrnApprovals() {
   const [pending, setPending] = useState<PendingGrn[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,6 +46,8 @@ export default function GrnApprovals() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [approvalNotes, setApprovalNotes] = useState("");
   const [deciding, setDeciding] = useState<"approve" | "reject" | null>(null);
+  const [validation, setValidation] = useState<ValidationResults | null>(null);
+  const [validationLoading, setValidationLoading] = useState(false);
 
   useEffect(() => {
     void load();
@@ -87,17 +96,40 @@ export default function GrnApprovals() {
     }
   }
 
+  // Load validation results when opening review dialog
+  async function openReview(grn: PendingGrn) {
+    setSelectedGrn(grn);
+    setValidationLoading(true);
+    setApprovalNotes("");
+    try {
+      // Rule 1: GRN Amount Validation
+      const { data: amountVal } = await supabase.rpc("cps_validate_grn_amount", { p_grn_id: grn.id });
+
+      // Rule 2: Partial Delivery Check
+      const { data: deliveryVal } = await supabase.rpc("cps_should_flip_delivery_tranche", { p_grn_id: grn.id });
+
+      setValidation({
+        grn_id: grn.id,
+        variance: amountVal ? { detected: amountVal.requires_variance_review, percent: amountVal.variance_percent, message: amountVal.message } : undefined,
+        partial_delivery: deliveryVal ? { detected: !deliveryVal.should_flip, percent: deliveryVal.delivery_percent, message: deliveryVal.reason } : undefined,
+        po_total: amountVal?.po_amount,
+      });
+    } catch (e) {
+      console.warn("Validation load failed:", e);
+    } finally {
+      setValidationLoading(false);
+      setReviewOpen(true);
+    }
+  }
+
   async function handleDecision(grn: PendingGrn, decision: "approve" | "reject") {
     setDeciding(decision);
     try {
       if (decision === "approve") {
-        // Rule 1: Validate GRN amount against PO
-        const { data: validation, error: valErr } = await supabase.rpc("cps_validate_grn_amount", { p_grn_id: grn.id });
-        if (valErr) throw valErr;
-
-        const val = validation as any;
-        if (val.requires_variance_review && !approvalNotes.trim()) {
-          toast.error(`Amount variance ${val.variance_percent}% requires approval reason`);
+        // Check if rules require approval reason
+        const needsReason = validation?.variance?.detected || validation?.partial_delivery?.detected;
+        if (needsReason && !approvalNotes.trim()) {
+          toast.error("Approval reason required for flagged deliveries");
           setDeciding(null);
           return;
         }
@@ -237,10 +269,7 @@ export default function GrnApprovals() {
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={() => {
-                    setSelectedGrn(grn);
-                    setReviewOpen(true);
-                  }}
+                  onClick={() => openReview(grn)}
                 >
                   <Eye className="h-4 w-4 mr-1" />
                   Review
@@ -291,45 +320,94 @@ export default function GrnApprovals() {
             </DialogHeader>
 
             <div className="space-y-4">
-              <div className="rounded-lg border border-border p-4 space-y-2 text-sm bg-muted/30">
-                {selectedGrn.extracted_data?.total_amount && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Amount:</span>
-                    <span className="font-medium">{fmt(selectedGrn.extracted_data.total_amount)}</span>
+              {validationLoading ? (
+                <div className="text-center py-6 text-sm text-muted-foreground">Validating GRN…</div>
+              ) : (
+                <>
+                  {/* Extracted Data */}
+                  <div className="rounded-lg border border-border p-4 space-y-2 text-sm bg-muted/30">
+                    {selectedGrn.extracted_data?.total_amount && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Extracted Amount:</span>
+                        <span className="font-medium">{fmt(selectedGrn.extracted_data.total_amount)}</span>
+                      </div>
+                    )}
+                    {validation?.po_total && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">PO Total:</span>
+                        <span className="font-medium">{fmt(validation.po_total)}</span>
+                      </div>
+                    )}
+                    {selectedGrn.extracted_data?.items_count && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Items:</span>
+                        <span className="font-medium">{selectedGrn.extracted_data.items_count}</span>
+                      </div>
+                    )}
+                    {selectedGrn.extracted_data?.received_date && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Received:</span>
+                        <span className="font-medium">{selectedGrn.extracted_data.received_date}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between pt-2 border-t border-border">
+                      <span className="text-muted-foreground">AI Confidence:</span>
+                      <span className={`font-semibold ${(selectedGrn.extracted_data?.confidence ?? 0) >= 80 ? "text-green-700" : "text-amber-700"}`}>
+                        {selectedGrn.extracted_data?.confidence ?? 0}%
+                      </span>
+                    </div>
                   </div>
-                )}
-                {selectedGrn.extracted_data?.items_count && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Items:</span>
-                    <span className="font-medium">{selectedGrn.extracted_data.items_count}</span>
-                  </div>
-                )}
-                {selectedGrn.extracted_data?.received_date && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Received:</span>
-                    <span className="font-medium">{selectedGrn.extracted_data.received_date}</span>
-                  </div>
-                )}
-                <div className="flex justify-between pt-2 border-t border-border">
-                  <span className="text-muted-foreground">Confidence:</span>
-                  <span className={`font-semibold ${(selectedGrn.extracted_data?.confidence ?? 0) >= 80 ? "text-green-700" : "text-amber-700"}`}>
-                    {selectedGrn.extracted_data?.confidence ?? 0}%
-                  </span>
-                </div>
-              </div>
 
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground block mb-2">
-                  Approval Notes
-                </label>
-                <Textarea
-                  value={approvalNotes}
-                  onChange={(e) => setApprovalNotes(e.target.value)}
-                  placeholder="Why approving/rejecting (optional)"
-                  rows={3}
-                  disabled={deciding !== null}
-                />
-              </div>
+                  {/* Rule 1: Amount Variance Warning */}
+                  {validation?.variance?.detected && (
+                    <div className="rounded-lg border-l-4 border-l-red-500 border border-red-200 bg-red-50 p-3">
+                      <div className="flex gap-3">
+                        <AlertCircle className="h-5 w-5 text-red-700 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold text-red-900">Amount Variance: {validation.variance.percent}%</p>
+                          <p className="text-sm text-red-800 mt-1">{validation.variance.message}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Rule 2: Partial Delivery Warning */}
+                  {validation?.partial_delivery?.detected && (
+                    <div className="rounded-lg border-l-4 border-l-amber-500 border border-amber-200 bg-amber-50 p-3">
+                      <div className="flex gap-3">
+                        <AlertCircle className="h-5 w-5 text-amber-700 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold text-amber-900">Partial Delivery: {validation.partial_delivery.percent}%</p>
+                          <p className="text-sm text-amber-800 mt-1">{validation.partial_delivery.message}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Approval Notes */}
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground block mb-2">
+                      Approval Notes {(validation?.variance?.detected || validation?.partial_delivery?.detected) && <span className="text-red-600">*</span>}
+                    </label>
+                    <Textarea
+                      value={approvalNotes}
+                      onChange={(e) => setApprovalNotes(e.target.value)}
+                      placeholder={
+                        validation?.variance?.detected || validation?.partial_delivery?.detected
+                          ? "Required: explain variance or delivery issues…"
+                          : "Optional: explain your decision…"
+                      }
+                      rows={3}
+                      disabled={deciding !== null}
+                      className={
+                        (validation?.variance?.detected || validation?.partial_delivery?.detected) && !approvalNotes.trim()
+                          ? "border-red-300"
+                          : ""
+                      }
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             <DialogFooter>
