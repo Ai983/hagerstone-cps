@@ -549,6 +549,7 @@ export default function PurchaseOrders() {
   const [markPaidRef, setMarkPaidRef] = useState("");
   const [markPaidSaving, setMarkPaidSaving] = useState(false);
   const [releasingId, setReleasingId] = useState<string | null>(null);
+  const [sequenceValidation, setSequenceValidation] = useState<Record<string, { allowed: boolean; reason?: string; unpaid_prior?: any[] }>({});
 
   // Revised-by link: when viewing a superseded PO, shows link to the new revision
   const [revisedByPo, setRevisedByPo] = useState<{ id: string; po_number: string } | null>(null);
@@ -1302,7 +1303,17 @@ export default function PurchaseOrders() {
       setViewApprovedByUser((userRes as any).data as UserRow | null);
       setViewPoCreatorName((creatorRes as any).data?.name ?? null);
       setViewPoLineItems((lineRes as any).data as PoLineItemRow[]);
-      setViewPaymentSchedule(((scheduleRes as any).data ?? []) as PaymentScheduleRow[]);
+      const schedule = ((scheduleRes as any).data ?? []) as PaymentScheduleRow[];
+      setViewPaymentSchedule(schedule);
+
+      // Validate sequence for each tranche
+      const validation: Record<string, { allowed: boolean; reason?: string; unpaid_prior?: any[] }> = {};
+      for (const tranche of schedule) {
+        const result = await supabase.rpc("cps_can_request_release", { p_tranche_id: tranche.id });
+        validation[tranche.id] = result.data || { allowed: false, reason: "Validation failed" };
+      }
+      setSequenceValidation(validation);
+
       setViewPoTokens(((tokensRes as any).data ?? []) as Array<{ id: string; founder_name: string; response: string | null; reason: string | null; used_at: string | null }>);
       const tncs: Record<string, string> = {};
       ((configRes as any).data ?? []).forEach((row: any) => {
@@ -1576,8 +1587,28 @@ export default function PurchaseOrders() {
 
   // SPEC-PAY-01 Gate-2: procurement requests a payment release for a due/scheduled
   // installment → pending 'release' authorization + tokens (both founders) + WhatsApp.
+  // Validate sequence before allowing release request
+  const validateSequence = async (tranche_id: string) => {
+    const { data, error } = await supabase.rpc("cps_can_request_release", { p_tranche_id: tranche_id });
+    if (error) {
+      console.warn("Sequence validation error:", error);
+      return { allowed: false, reason: "Could not validate sequence" };
+    }
+    return data || { allowed: false, reason: "Unknown error" };
+  };
+
   const requestRelease = async (row: PaymentScheduleRow) => {
     if (!viewPo || !user) return;
+
+    // Check sequence first
+    const validation = await validateSequence(row.id);
+    if (!validation.allowed) {
+      const prior = validation.unpaid_prior?.[0];
+      const priorName = prior?.milestone_name || "previous tranche";
+      toast.error(`⏳ ${priorName} must be paid first`);
+      return;
+    }
+
     setReleasingId(row.id);
     try {
       // 1) pending release authorization (also flips the tranche to release_requested)
@@ -3500,14 +3531,28 @@ export default function PurchaseOrders() {
                                 {row.payment_reference && <div className="text-[10px]">{row.payment_reference}</div>}
                               </TableCell>
                               {isProcurementHead && (
-                                <TableCell className="text-right">
-                                  {(row.status === "scheduled" || row.status === "due") && (
-                                    <Button size="sm" variant="outline" disabled={releasingId === row.id}
-                                      className="h-7 text-xs border-amber-300 text-amber-700 hover:bg-amber-50"
-                                      onClick={() => requestRelease(row)}>
-                                      {releasingId === row.id ? "Sending…" : "Request Release"}
-                                    </Button>
-                                  )}
+                                <TableCell className="text-right space-y-1">
+                                  {(row.status === "scheduled" || row.status === "due") && (() => {
+                                    const validation = sequenceValidation[row.id];
+                                    const isLocked = validation && !validation.allowed;
+                                    const priorTranche = isLocked ? validation.unpaid_prior?.[0] : null;
+                                    return isLocked ? (
+                                      <div className="flex flex-col items-end gap-1">
+                                        <Button size="sm" variant="outline" disabled className="h-7 text-xs opacity-50 cursor-not-allowed">
+                                          🔒 Locked
+                                        </Button>
+                                        <p className="text-[10px] text-slate-600 max-w-[120px] text-right leading-tight">
+                                          {priorTranche ? `Await ${priorTranche.milestone_name}` : "Prior payment required"}
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <Button size="sm" variant="outline" disabled={releasingId === row.id}
+                                        className="h-7 text-xs border-amber-300 text-amber-700 hover:bg-amber-50"
+                                        onClick={() => requestRelease(row)}>
+                                        {releasingId === row.id ? "Sending…" : "Request Release"}
+                                      </Button>
+                                    );
+                                  })()}
                                   {row.status === "release_requested" && (
                                     <span className="text-xs text-amber-700">Founder ke paas ⏳</span>
                                   )}
