@@ -67,6 +67,7 @@ const ApproveReleasePage = lazyWithRetry(() => import("@/pages/ApproveReleasePag
 const ApproveAdvancePage = lazyWithRetry(() => import("@/pages/ApproveAdvancePage"));
 const AdvanceRequests = lazyWithRetry(() => import("@/pages/AdvanceRequests"));
 const PaymentReconciliation = lazyWithRetry(() => import("@/pages/PaymentReconciliation"));
+const GrnApprovals = lazyWithRetry(() => import("@/pages/GrnApprovals"));
 const PRReview = lazyWithRetry(() => import("@/pages/PRReview"));
 const KanbanBoard = lazyWithRetry(() => import("@/pages/KanbanBoard"));
 const Analytics = lazyWithRetry(() => import("@/pages/Analytics"));
@@ -121,6 +122,7 @@ const App = () => (
               <Route path="/purchase-orders" element={<Protected><PurchaseOrders /></Protected>} />
               <Route path="/advances" element={<Protected><AdvanceRequests /></Protected>} />
               <Route path="/reconciliation" element={<Protected><PaymentReconciliation /></Protected>} />
+              <Route path="/grn-approvals" element={<Protected><GrnApprovals /></Protected>} />
               <Route path="/work-orders" element={<Protected><WorkOrders /></Protected>} />
               <Route path="/delivery" element={<Protected><DeliveryTracker /></Protected>} />
               <Route path="/audit" element={<Protected><AuditLog /></Protected>} />

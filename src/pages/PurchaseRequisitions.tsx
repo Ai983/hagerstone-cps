@@ -19,7 +19,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
-import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight, ChevronDown, ClipboardCheck } from "lucide-react";
+import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight, ChevronDown, ClipboardCheck, Upload } from "lucide-react";
+import GrnUploadDialog from "@/components/procurement/GrnUploadDialog";
 
 // DB CHECK constraint allows: pending, pending_design, validated, duplicate_flagged, rfq_created, po_issued, delivered, cancelled
 type PRStatus = "pending" | "pending_design" | "validated" | "duplicate_flagged" | "rfq_created" | "po_issued" | "delivered" | "cancelled";
@@ -773,6 +774,10 @@ export default function PurchaseRequisitions() {
   // Site team invoice upload dialog (triggered from Kanban invoice stage)
   const [invoiceUploadOpen, setInvoiceUploadOpen] = useState(false);
   const [invoiceUploadCtx, setInvoiceUploadCtx] = useState<{ poId: string; poNumber: string; supplierId: string | null; prId: string } | null>(null);
+
+  // GRN upload dialog (triggered from PR card)
+  const [grnUploadOpen, setGrnUploadOpen] = useState(false);
+  const [grnUploadCtx, setGrnUploadCtx] = useState<{ prId: string; prNumber: string } | null>(null);
 
   // Quick preview expand
   const [expandedPrId, setExpandedPrId] = useState<string | null>(null);
@@ -3388,6 +3393,20 @@ export default function PurchaseRequisitions() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* GRN Upload Dialog */}
+      {grnUploadCtx && (
+        <GrnUploadDialog
+          open={grnUploadOpen}
+          onOpenChange={setGrnUploadOpen}
+          prId={grnUploadCtx.prId}
+          prNumber={grnUploadCtx.prNumber}
+          onSuccess={async () => {
+            toast.success("GRN submitted for approval");
+            await refetch?.();
+          }}
+        />
+      )}
     </div>
   );
 }
