@@ -91,13 +91,27 @@ export default function GrnApprovals() {
     setDeciding(decision);
     try {
       if (decision === "approve") {
-        // Update GRN status to 'confirmed' — this triggers trg_grn_mark_tranches_due
+        // Rule 1: Validate GRN amount against PO
+        const { data: validation, error: valErr } = await supabase.rpc("cps_validate_grn_amount", { p_grn_id: grn.id });
+        if (valErr) throw valErr;
+
+        const val = validation as any;
+        if (val.requires_variance_review && !approvalNotes.trim()) {
+          toast.error(`Amount variance ${val.variance_percent}% requires approval reason`);
+          setDeciding(null);
+          return;
+        }
+
+        // If variance > 10%, store approval reason
+        const updateData: any = { status: "confirmed", updated_at: new Date().toISOString() };
+        if (val.requires_variance_review) {
+          updateData.variance_approved_by = (await supabase.auth.getUser()).data.user?.id;
+          updateData.variance_approval_reason = approvalNotes;
+        }
+
         const { error: updateErr } = await supabase
           .from("cps_grns")
-          .update({
-            status: "confirmed",
-            updated_at: new Date().toISOString(),
-          })
+          .update(updateData)
           .eq("id", grn.id);
 
         if (updateErr) throw updateErr;
