@@ -3065,6 +3065,32 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
         if (trErr) toast.error("PO created, but tranche schedule failed: " + trErr.message);
       }
 
+      // Advance Stage 4: auto-link any approved advance for this supplier (within reconcile window)
+      try {
+        const { data: pendingAdvance } = await supabase
+          .from("cps_advance_requests")
+          .select("id, advance_number")
+          .eq("supplier_id", supplierId)
+          .eq("status", "approved")
+          .gt("reconcile_due_date", new Date().toISOString().split("T")[0])
+          .limit(1)
+          .maybeSingle();
+
+        if (pendingAdvance?.id) {
+          const { error: linkErr } = await supabase.rpc("cps_link_advance_to_po", {
+            p_po_id: poId,
+            p_advance_id: pendingAdvance.id,
+          });
+          if (!linkErr) {
+            toast.success(`Advance ${pendingAdvance.advance_number} linked as paid tranche`);
+          } else {
+            console.warn("Could not link advance:", linkErr);
+          }
+        }
+      } catch (e) {
+        console.warn("Advance linking check failed:", e);
+      }
+
       // Persist bank details on the supplier master so the dialog pre-fills on
       // the next PO for this supplier without hunting through past POs.
       if (bankHolderName.trim() || bankName.trim() || bankIfsc.trim() || bankAccountNumber.trim()) {
