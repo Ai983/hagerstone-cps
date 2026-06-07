@@ -3,6 +3,7 @@
 // (director) approves on WhatsApp → procurement records cash + voucher (Claude OCR)
 // → must reconcile to a PO within `advance_reconcile_days` (else escalated by cron).
 import { useEffect, useState } from "react";
+import { AlertCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { callClaude } from "@/lib/claudeProxy";
@@ -119,11 +120,21 @@ function RaiseAdvanceDialog({ onClose, onDone, userId }: { onClose: () => void; 
   const [supplierQuery, setSupplierQuery] = useState("");
   const [supplierResults, setSupplierResults] = useState<Array<{ id: string; name: string }>>([]);
   const [supplier, setSupplier] = useState<{ id: string; name: string } | null>(null);
+  const [escalatedSuppliers, setEscalatedSuppliers] = useState<Set<string>>(new Set());
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
   const [project, setProject] = useState("");
   const [poNote, setPoNote] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Load escalated suppliers on mount
+  useEffect(() => {
+    async function loadEscalated() {
+      const { data } = await supabase.from("cps_escalated_suppliers").select("supplier_id");
+      if (data) setEscalatedSuppliers(new Set(data.map((d: any) => d.supplier_id)));
+    }
+    void loadEscalated();
+  }, []);
 
   async function searchSuppliers(q: string) {
     setSupplierQuery(q); setSupplier(null);
@@ -205,9 +216,21 @@ function RaiseAdvanceDialog({ onClose, onDone, userId }: { onClose: () => void; 
           <div>
             <Label className="text-sm">Supplier *</Label>
             {supplier ? (
-              <div className="flex items-center justify-between border rounded-lg px-3 py-2 mt-1 text-sm">
-                <span>{supplier.name}</span>
-                <button className="text-xs text-muted-foreground hover:underline" onClick={() => { setSupplier(null); setSupplierQuery(""); }}>change</button>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between border rounded-lg px-3 py-2 text-sm">
+                  <span>{supplier.name}</span>
+                  <button className="text-xs text-muted-foreground hover:underline" onClick={() => { setSupplier(null); setSupplierQuery(""); }}>change</button>
+                </div>
+                {/* Rule 6: Escalation warning */}
+                {escalatedSuppliers.has(supplier.id) && (
+                  <div className="rounded-lg border-l-4 border-l-red-500 border border-red-200 bg-red-50 p-3 flex gap-2">
+                    <AlertCircle className="h-5 w-5 text-red-700 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm">
+                      <p className="font-semibold text-red-900">Advance Blocked</p>
+                      <p className="text-red-800 text-xs mt-1">Prior advance unresolved for 7+ days. Contact procurement head.</p>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <>
@@ -215,7 +238,12 @@ function RaiseAdvanceDialog({ onClose, onDone, userId }: { onClose: () => void; 
                 {supplierResults.length > 0 && (
                   <div className="border rounded-lg mt-1 max-h-40 overflow-auto">
                     {supplierResults.map((s) => (
-                      <button key={s.id} className="block w-full text-left px-3 py-1.5 text-sm hover:bg-muted" onClick={() => { setSupplier(s); setSupplierResults([]); }}>{s.name}</button>
+                      <button key={s.id} className="block w-full text-left px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+                        disabled={escalatedSuppliers.has(s.id)}
+                        onClick={() => { setSupplier(s); setSupplierResults([]); }}>
+                        {s.name}
+                        {escalatedSuppliers.has(s.id) && <span className="text-xs text-red-600 ml-2">(blocked)</span>}
+                      </button>
                     ))}
                   </div>
                 )}
@@ -241,7 +269,9 @@ function RaiseAdvanceDialog({ onClose, onDone, userId }: { onClose: () => void; 
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={submit} disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Founder ko bhejo</Button>
+          <Button onClick={submit} disabled={saving || (supplier ? escalatedSuppliers.has(supplier.id) : false)}>
+            {saving ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null} Founder ko bhejo
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -254,6 +284,7 @@ function RecordCashDialog({ advance, onClose, onDone }: { advance: Advance; onCl
   const [ocr, setOcr] = useState<any>(null);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [varianceNotes, setVarianceNotes] = useState("");
 
   async function runOcr(f: File) {
     setOcrLoading(true); setOcr(null);
@@ -270,7 +301,25 @@ function RecordCashDialog({ advance, onClose, onDone }: { advance: Advance; onCl
         ] as any }],
       });
       const text = resp?.content?.[0]?.text ?? "";
-      setOcr(JSON.parse(text.replace(/```json|```/g, "").trim()));
+      const ocrData = JSON.parse(text.replace(/```json|```/g, "").trim());
+
+      // Rule 8: Validate receipt amount variance
+      if (ocrData.amount && typeof ocrData.amount === 'number') {
+        const { data: validation } = await supabase.rpc("cps_validate_receipt_amount", {
+          p_advance_id: advance.id,
+          p_receipt_amount: ocrData.amount
+        });
+        if (validation?.variance_detected) {
+          ocrData.variance_warning = {
+            detected: true,
+            percent: validation.variance_percent,
+            expected: validation.expected,
+            received: validation.received
+          };
+        }
+      }
+
+      setOcr(ocrData);
     } catch {
       setOcr({ error: "OCR could not read the voucher — you can still record manually." });
     } finally {
@@ -279,6 +328,12 @@ function RecordCashDialog({ advance, onClose, onDone }: { advance: Advance; onCl
   }
 
   async function submit() {
+    // Rule 8: Check variance requires explanation
+    if (ocr?.variance_warning?.detected && !varianceNotes.trim()) {
+      toast.error(`Receipt differs by ${ocr.variance_warning.percent}% — explanation zaroori hai`);
+      return;
+    }
+
     setSaving(true);
     try {
       let proofPath: string | null = null;
@@ -288,9 +343,17 @@ function RecordCashDialog({ advance, onClose, onDone }: { advance: Advance; onCl
         const { error: upErr } = await supabase.storage.from("cps-po-documents").upload(path, file, { upsert: true });
         if (!upErr) proofPath = path;
       }
-      const { error } = await supabase.from("cps_advance_requests").update({
+
+      // Store variance info if detected
+      const updateData: any = {
         status: "paid", paid_at: new Date().toISOString(), proof_path: proofPath, proof_ocr: ocr ?? null,
-      }).eq("id", advance.id);
+      };
+      if (ocr?.variance_warning?.detected) {
+        updateData.receipt_variance_approved = true;
+        updateData.receipt_variance_reason = varianceNotes.trim();
+      }
+
+      const { error } = await supabase.from("cps_advance_requests").update(updateData).eq("id", advance.id);
       if (error) throw error;
       toast.success("Cash payment record ho gaya");
       onDone();
@@ -315,12 +378,39 @@ function RecordCashDialog({ advance, onClose, onDone }: { advance: Advance; onCl
           </div>
           {ocrLoading && <div className="flex items-center gap-2 text-sm text-blue-700"><Loader2 className="h-4 w-4 animate-spin" /> Voucher padh rahe hain (AI)…</div>}
           {ocr && !ocr.error && (
-            <div className="rounded-lg border border-border p-3 text-sm space-y-1">
-              <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Sparkles className="h-3 w-3" /> AI ne voucher se padha</div>
-              <div>Amount: {ocr.amount != null ? fmt(ocr.amount) : "—"} · Paid to: {ocr.paid_to ?? "—"}</div>
-              <div className={ocr.matches_request ? "text-green-700" : "text-amber-700"}>
-                {ocr.matches_request ? "✓ Request se match karta hai" : "⚠ Request se match nahi — dhyan se check karo"} ({ocr.confidence ?? 0}%)
+            <div className="space-y-2">
+              <div className="rounded-lg border border-border p-3 text-sm space-y-1">
+                <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground"><Sparkles className="h-3 w-3" /> AI ne voucher se padha</div>
+                <div>Amount: {ocr.amount != null ? fmt(ocr.amount) : "—"} · Paid to: {ocr.paid_to ?? "—"}</div>
+                <div className={ocr.matches_request ? "text-green-700" : "text-amber-700"}>
+                  {ocr.matches_request ? "✓ Request se match karta hai" : "⚠ Request se match nahi — dhyan se check karo"} ({ocr.confidence ?? 0}%)
+                </div>
               </div>
+
+              {/* Rule 8: Receipt variance warning */}
+              {ocr.variance_warning?.detected && (
+                <div className="rounded-lg border-l-4 border-l-amber-500 border border-amber-200 bg-amber-50 p-3">
+                  <div className="flex gap-3">
+                    <AlertCircle className="h-5 w-5 text-amber-700 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="font-semibold text-amber-900">Receipt Variance: {ocr.variance_warning.percent}%</p>
+                      <p className="text-sm text-amber-800 mt-1">
+                        Advance was ₹{fmt(ocr.variance_warning.expected)} but receipt shows ₹{fmt(ocr.variance_warning.received)}
+                      </p>
+                      <Label className="text-xs font-semibold text-amber-900 block mt-2 mb-1">
+                        Explanation zaroori hai *
+                      </Label>
+                      <Textarea
+                        value={varianceNotes}
+                        onChange={(e) => setVarianceNotes(e.target.value)}
+                        placeholder="Kya hua? Refund? Discount? Kuch aur?"
+                        rows={2}
+                        className="text-xs"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {ocr?.error && <p className="text-xs text-amber-700">{ocr.error}</p>}
