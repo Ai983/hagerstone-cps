@@ -969,20 +969,15 @@ export default function PurchaseOrders() {
     }
 
     // Rule 9: Check for price warnings
-    if (!priceWarningApproved) {
+    if (priceWarnings.length === 0 && !priceWarningApproved) {
       const warnings = await checkQuotePrices();
       if (warnings.length > 0) {
         setPriceWarnings(warnings);
-        setCreateStep("review"); // Show warning dialog
-        return;
-      }
-    } else {
-      // If approved, store reason in a variable for audit (will add to audit log after PO created)
-      if (!priceWarningReason.trim()) {
-        toast.error("Price override reason required");
+        toast.info("⚠ Price premium detected — provide approval reason to continue");
         return;
       }
     }
+
     if (!createShipTo.trim()) {
       toast.error("Ship To address is required");
       return;
@@ -1121,8 +1116,24 @@ export default function PurchaseOrders() {
         }]);
       }
 
+      // Rule 9: Log price override if approved
+      if (priceWarnings.length > 0 && priceWarningReason.trim()) {
+        await supabase.from("cps_audit_log").insert([{
+          action_type: "PRICE_PREMIUM_OVERRIDE",
+          entity_type: "cps_purchase_orders",
+          entity_id: poId,
+          entity_number: String(poNumber),
+          performed_by: user.id,
+          description: `Price premium override approved: ${priceWarningReason.trim()}`,
+          severity: "warning",
+        }]);
+      }
+
       toast.success(`PO ${String(poNumber)} created — sending to founders for approval`);
       setCreateOpen(false);
+      setPriceWarnings([]);
+      setPriceWarningApproved(false);
+      setPriceWarningReason("");
       await fetchPoRows();
 
       /* ── fire-and-forget: PDF + approval tokens + n8n webhook ── */
@@ -2743,6 +2754,42 @@ export default function PurchaseOrders() {
                 )}
               </div>
 
+              {/* Rule 9: Price premium warning */}
+              {priceWarnings.length > 0 && (
+                <Card className="border-l-4 border-l-red-500 border-red-200 bg-red-50">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2 text-red-900">
+                      ⚠ Quote Price Premium Warning
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="text-sm text-red-800">
+                      The following items are quoted at <strong>25%+ above market benchmark</strong>:
+                    </div>
+                    <div className="space-y-2">
+                      {priceWarnings.map((w, idx) => (
+                        <div key={idx} className="text-xs text-red-900 border border-red-200 rounded p-2 bg-white">
+                          <div><strong>{w.item_description || "Item"}</strong></div>
+                          <div>Quoted: ₹{Number(w.quoted_rate).toLocaleString("en-IN")} | Benchmark: ₹{Number(w.benchmark_rate).toLocaleString("en-IN")} | Premium: <strong>{w.premium_percent}%</strong></div>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <Label className="text-xs font-semibold text-red-900 block mb-2">
+                        Approval reason required *
+                      </Label>
+                      <Textarea
+                        value={priceWarningReason}
+                        onChange={(e) => setPriceWarningReason(e.target.value)}
+                        placeholder="Why is this supplier chosen despite premium pricing? (e.g., faster delivery, better quality, only available source…)"
+                        rows={3}
+                        className="text-xs border-red-300"
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Line items */}
               <Card>
                 <CardHeader className="py-3">
@@ -2835,10 +2882,18 @@ export default function PurchaseOrders() {
               </div>
 
               <DialogFooter className="pt-2">
-                <Button variant="outline" onClick={() => setCreateStep("form")} disabled={createLoading}>
+                <Button variant="outline" onClick={() => {
+                  setCreateStep("form");
+                  setPriceWarnings([]);
+                  setPriceWarningApproved(false);
+                  setPriceWarningReason("");
+                }} disabled={createLoading}>
                   ← Back to Edit
                 </Button>
-                <Button onClick={submitCreatePo} disabled={createLoading}>
+                <Button
+                  onClick={submitCreatePo}
+                  disabled={createLoading || (priceWarnings.length > 0 && !priceWarningReason.trim())}
+                >
                   {createLoading ? "Creating..." : "Confirm & Send to Founders"}
                 </Button>
               </DialogFooter>
