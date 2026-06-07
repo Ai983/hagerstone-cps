@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy, ShieldCheck, Briefcase } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy, ShieldCheck, Briefcase, Wallet, CheckSquare } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +13,8 @@ const NAV = [
   { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive","procurement_head","it_head","management","auditor"] },
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Purchase Orders", url: "/purchase-orders", icon: ShoppingCart, roles: ["procurement_executive","procurement_head","it_head","management","finance","accounts_team"] },
+  { title: "Advances", url: "/advances", icon: Wallet, roles: ["procurement_executive","procurement_head","it_head","management","finance"] },
+  { title: "Reconciliation", url: "/reconciliation", icon: CheckSquare, roles: ["procurement_head","it_head","management","finance","auditor"] },
   { title: "Work Orders", url: "/work-orders", icon: Briefcase, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team"] },
   { title: "Delivery Tracker", url: "/delivery", icon: Truck, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor"] },
   { title: "Project BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive","procurement_head","it_head","management","accounts_team"] },
