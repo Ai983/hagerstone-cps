@@ -421,6 +421,9 @@ export default function PurchaseOrders() {
   const [createLoading, setCreateLoading] = useState(false);
   const [createSupplierName, setCreateSupplierName] = useState<string>("");
   const [eligibleRfqIds, setEligibleRfqIds] = useState<string[]>([]);
+  const [priceWarnings, setPriceWarnings] = useState<any[]>([]);
+  const [priceWarningApproved, setPriceWarningApproved] = useState(false);
+  const [priceWarningReason, setPriceWarningReason] = useState("");
   const [eligibleRfqs, setEligibleRfqs] = useState<Array<{ id: string; rfq_number: string; title?: string | null; pr_id: string; payment_terms: string | null }>>([]);
 
   const [selectedRfqId, setSelectedRfqId] = useState<string>("");
@@ -946,11 +949,39 @@ export default function PurchaseOrders() {
     setCreateStep("review");
   };
 
+  // Rule 9: Check quote prices against benchmarks
+  const checkQuotePrices = async (): Promise<any[]> => {
+    if (!selectedRfqId) return [];
+    const { data: priceCheck } = await supabase
+      .from("cps_quote_price_check")
+      .select("*")
+      .eq("supplier_name", createSupplierName);
+
+    const warnings = (priceCheck ?? []).filter((q: any) => q.price_status === "exceeds_25_percent");
+    return warnings;
+  };
+
   const submitCreatePo = async () => {
     if (!user) return;
     if (!selectedRfqId || !createSupplierId) {
       toast.error("Please select an RFQ and supplier");
       return;
+    }
+
+    // Rule 9: Check for price warnings
+    if (!priceWarningApproved) {
+      const warnings = await checkQuotePrices();
+      if (warnings.length > 0) {
+        setPriceWarnings(warnings);
+        setCreateStep("review"); // Show warning dialog
+        return;
+      }
+    } else {
+      // If approved, store reason in a variable for audit (will add to audit log after PO created)
+      if (!priceWarningReason.trim()) {
+        toast.error("Price override reason required");
+        return;
+      }
     }
     if (!createShipTo.trim()) {
       toast.error("Ship To address is required");
