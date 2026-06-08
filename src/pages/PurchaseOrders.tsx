@@ -223,6 +223,23 @@ const STATUS_LABEL: Record<string, string> = {
   superseded:       "Superseded",
 };
 
+// Effective status bucket — same precedence as the badge label below.
+// Use this for filtering so the Status dropdown matches what users see in
+// the table's Status column. Returns one of the canonical PoStatus values
+// (acts as a bucket key for the filter dropdown).
+function effectivePoStatus(r: PoRow): string {
+  const s = String(r.status ?? "draft");
+  if (s === "superseded") return "superseded";
+  if (s === "closed")     return "closed";
+  if (s === "cancelled")  return "cancelled";
+  if (s === "rejected")   return "rejected";
+  if (s === "sent")       return "sent";
+  if (r.founder_approval_status === "approved") return "approved";
+  if (s === "pending_approval" || r.founder_approval_status === "pending" || r.founder_approval_status === "sent") return "pending_approval";
+  if (s === "draft") return "draft";
+  return s;
+}
+
 function poStatusDisplay(r: PoRow): { label: string; cls: string } {
   const s = String(r.status ?? "draft");
   if (s === "superseded") return { label: "Archived (Revised)", cls: statusBadgeCls.superseded };
@@ -378,6 +395,12 @@ export default function PurchaseOrders() {
 
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<PoRow[]>([]);
+
+  // Lightweight supplier-id → name lookup specifically for powering the
+  // search filter. PoTable does its own richer fetch for display; this one
+  // mirrors that lookup at the parent level so the filter can match supplier
+  // names on digital-flow POs (where supplier_name_text is empty).
+  const [supplierNamesById, setSupplierNamesById] = useState<Record<string, string>>({});
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search);
@@ -552,7 +575,7 @@ export default function PurchaseOrders() {
   const [markPaidRef, setMarkPaidRef] = useState("");
   const [markPaidSaving, setMarkPaidSaving] = useState(false);
   const [releasingId, setReleasingId] = useState<string | null>(null);
-  const [sequenceValidation, setSequenceValidation] = useState<Record<string, { allowed: boolean; reason?: string; unpaid_prior?: any[] }>({});
+  const [sequenceValidation, setSequenceValidation] = useState<Record<string, { allowed: boolean; reason?: string; unpaid_prior?: any[] }>>({});
 
   // Revised-by link: when viewing a superseded PO, shows link to the new revision
   const [revisedByPo, setRevisedByPo] = useState<{ id: string; po_number: string } | null>(null);
@@ -573,20 +596,21 @@ export default function PurchaseOrders() {
   const filteredRows = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
     const list = rows.filter((r) => {
-      // "pending_approval" filter matches both explicit status and draft-awaiting-founder flow
+      // Status filter uses the same effective-status precedence as the badge,
+      // so dropdown labels match exactly what users see in the Status column.
       const matchesStatus =
-        statusFilter === "all" ? true :
-        statusFilter === "pending_approval"
-          ? (String(r.status) === "pending_approval" ||
-             (String(r.status) === "draft" && ["sent", "pending"].includes(String((r as any).founder_approval_status ?? ""))))
-          : String(r.status) === statusFilter;
+        statusFilter === "all" ? true : effectivePoStatus(r) === statusFilter;
       if (!matchesStatus) return false;
       if (dateFrom && r.created_at && r.created_at < dateFrom) return false;
       if (dateTo && r.created_at && r.created_at > dateTo + "T23:59:59") return false;
       if (!q) return true;
+      const supplierJoinedName = r.supplier_id
+        ? (supplierNamesById[String(r.supplier_id)] ?? "")
+        : "";
       return (
         String(r.po_number ?? "").toLowerCase().includes(q) ||
-        String(r.supplier_name_text ?? "").toLowerCase().includes(q)
+        String(r.supplier_name_text ?? "").toLowerCase().includes(q) ||
+        supplierJoinedName.toLowerCase().includes(q)
       );
     });
     return [...list].sort((a, b) => {
@@ -595,7 +619,7 @@ export default function PurchaseOrders() {
       const cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
       return sortDirPO === "asc" ? cmp : -cmp;
     });
-  }, [rows, debouncedSearch, statusFilter, dateFrom, dateTo, sortFieldPO, sortDirPO]);
+  }, [rows, debouncedSearch, statusFilter, dateFrom, dateTo, sortFieldPO, sortDirPO, supplierNamesById]);
 
   useEffect(() => { setPage(0); }, [debouncedSearch, statusFilter, dateFrom, dateTo]);
   const totalPagesPo = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
@@ -672,6 +696,35 @@ export default function PurchaseOrders() {
     fetchPoRows();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // When rows change, refresh the supplier-name lookup so the search filter
+  // can match supplier names on digital-flow POs (whose supplier name lives
+  // in cps_suppliers, not on the PO row).
+  useEffect(() => {
+    const supplierIds = Array.from(
+      new Set(rows.map((r) => String(r.supplier_id ?? "")).filter(Boolean)),
+    );
+    if (supplierIds.length === 0) {
+      setSupplierNamesById({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("cps_suppliers")
+        .select("id,name")
+        .in("id", supplierIds);
+      if (cancelled || error) return;
+      const map: Record<string, string> = {};
+      for (const s of (data ?? []) as Array<{ id: string; name: string }>) {
+        map[String(s.id)] = s.name;
+      }
+      setSupplierNamesById(map);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rows]);
 
   useEffect(() => {
     if (!createOpen) return;
@@ -2339,7 +2392,7 @@ export default function PurchaseOrders() {
       <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 lg:gap-3">
         <div className="relative flex-1 sm:min-w-[260px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search PO number..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+          <Input placeholder="Search PO number or supplier name..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
         <Select value={statusFilter} onValueChange={setStatusFilter}>
           <SelectTrigger className="w-full sm:w-44">
@@ -2348,15 +2401,16 @@ export default function PurchaseOrders() {
           <SelectContent>
             <SelectItem value="all">All Status</SelectItem>
             <SelectItem value="draft">Draft</SelectItem>
-            <SelectItem value="pending_approval">Pending Approval</SelectItem>
-            <SelectItem value="approved">Approved</SelectItem>
-            <SelectItem value="sent">Sent</SelectItem>
+            <SelectItem value="pending_approval">Sent to Founders</SelectItem>
+            <SelectItem value="approved">Founder Approved</SelectItem>
+            <SelectItem value="sent">Sent to Finance</SelectItem>
             <SelectItem value="acknowledged">Acknowledged</SelectItem>
             <SelectItem value="dispatched">Dispatched</SelectItem>
             <SelectItem value="delivered">Delivered</SelectItem>
             <SelectItem value="rejected">Rejected</SelectItem>
             <SelectItem value="cancelled">Cancelled</SelectItem>
             <SelectItem value="closed">Closed</SelectItem>
+            <SelectItem value="superseded">Archived (Revised)</SelectItem>
           </SelectContent>
         </Select>
         <div className="flex items-center gap-2 w-full sm:w-auto">

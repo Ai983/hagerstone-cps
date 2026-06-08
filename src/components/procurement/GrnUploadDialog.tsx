@@ -1,7 +1,7 @@
 import React, { useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { claudeProxy } from "@/lib/claudeProxy";
+import { callClaude } from "@/lib/claudeProxy";
 import {
   Dialog,
   DialogContent,
@@ -73,8 +73,9 @@ export default function GrnUploadDialog({
       });
 
       // Call Claude proxy to extract GRN details
-      const result = await claudeProxy({
+      const result = await callClaude({
         model: "claude-sonnet-4-6",
+        max_tokens: 800,
         messages: [
           {
             role: "user",
