@@ -299,6 +299,7 @@ export default function ComparisonSheetPage() {
   const [prLineItems, setPrLineItems] = useState<PrLineItem[]>([]);
   const [lastPurchases, setLastPurchases] = useState<Record<string, LastPurchase>>({});
   const [projectSite, setProjectSite] = useState<string | null>(null);
+  const [repeatOrderExemption, setRepeatOrderExemption] = useState<{ poNumber: string; supplierName: string; approvedAt: string } | null>(null);
   const [marketBenchmarks, setMarketBenchmarks] = useState<Record<string, MarketBenchmark>>({});
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketProgress, setMarketProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
@@ -909,10 +910,17 @@ export default function ComparisonSheetPage() {
       if (prId) {
         const { data: prRow } = await supabase
           .from("cps_purchase_requisitions")
-          .select("project_site")
+          .select("project_site,project_code")
           .eq("id", prId)
           .maybeSingle();
         setProjectSite((prRow as any)?.project_site ?? null);
+        // Fire-and-forget: check if a repeat-order exemption applies (same vendor + site + materials, founder-approved PO within 30 days)
+        const pCode = (prRow as any)?.project_code as string | null;
+        if (pCode && rfqId) {
+          checkRepeatOrderExemption(localPrLineItems, rfqId, pCode)
+            .then(setRepeatOrderExemption)
+            .catch(() => setRepeatOrderExemption(null));
+        }
       }
 
       // Use order+limit instead of maybeSingle() so legacy duplicates (if any) don't error
@@ -1307,6 +1315,78 @@ export default function ComparisonSheetPage() {
     return false;
   }, [sheet, canApprove, canCreateRFQ]);
 
+  // Repeat-order exemption: waives the 3-quote minimum if a founder-approved,
+  // finance-sent PO exists within 30 days for the same project + vendor + ALL materials.
+  const checkRepeatOrderExemption = async (
+    plis: PrLineItem[],
+    currentRfqId: string,
+    projectCode: string
+  ): Promise<{ poNumber: string; supplierName: string; approvedAt: string } | null> => {
+    if (!plis.length || !projectCode) return null;
+
+    // Suppliers who have an approved quote on this RFQ
+    const { data: quotesData } = await supabase
+      .from("cps_quotes")
+      .select("supplier_id")
+      .eq("rfq_id", currentRfqId)
+      .eq("parse_status", "approved");
+    const supplierIds = [
+      ...new Set((quotesData ?? []).map((q: any) => q.supplier_id as string).filter(Boolean)),
+    ];
+    if (!supplierIds.length) return null;
+
+    // Founder-approved + finance-sent POs in the last 30 days, same project, same supplier
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 30);
+    const { data: pos } = await supabase
+      .from("cps_purchase_orders")
+      .select("id, po_number, founder_approved_at, supplier_id")
+      .eq("founder_approval_status", "approved")
+      .eq("finance_dispatch_status", "sent")
+      .eq("project_code", projectCode)
+      .in("supplier_id", supplierIds)
+      .gte("founder_approved_at", cutoff.toISOString())
+      .order("founder_approved_at", { ascending: false });
+    if (!pos?.length) return null;
+
+    const prItemsWithId = plis.filter(li => li.item_id);
+    const prItemsNoId   = plis.filter(li => !li.item_id);
+
+    for (const po of pos) {
+      const { data: poLines } = await supabase
+        .from("cps_po_line_items")
+        .select("item_id, description")
+        .eq("po_id", po.id);
+      if (!poLines?.length) continue;
+
+      const poItemIds = new Set(poLines.map((l: any) => l.item_id as string).filter(Boolean));
+      const poDescs   = new Set(
+        poLines.map((l: any) =>
+          ((l.description ?? "") as string).toLowerCase().trim()
+        )
+      );
+
+      const idOk   = prItemsWithId.every(li => poItemIds.has(li.item_id!));
+      const descOk = prItemsNoId.every(li =>
+        poDescs.has((li.description ?? "").toLowerCase().trim())
+      );
+
+      if (idOk && descOk) {
+        const { data: sup } = await supabase
+          .from("cps_suppliers")
+          .select("name")
+          .eq("id", po.supplier_id)
+          .maybeSingle();
+        return {
+          poNumber: po.po_number as string,
+          supplierName: (sup as any)?.name ?? "Unknown Supplier",
+          approvedAt: po.founder_approved_at as string,
+        };
+      }
+    }
+    return null;
+  };
+
   const generateSheetIfMissing = async () => {
     if (!rfqId) return;
     setGenerating(true);
@@ -1336,10 +1416,25 @@ export default function ComparisonSheetPage() {
         .eq("parse_status", "approved");
       const currentApproved = aqCount ?? 0;
       setApprovedQuoteCount(currentApproved);
-      if (currentApproved < 3 && overrideStatus !== "allowed") {
+      if (currentApproved < 3 && overrideStatus !== "allowed" && !repeatOrderExemption) {
         toast.error(`Kam se kam 3 quotes approve karo, ya IT team se override approval lo. Abhi ${currentApproved}/3 approved hain.`);
         setGenerating(false);
         return;
+      }
+      // Log when the repeat-order exemption is the only reason we're proceeding with < 3 quotes
+      if (repeatOrderExemption && currentApproved < 3 && overrideStatus !== "allowed") {
+        void supabase.from("cps_audit_log").insert({
+          user_id: user?.id,
+          user_name: user?.name,
+          user_role: user?.role,
+          action_type: "COMPARISON_REPEAT_ORDER_EXEMPTION",
+          entity_type: "cps_rfqs",
+          entity_id: rfqId,
+          entity_number: rfq?.rfq_number,
+          description: `Repeat-order exemption applied for ${rfq?.rfq_number}. Vendor: ${repeatOrderExemption.supplierName}, PO: ${repeatOrderExemption.poNumber} (founder approved ${new Date(repeatOrderExemption.approvedAt).toLocaleDateString("en-IN")}). Sheet created with ${currentApproved} quote(s).`,
+          severity: "info",
+          logged_at: new Date().toISOString(),
+        });
       }
 
       const { data: quotes, error: qErr } = await supabase.from("cps_quotes").select("id").eq("rfq_id", rfqId).neq("channel", "po_revision");
@@ -3415,7 +3510,20 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 {approvedQuoteCount}/3 quotes approved
               </span>
             </div>
-            {approvedQuoteCount < 3 && overrideStatus !== "allowed" && (
+            {/* Repeat-order exemption banner */}
+            {approvedQuoteCount < 3 && repeatOrderExemption && (
+              <div className="text-xs text-blue-900 bg-blue-50 border border-blue-300 rounded px-3 py-2 max-w-md text-left">
+                <div className="font-semibold mb-0.5">✓ Repeat Order Exemption</div>
+                <div>
+                  <strong>{repeatOrderExemption.supplierName}</strong> ka PO{" "}
+                  <strong>{repeatOrderExemption.poNumber}</strong> (founder approved{" "}
+                  {new Date(repeatOrderExemption.approvedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })})
+                  {" "}same site + same materials ke liye tha — IT override ki zaroorat nahi.
+                </div>
+              </div>
+            )}
+
+            {approvedQuoteCount < 3 && overrideStatus !== "allowed" && !repeatOrderExemption && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 max-w-xs">
                 Comparison sheet ke liye kam se kam <strong>3 quotes approve</strong> karne honge. Quotes page par jao aur baaki quotes review karo.
               </p>
@@ -3449,13 +3557,12 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               </div>
             )}
 
-            <Button onClick={generateSheetIfMissing} disabled={generating || (approvedQuoteCount < 3 && overrideStatus !== "allowed")}>
+            <Button onClick={generateSheetIfMissing} disabled={generating || (approvedQuoteCount < 3 && overrideStatus !== "allowed" && !repeatOrderExemption)}>
               {generating ? "Ban rahi hai..." : "Comparison Sheet Banao"}
             </Button>
 
-            {/* Request override button — show when no request yet OR after a previous denial.
-                Procurement can re-request after being denied, with a fresh reason. */}
-            {approvedQuoteCount < 3 && (overrideStatus === "none" || overrideStatus === "denied") && canCreateRFQ && (
+            {/* Request override button — hidden when repeat-order exemption applies */}
+            {approvedQuoteCount < 3 && (overrideStatus === "none" || overrideStatus === "denied") && canCreateRFQ && !repeatOrderExemption && (
               <Button
                 variant="outline"
                 size="sm"
