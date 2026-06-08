@@ -101,26 +101,23 @@ const formatCurrency = (n: number | null | undefined) => {
 };
 
 const extractQuoteDetails = async (
-  file: File,
+  files: File[],
   rfqItems: string[]
 ): Promise<ExtractedData> => {
-  const base64 = await fileToBase64(file);
-  const mediaType = file.type as
-    | "application/pdf"
-    | "image/jpeg"
-    | "image/png"
-    | "image/webp";
-
-  const contentBlock =
-    mediaType === "application/pdf"
-      ? {
-          type: "document",
-          source: { type: "base64", media_type: mediaType, data: base64 },
-        }
-      : {
-          type: "image",
-          source: { type: "base64", media_type: mediaType, data: base64 },
-        };
+  const contentBlocks: any[] = [];
+  for (const file of files) {
+    const base64 = await fileToBase64(file);
+    const mediaType = file.type as
+      | "application/pdf"
+      | "image/jpeg"
+      | "image/png"
+      | "image/webp";
+    contentBlocks.push(
+      mediaType === "application/pdf"
+        ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
+        : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } }
+    );
+  }
 
   const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
     body: {
@@ -130,7 +127,7 @@ const extractQuoteDetails = async (
         {
           role: "user",
           content: [
-            contentBlock,
+            ...contentBlocks,
             {
               type: "text",
               text: `Extract all quotation details from this vendor quote document.
@@ -264,7 +261,7 @@ export function LegacyQuoteUploadModal({
 
   // Step 3
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadedFileUrl, setUploadedFileUrl] = useState<string | null>(null);
   const [uploadedFilePath, setUploadedFilePath] = useState<string | null>(null);
@@ -287,7 +284,7 @@ export function LegacyQuoteUploadModal({
       setSelectedSupplier(null);
       setNewVendorAdded(false);
       setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
-      setUploadFile(null);
+      setUploadFiles([]);
       setUploadedFileUrl(null);
       setUploadedFilePath(null);
       setExtracted(null);
@@ -450,13 +447,13 @@ export function LegacyQuoteUploadModal({
   // ── File drag-drop / select ─────────────────────────────────────────────────
   const handleFileDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) setUploadFile(file);
+    const dropped = Array.from(e.dataTransfer.files);
+    if (dropped.length) setUploadFiles((prev) => [...prev, ...dropped]);
   }, []);
 
   // ── Upload file & AI parse ─────────────────────────────────────────────────
   const handleUploadAndParse = async () => {
-    if (!uploadFile) { toast.error("Please select a file"); return; }
+    if (uploadFiles.length === 0) { toast.error("Please select a file"); return; }
     if (!selectedRfqId || !selectedSupplier) {
       toast.error("RFQ and supplier must be selected");
       return;
@@ -465,23 +462,27 @@ export function LegacyQuoteUploadModal({
     const selectedRfq = rfqs.find((r) => r.id === selectedRfqId);
     const rfqNumber = selectedRfq?.rfq_number ?? "UNKNOWN";
     const vendorName = selectedSupplier.name.replace(/[^a-zA-Z0-9]/g, "_");
-    const uuid = crypto.randomUUID();
-    const ext = uploadFile.name.split(".").pop() ?? "pdf";
-    const storagePath = `legacy-quotes/${rfqNumber}/${vendorName}-${uuid}.${ext}`;
 
     setUploading(true);
+    const uploadedPaths: string[] = [];
+    let firstUrl: string | null = null;
     try {
-      const { error: upErr } = await supabase.storage
-        .from("cps-quotes")
-        .upload(storagePath, uploadFile, { upsert: false });
-      if (upErr) throw upErr;
-
-      const { data: urlData } = supabase.storage
-        .from("cps-quotes")
-        .getPublicUrl(storagePath);
-
-      setUploadedFilePath(storagePath);
-      setUploadedFileUrl(urlData.publicUrl);
+      for (const file of uploadFiles) {
+        const uuid = crypto.randomUUID();
+        const ext = file.name.split(".").pop() ?? "pdf";
+        const storagePath = `legacy-quotes/${rfqNumber}/${vendorName}-${uuid}.${ext}`;
+        const { error: upErr } = await supabase.storage
+          .from("cps-quotes")
+          .upload(storagePath, file, { upsert: false });
+        if (upErr) throw upErr;
+        uploadedPaths.push(storagePath);
+        if (!firstUrl) {
+          const { data: urlData } = supabase.storage.from("cps-quotes").getPublicUrl(storagePath);
+          firstUrl = urlData.publicUrl;
+        }
+      }
+      setUploadedFilePath(uploadedPaths.length === 1 ? uploadedPaths[0] : JSON.stringify(uploadedPaths));
+      setUploadedFileUrl(firstUrl);
     } catch (e: any) {
       toast.error("Upload failed: " + e?.message);
       setUploading(false);
@@ -495,7 +496,7 @@ export function LegacyQuoteUploadModal({
     );
     setAiParsing(true);
     try {
-      const result = await extractQuoteDetails(uploadFile, itemDescriptions);
+      const result = await extractQuoteDetails(uploadFiles, itemDescriptions);
       // Older Claude responses (and very simple quotes) may skip the new discount /
       // hsn fields entirely. Normalize each line item so the form always has every
       // field, then re-derive net rate + total off the discount fields when list_rate
@@ -597,7 +598,7 @@ export function LegacyQuoteUploadModal({
           is_legacy: true,
           legacy_file_url: uploadedFileUrl,
           raw_file_path: uploadedFilePath,
-          raw_file_type: uploadFile?.type ?? null,
+          raw_file_type: uploadFiles[0]?.type ?? null,
           // Legacy upload IS the review step — procurement uploads + edits + confirms in one go.
           // Mark as approved + compliant so the quote feeds straight into comparison without a
           // redundant second pass on the Quotes page.
@@ -1088,10 +1089,10 @@ export function LegacyQuoteUploadModal({
                 >
                   <UploadCloud className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
                   <p className="text-sm font-medium text-foreground">
-                    {uploadFile ? uploadFile.name : "Upload Quote Document"}
+                    {uploadFiles.length > 0 ? "Add more pages / files" : "Upload Quote Document"}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    PDF, JPG, PNG accepted · Max 10 MB
+                    PDF, JPG, PNG accepted · Max 10 MB · Multiple files supported
                   </p>
                   <p className="text-xs text-muted-foreground">
                     Vendor's quotation paper, WhatsApp image, email screenshot
@@ -1100,16 +1101,36 @@ export function LegacyQuoteUploadModal({
                     ref={fileInputRef}
                     type="file"
                     accept=".pdf,.jpg,.jpeg,.png"
+                    multiple
                     className="hidden"
                     onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) setUploadFile(f);
+                      const selected = Array.from(e.target.files ?? []);
+                      if (selected.length) setUploadFiles((prev) => [...prev, ...selected]);
+                      e.target.value = "";
                     }}
                   />
                 </div>
               )}
 
-              {uploadFile && !uploadedFileUrl && !aiParsing && (
+              {/* File list with remove buttons */}
+              {uploadFiles.length > 0 && !uploadedFileUrl && !aiParsing && (
+                <div className="space-y-1.5">
+                  {uploadFiles.map((f, i) => (
+                    <div key={i} className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                      <span className="text-foreground truncate max-w-[85%]">{f.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => setUploadFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                        className="text-muted-foreground hover:text-destructive transition-colors ml-2 shrink-0"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {uploadFiles.length > 0 && !uploadedFileUrl && !aiParsing && (
                 <Button
                   onClick={handleUploadAndParse}
                   disabled={uploading}
