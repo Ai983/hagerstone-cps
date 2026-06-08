@@ -79,19 +79,20 @@ const parseWarrantyMonths = (s: string): number | null => {
 
 // ---------- AI extraction ----------
 
-const extractQuoteWithAI = async (file: File, rfqItems: LineItem[]) => {
-  const base64 = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve((reader.result as string).split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
-  const mediaType = file.type as any;
-  const isPdf = mediaType === "application/pdf";
-  const contentBlock = isPdf
-    ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
-    : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
+const extractQuoteWithAI = async (files: File[], rfqItems: LineItem[]) => {
+  const fileBlocks = await Promise.all(files.map(async (file) => {
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve((reader.result as string).split(",")[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    const mediaType = file.type as any;
+    const isPdf = mediaType === "application/pdf";
+    return isPdf
+      ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
+      : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
+  }));
 
   const { supabase } = await import("@/integrations/supabase/client");
   const { data, error } = await supabase.functions.invoke("claude-proxy", {
@@ -101,10 +102,10 @@ const extractQuoteWithAI = async (file: File, rfqItems: LineItem[]) => {
       messages: [{
         role: "user",
         content: [
-          contentBlock,
+          ...fileBlocks,
           {
             type: "text",
-            text: `Extract quotation details from this document.
+            text: `Extract quotation details from these ${files.length} document page${files.length > 1 ? "s" : ""}.
 Items needed: ${rfqItems.map((i) => i.item_description ?? i.item_name).join(", ")}
 
 Return ONLY valid JSON (no markdown):
@@ -151,7 +152,7 @@ export default function VendorUploadQuote() {
   const [animKey, setAnimKey] = useState(0);
 
   // form fields
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [aiStatus, setAiStatus] = useState<AiStatus>("idle");
   const [paymentTerms, setPaymentTerms] = useState("");
@@ -249,15 +250,17 @@ export default function VendorUploadQuote() {
 
   // ---------- file handling ----------
 
-  const handleFileSelect = useCallback(async (f: File | null) => {
-    if (!f) return;
-    if (f.size > MAX_FILE_SIZE) { toast.error("File too large — maximum 25 MB"); return; }
-    setFile(f);
-    const hasApiKey = true; // key is server-side in Edge Function
-    if (!hasApiKey) { setTimeout(goNext, 400); return; }
+  const handleFileSelect = useCallback(async (newFiles: File[]) => {
+    const valid = newFiles.filter((f) => {
+      if (f.size > MAX_FILE_SIZE) { toast.error(`${f.name}: too large (max 25 MB)`); return false; }
+      return true;
+    });
+    if (!valid.length) return;
+    const allFiles = [...files, ...valid];
+    setFiles(allFiles);
     setAiStatus("extracting");
     try {
-      const extracted = await extractQuoteWithAI(f, lineItems);
+      const extracted = await extractQuoteWithAI(allFiles, lineItems);
       if (extracted.payment_terms) setPaymentTerms(extracted.payment_terms);
       if (extracted.delivery_days) setDeliveryDays(String(extracted.delivery_days));
       if (extracted.freight_terms) setFreightOption(extracted.freight_terms);
@@ -272,29 +275,22 @@ export default function VendorUploadQuote() {
         if (match) {
           setManualEntries((prev) => {
             const copy = [...prev];
-            copy[idx] = {
-              ...copy[idx],
-              rate: String(match.rate ?? ""),
-              gst_percent: String(match.gst_percent ?? 18),
-              brand: match.brand || "",
-            };
+            copy[idx] = { ...copy[idx], rate: String(match.rate ?? ""), gst_percent: String(match.gst_percent ?? 18), brand: match.brand || "" };
             return copy;
           });
         }
       });
       setAiStatus("done");
-      setTimeout(goNext, 1200);
     } catch {
       setAiStatus("error");
-      setTimeout(goNext, 500);
     }
-  }, [lineItems, goNext]);
+  }, [files, lineItems]);
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) handleFileSelect(f);
+    const dropped = Array.from(e.dataTransfer.files);
+    if (dropped.length) handleFileSelect(dropped);
   }, [handleFileSelect]);
 
   // ---------- submit (DB logic unchanged) ----------
@@ -306,27 +302,31 @@ export default function VendorUploadQuote() {
       return !isNaN(rate) && rate > 0;
     });
     const hasManualData = filledManualLines.length > 0;
-    if (!file && !hasManualData) {
+    if (files.length === 0 && !hasManualData) {
       toast.error("Please upload a file or enter at least one item rate");
       return;
     }
     setSubmitting(true);
     try {
-      // 1. Upload file
+      // 1. Upload files (one or many)
       let filePath: string | null = null;
       let fileType: string | null = null;
-      if (file) {
-        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const storagePath = `${tokenRecord.rfq_id}/${tokenRecord.supplier_id}/${Date.now()}_${safeName}`;
-        const { data: fileData, error: uploadError } = await supabase.storage
-          .from("cps-quotes")
-          .upload(storagePath, file);
-        if (uploadError) {
-          toast.error("File upload failed: " + uploadError.message);
-          return;
+      if (files.length > 0) {
+        const uploadedPaths: string[] = [];
+        for (const f of files) {
+          const safeName = f.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+          const storagePath = `${tokenRecord.rfq_id}/${tokenRecord.supplier_id}/${Date.now()}_${safeName}`;
+          const { data: fileData, error: uploadError } = await supabase.storage
+            .from("cps-quotes")
+            .upload(storagePath, f);
+          if (uploadError) {
+            toast.error(`Upload failed (${f.name}): ` + uploadError.message);
+            return;
+          }
+          uploadedPaths.push(fileData.path);
         }
-        filePath = fileData.path;
-        fileType = file.type;
+        filePath = uploadedPaths.length === 1 ? uploadedPaths[0] : JSON.stringify(uploadedPaths);
+        fileType = files[0].type;
       }
 
       // 2. Compute totals
@@ -437,12 +437,12 @@ export default function VendorUploadQuote() {
         entity_type: "quote",
         entity_id: quoteId,
         entity_number: blindQuoteRef,
-        description: `Quote ${blindQuoteRef} submitted by ${supplierInfo?.name ?? "vendor"} for ${rfqInfo?.rfq_number ?? "RFQ"}${hasManualData ? ` (${filledManualLines.length} line items entered)` : ""}${file ? " with file" : ""}`,
+        description: `Quote ${blindQuoteRef} submitted by ${supplierInfo?.name ?? "vendor"} for ${rfqInfo?.rfq_number ?? "RFQ"}${hasManualData ? ` (${filledManualLines.length} line items entered)` : ""}${files.length > 0 ? ` with ${files.length} file${files.length > 1 ? "s" : ""}` : ""}`,
         severity: "info",
       }]);
 
       // 9. Webhook for AI parsing
-      if (file && !hasManualData) {
+      if (files.length > 0 && !hasManualData) {
         try {
           const { data: config } = await supabase.from("cps_config").select("value").eq("key", "webhook_quote_parse").maybeSingle();
           if (config?.value) {
@@ -552,7 +552,7 @@ export default function VendorUploadQuote() {
   // Step 0: Upload
   const renderStep0 = () => (
     <StepLayout
-      question="Do you have a quote document to upload?"
+      question="Upload your quote document(s)"
       sub={<>
         <p className="text-sm text-gray-500 mb-4">Items we need rates for:</p>
         <ul className="text-sm text-gray-600 space-y-1 mb-6">
@@ -565,58 +565,83 @@ export default function VendorUploadQuote() {
         </ul>
       </>}
     >
-      <input ref={fileInputRef} type="file" accept={ACCEPTED_TYPES} className="hidden"
-        onChange={(e) => handleFileSelect(e.target.files?.[0] ?? null)} />
+      <input ref={fileInputRef} type="file" accept={ACCEPTED_TYPES} multiple className="hidden"
+        onChange={(e) => {
+          const selected = Array.from(e.target.files ?? []);
+          if (selected.length) handleFileSelect(selected);
+          e.target.value = "";
+        }} />
 
+      {/* Drop zone — always visible so user can keep adding */}
       {aiStatus === "extracting" ? (
         <div className="flex flex-col items-center gap-3 py-8">
           <Loader2 className="h-10 w-10 animate-spin" style={{ color: "hsl(20,50%,35%)" }} />
-          <p className="text-base font-medium" style={{ color: "hsl(20,50%,35%)" }}>🤖 Reading your quote...</p>
-        </div>
-      ) : aiStatus === "done" ? (
-        <div className="flex flex-col items-center gap-3 py-8">
-          <CheckCircle className="h-10 w-10 text-green-600" />
-          <p className="text-base font-medium text-green-700">✅ Details pre-filled from your document</p>
+          <p className="text-base font-medium" style={{ color: "hsl(20,50%,35%)" }}>
+            🤖 Reading {files.length > 1 ? `${files.length} pages` : "your quote"}…
+          </p>
         </div>
       ) : (
         <div
-          className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${dragOver ? "border-brown bg-orange-50" : file ? "border-green-400 bg-green-50" : "border-gray-300 hover:border-gray-400"}`}
+          className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${dragOver ? "border-brown bg-orange-50" : "border-gray-300 hover:border-gray-400"}`}
           style={dragOver ? { borderColor: "hsl(20,50%,35%)", background: "hsl(20,50%,97%)" } : {}}
           onClick={() => fileInputRef.current?.click()}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={onDrop}
         >
-          {file ? (
-            <div className="space-y-2">
-              <FileUp className="h-8 w-8 text-green-600 mx-auto" />
-              <div className="font-medium text-gray-800">{file.name}</div>
-              <div className="text-xs text-gray-400">{(file.size / 1024 / 1024).toFixed(2)} MB</div>
+          <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+          <div className="font-medium text-gray-700">
+            {files.length > 0 ? "📎 Add more pages / files" : "📎 Drop files here or tap to browse"}
+          </div>
+          <div className="text-xs text-gray-400 mt-1">PDF, Excel, Word, Image — max 25 MB each · Multiple files supported</div>
+        </div>
+      )}
+
+      {/* File list with remove */}
+      {files.length > 0 && aiStatus !== "extracting" && (
+        <div className="space-y-2 mt-3">
+          {files.map((f, idx) => (
+            <div key={idx} className="flex items-center justify-between rounded-lg border border-green-200 bg-green-50 px-3 py-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <FileUp className="h-4 w-4 text-green-600 shrink-0" />
+                <span className="text-sm font-medium text-gray-800 truncate">{f.name}</span>
+                <span className="text-xs text-gray-400 shrink-0">{(f.size / 1024 / 1024).toFixed(1)} MB</span>
+              </div>
               <button
                 type="button"
-                className="text-xs text-gray-400 underline mt-1"
-                onClick={(e) => { e.stopPropagation(); setFile(null); setAiStatus("idle"); if (fileInputRef.current) fileInputRef.current.value = ""; }}
-              >Remove</button>
+                className="ml-2 text-gray-400 hover:text-red-500 shrink-0"
+                onClick={() => { setFiles((prev) => prev.filter((_, i) => i !== idx)); setAiStatus("idle"); }}
+              >
+                <XCircle className="h-4 w-4" />
+              </button>
             </div>
-          ) : (
-            <div className="space-y-2">
-              <Upload className="h-8 w-8 text-gray-400 mx-auto" />
-              <div className="font-medium text-gray-700">📎 Drop file here or tap to browse</div>
-              <div className="text-xs text-gray-400">PDF, Excel, Word, Image — max 25MB</div>
-            </div>
+          ))}
+          {aiStatus === "done" && (
+            <p className="text-xs text-green-600 text-center pt-1">✅ Details pre-filled from your document{files.length > 1 ? "s" : ""}</p>
+          )}
+          {aiStatus === "error" && (
+            <p className="text-xs text-amber-600 text-center pt-1">⚠ Could not auto-extract — you can fill manually on the next steps</p>
           )}
         </div>
       )}
 
       <div className="flex justify-between items-center mt-6">
         <div />
-        <button
-          type="button"
-          className="text-sm text-gray-400 underline"
-          onClick={goNext}
-        >
-          Skip, I'll fill manually →
-        </button>
+        {files.length > 0 ? (
+          <button
+            type="button"
+            className="px-6 py-2.5 rounded-xl font-medium text-white text-sm disabled:opacity-50"
+            style={{ background: "hsl(20,50%,35%)" }}
+            onClick={goNext}
+            disabled={aiStatus === "extracting"}
+          >
+            Continue →
+          </button>
+        ) : (
+          <button type="button" className="text-sm text-gray-400 underline" onClick={goNext}>
+            Skip, I'll fill manually →
+          </button>
+        )}
       </div>
     </StepLayout>
   );
@@ -897,7 +922,7 @@ export default function VendorUploadQuote() {
               </div>
             );
           })}
-          {filledLines.length === 0 && file && (
+          {filledLines.length === 0 && files.length > 0 && (
             <div className="px-4 py-3 border-t border-gray-100 text-gray-400 italic text-xs">
               Rates from uploaded file (AI will extract)
             </div>
@@ -907,7 +932,14 @@ export default function VendorUploadQuote() {
             {paymentTerms && <div><span className="text-gray-400">Payment:</span> {paymentTerms}</div>}
             {deliveryDays && <div><span className="text-gray-400">Delivery:</span> {deliveryDays} working days</div>}
             <div><span className="text-gray-400">Freight:</span> {freightLabel}</div>
-            {file && <div><span className="text-gray-400">File:</span> {file.name} ✅</div>}
+            {files.length > 0 && (
+              <div>
+                <span className="text-gray-400">File{files.length > 1 ? "s" : ""}:</span>{" "}
+                {files.length === 1
+                  ? `${files[0].name} ✅`
+                  : `${files.length} files — ${files.map((f) => f.name).join(", ")} ✅`}
+              </div>
+            )}
             {quoteRef && <div><span className="text-gray-400">Quote Ref:</span> {quoteRef}</div>}
           </div>
         </div>
@@ -921,7 +953,7 @@ export default function VendorUploadQuote() {
             className="px-8 py-3 rounded-xl font-semibold text-white transition-opacity disabled:opacity-50"
             style={{ background: "hsl(20,50%,35%)" }}
             onClick={handleSubmit}
-            disabled={submitting || (!file && filledLines.length === 0)}
+            disabled={submitting || (files.length === 0 && filledLines.length === 0)}
           >
             {submitting ? (
               <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Submitting...</span>
