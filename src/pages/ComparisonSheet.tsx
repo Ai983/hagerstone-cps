@@ -587,6 +587,13 @@ export default function ComparisonSheetPage() {
       toast.error("Please click 'View PO' to review the PO before sending");
       return;
     }
+    // Root-cause guard (defect: terms-less founder approval). A PO with no payment plan
+    // produces no tranches → no advance release → it silently never reaches Finance and
+    // gets stranded at "Founder Approved". Block the send before we lock the comparison.
+    if (paymentPlan.length === 0) {
+      toast.error("Payment plan zaroori hai — founder ko bhejne se pehle kam se kam ek installment add karein.");
+      return;
+    }
     setSendingToFounder(true);
     try {
       // 1. Freeze the snapshot first — captures every number the user just
@@ -2974,6 +2981,12 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
 
   const createPO = async () => {
     if (!sheet || !rfq || !user) return;
+    // Defense-in-depth for the terms-less-PO root cause (sendToFounder also guards this):
+    // never create+dispatch a PO without a payment plan, or it strands at "Founder Approved".
+    if (paymentPlan.length === 0) {
+      toast.error("Payment plan zaroori hai — PO banane se pehle kam se kam ek installment add karein.");
+      return;
+    }
     setCreatingPO(true);
     try {
       // Guard against duplicate PO creation — race condition or manual API call

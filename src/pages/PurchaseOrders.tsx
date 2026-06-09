@@ -102,6 +102,16 @@ type PoRow = {
   cancel_reason?: string | null;
   parent_po_id?: string | null;
   hagerstone_gstin?: string | null;
+  // Embedded payment-schedule tranches (drives the finance-progress badge in the list).
+  // Finance pays in the separate expense app, which updates these tranche rows (not the PO
+  // header), so the list derives finance state from here rather than the stale header columns.
+  tranches?: Array<{
+    status: string;
+    amount: number | null;
+    trigger_type: string | null;
+    milestone_name: string | null;
+    milestone_order: number | null;
+  }> | null;
 };
 
 type SupplierRow = {
@@ -233,7 +243,10 @@ function effectivePoStatus(r: PoRow): string {
   if (s === "closed")     return "closed";
   if (s === "cancelled")  return "cancelled";
   if (s === "rejected")   return "rejected";
-  if (s === "sent")       return "sent";
+  // Finance progress (tranche POs) takes precedence so the filter matches the badge.
+  const fs = financeStage(r);
+  if (fs) return fs;
+  if (s === "sent")       return "sent_to_finance"; // legacy POs dispatched via header path
   if (r.founder_approval_status === "approved") return "approved";
   if (s === "pending_approval" || r.founder_approval_status === "pending" || r.founder_approval_status === "sent") return "pending_approval";
   if (s === "draft") return "draft";
@@ -253,6 +266,47 @@ function poStatusDisplay(r: PoRow): { label: string; cls: string } {
                          return { label: "Sent to Founders",    cls: statusBadgeCls.pending_approval };
   if (s === "draft")     return { label: "Draft",               cls: statusBadgeCls.draft };
   return { label: STATUS_LABEL[s] ?? s, cls: statusBadgeCls[s] ?? statusBadgeCls.draft };
+}
+
+// Finance stage for a tranche-model PO, derived from the payment-schedule tranches (the
+// source of truth the expense app updates when Finance pays). Single source shared by the
+// list badge (financeProgress) AND the status filter (effectivePoStatus) so they always
+// agree. Returns null when nothing has been released to Finance yet (or there are no
+// tranches, e.g. legacy POs) → caller falls back to the lifecycle status.
+type FinanceStage = "finance_paid" | "finance_partial" | "release_requested" | "sent_to_finance";
+function financeStage(r: PoRow): FinanceStage | null {
+  const tr = r.tranches ?? [];
+  if (tr.length === 0) return null;
+  const amt = (t: { amount: number | null }) => Number(t.amount) || 0;
+  const paid = tr.filter((t) => t.status === "paid").reduce((s, t) => s + amt(t), 0);
+  const allSettled = tr.every((t) => t.status === "paid" || t.status === "waived");
+  if (allSettled) return "finance_paid";
+  if (paid > 0) return "finance_partial";
+  if (tr.some((t) => t.status === "release_requested")) return "release_requested";
+  if (tr.some((t) => t.status === "authorized")) return "sent_to_finance";
+  return null; // only scheduled tranches, nothing released yet → use lifecycle badge
+}
+
+function financeProgress(r: PoRow): { label: string; cls: string; hint?: string } | null {
+  const stage = financeStage(r);
+  if (!stage) return null;
+  const tr = r.tranches ?? [];
+  const amt = (t: { amount: number | null }) => Number(t.amount) || 0;
+  const total = tr.reduce((s, t) => s + amt(t), 0) || Number(r.grand_total) || 0;
+  const paid = tr.filter((t) => t.status === "paid").reduce((s, t) => s + amt(t), 0);
+  const pct = total > 0 ? Math.round((paid / total) * 100) : 0;
+  const hasNextDue = tr.some((t) => t.status === "scheduled" || t.status === "due");
+
+  const green = "bg-green-100 text-green-800 border-green-200";
+  const amber = "bg-amber-50 text-amber-700 border-amber-200";
+  const blue = "bg-blue-50 text-blue-700 border-blue-200";
+
+  switch (stage) {
+    case "finance_paid": return { label: "Fully Paid ✓", cls: green };
+    case "finance_partial": return { label: `Finance Paid ${pct}%`, cls: amber, hint: hasNextDue ? "Request next installment" : undefined };
+    case "release_requested": return { label: "Release sent to founder ⏳", cls: amber };
+    case "sent_to_finance": return { label: "Sent to Finance", cls: blue, hint: "Awaiting payment" };
+  }
 }
 
 type CreateLine = {
@@ -631,7 +685,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,finance_payment_status,finance_balance_due,finance_payment_reference,finance_payment_note,finance_payment_history,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,finance_payment_status,finance_balance_due,finance_payment_reference,finance_payment_note,finance_payment_history,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin,tranches:cps_po_payment_schedules(status,amount,trigger_type,milestone_name,milestone_order)",
         )
         .order("created_at", { ascending: false });
 
@@ -2403,7 +2457,10 @@ export default function PurchaseOrders() {
             <SelectItem value="draft">Draft</SelectItem>
             <SelectItem value="pending_approval">Sent to Founders</SelectItem>
             <SelectItem value="approved">Founder Approved</SelectItem>
-            <SelectItem value="sent">Sent to Finance</SelectItem>
+            <SelectItem value="release_requested">Release Sent to Founder</SelectItem>
+            <SelectItem value="sent_to_finance">Sent to Finance</SelectItem>
+            <SelectItem value="finance_partial">Partially Paid</SelectItem>
+            <SelectItem value="finance_paid">Fully Paid</SelectItem>
             <SelectItem value="acknowledged">Acknowledged</SelectItem>
             <SelectItem value="dispatched">Dispatched</SelectItem>
             <SelectItem value="delivered">Delivered</SelectItem>
@@ -3710,15 +3767,28 @@ export default function PurchaseOrders() {
                     </div>
                     {canViewPrices && (() => {
                       const total = viewPaymentSchedule.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-                      const paid = viewPaymentSchedule.filter(r => r.status === "paid").reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                      const paidRows = viewPaymentSchedule.filter(r => r.status === "paid");
+                      const paid = paidRows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
                       const remaining = total - paid;
+                      const count = viewPaymentSchedule.length;
+                      const awaitingPay = viewPaymentSchedule.some(r => r.status === "authorized");
+                      const nextDue = viewPaymentSchedule.find(r => r.status === "scheduled" || r.status === "due");
                       return (
-                        <div className="flex items-center gap-4 text-sm text-muted-foreground px-1">
-                          <span>Total: <strong className="text-foreground">₹{total.toLocaleString("en-IN")}</strong></span>
-                          <span>·</span>
-                          <span>Paid: <strong className="text-green-700">₹{paid.toLocaleString("en-IN")}</strong></span>
-                          <span>·</span>
-                          <span>Remaining: <strong className="text-amber-700">₹{remaining.toLocaleString("en-IN")}</strong></span>
+                        <div className="space-y-1.5 px-1">
+                          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                            <span>Total: <strong className="text-foreground">₹{total.toLocaleString("en-IN")}</strong></span>
+                            <span>·</span>
+                            <span>Finance Paid: <strong className="text-green-700">₹{paid.toLocaleString("en-IN")}</strong> ({paidRows.length}/{count})</span>
+                            <span>·</span>
+                            <span>Balance: <strong className="text-amber-700">₹{remaining.toLocaleString("en-IN")}</strong></span>
+                          </div>
+                          {remaining <= 0 && total > 0 ? (
+                            <div className="text-xs text-green-700">✓ Saari installments Finance ne pay kar di.</div>
+                          ) : awaitingPay ? (
+                            <div className="text-xs text-blue-700">⏳ Finance ke paas hai — released installment ka payment pending.</div>
+                          ) : nextDue && paid > 0 ? (
+                            <div className="text-xs text-amber-700">→ Finance ne apna part pay kar diya. Agli installment "{nextDue.milestone_name ?? "—"}" ke liye Request Release bhejein.</div>
+                          ) : null}
                         </div>
                       );
                     })()}
@@ -4337,21 +4407,33 @@ function PoTableRows({
             <TableCell className="text-muted-foreground">{formatDate(r.delivery_date)}</TableCell>
             <TableCell>
               {(() => {
-                const { label, cls } = poStatusDisplay(r);
+                // Finance-progress badge (tranche POs) takes precedence over the lifecycle
+                // badge once something has been released to Finance; otherwise fall back to
+                // the lifecycle label (Sent to Founders / Founder Approved / etc.).
+                const fin = financeProgress(r);
+                const lifecycle = poStatusDisplay(r);
+                const hasTranches = (r.tranches?.length ?? 0) > 0;
+                const { label, cls } = fin ?? lifecycle;
                 return (
                   <div className="flex flex-col gap-1">
                     <Badge className={`text-xs border-0 ${cls}`}>{label}</Badge>
+                    {fin?.hint && (
+                      <span className="text-[10px] font-medium text-muted-foreground leading-none">
+                        → {fin.hint}
+                      </span>
+                    )}
                     {r.payment_terms_type && (
                       <span className="text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit bg-indigo-50 text-indigo-700 border-indigo-200">
                         💳 {r.payment_terms_type}
                       </span>
                     )}
-                    {r.finance_dispatch_status === "failed" && (
+                    {/* Legacy POs (no tranches) keep the header-based finance chips. */}
+                    {!hasTranches && r.finance_dispatch_status === "failed" && (
                       <span className="text-[10px] font-medium rounded px-1.5 py-0.5 border leading-none w-fit bg-red-50 text-red-700 border-red-200">
                         ⚠ Dispatch failed
                       </span>
                     )}
-                    {r.finance_dispatch_status === "sent" && (() => {
+                    {!hasTranches && r.finance_dispatch_status === "sent" && (() => {
                       const payStatus = r.finance_payment_status || "awaiting";
                       const paidAmt = Number(r.finance_paid_amount ?? 0);
                       if (payStatus === "awaiting") {
