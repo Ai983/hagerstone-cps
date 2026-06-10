@@ -24,6 +24,17 @@ interface LineItem {
   sort_order: number;
 }
 
+// A payment-schedule tranche. Finance pays in the separate expense app, which
+// updates these rows (status → 'paid', paid_amount, paid_at). This — NOT the PO
+// header finance_* columns — is the live source of truth for tranche-model POs,
+// matching the badge logic on the Purchase Orders page.
+interface Tranche {
+  amount: number | null;
+  paid_amount: number | null;
+  status: string | null;
+  paid_at: string | null;
+}
+
 interface PoRecord {
   id: string;
   po_number: string;
@@ -38,6 +49,7 @@ interface PoRecord {
   cps_suppliers: { id: string; name: string } | null;
   cps_purchase_requisitions: { project_site: string; project_code: string } | null;
   cps_po_line_items: LineItem[];
+  cps_po_payment_schedules: Tranche[];
 }
 
 interface VendorGroup {
@@ -55,14 +67,53 @@ const inr = (v: number) =>
 const fmtDate = (d?: string | null) =>
   d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' }) : '—';
 
-function deriveStatus(po: PoRecord): 'paid' | 'partial' | 'awaiting' {
-  if (po.finance_payment_status === 'paid') return 'paid';
-  if (po.finance_payment_status === 'partial') return 'partial';
-  const paid = Number(po.finance_paid_amount ?? 0);
+interface FinanceState {
+  paid: number;
+  balance: number;
+  status: 'paid' | 'partial' | 'awaiting';
+  paidAt: string | null;
+  /** True once Finance has recorded its first payment — the rule for appearing on this list. */
+  qualifies: boolean;
+}
+
+// Single source of truth for a PO's payment state on the Budget List.
+//
+// When Finance marks a PO paid in the expense app there are two write-back paths,
+// chosen by the PO's payment model — so we honour BOTH and take the stronger signal,
+// guaranteeing a PO surfaces on its first payment no matter which path fired:
+//  • Tranche-model POs → the expense app flips cps_po_payment_schedules rows to 'paid'.
+//  • Legacy / header POs → cps_sync_payment_from_finance writes the PO header finance_* cols.
+function financeStateOf(po: PoRecord): FinanceState {
   const total = Number(po.grand_total ?? 0);
-  if (paid > 0 && paid >= total - 0.01) return 'paid';
-  if (paid > 0) return 'partial';
-  return 'awaiting';
+  const tr = po.cps_po_payment_schedules ?? [];
+
+  // Signal A — payment schedule (tranche-model POs)
+  const tranchePaid = tr.reduce(
+    (s, t) => (t.status === 'paid' ? s + Number(t.paid_amount ?? t.amount ?? 0) : s),
+    0,
+  );
+  const allSettled = tr.length > 0 && tr.every(t => t.status === 'paid' || t.status === 'waived');
+  const paidDates = tr.filter(t => t.status === 'paid' && t.paid_at).map(t => t.paid_at as string);
+  const tranchePaidAt = paidDates.length ? paidDates.reduce((a, b) => (a > b ? a : b)) : null;
+
+  // Signal B — PO header (legacy / header-sync POs)
+  const headerPaid = Number(po.finance_paid_amount ?? 0);
+
+  const paid = Math.max(tranchePaid, headerPaid);
+  const paidAt = tranchePaidAt ?? po.finance_paid_at ?? null;
+
+  const status: FinanceState['status'] =
+    paid <= 0
+      ? 'awaiting'
+      : allSettled || po.finance_payment_status === 'paid' || paid >= total - 0.01
+        ? 'paid'
+        : 'partial';
+
+  return { paid, balance: Math.max(0, total - paid), status, paidAt, qualifies: paid > 0 };
+}
+
+function deriveStatus(po: PoRecord): 'paid' | 'partial' | 'awaiting' {
+  return financeStateOf(po).status;
 }
 
 // Deduplicate line items that were double-inserted (same description + rate + gst)
@@ -109,16 +160,17 @@ export default function BudgetList() {
           payment_terms_type,
           cps_suppliers(id, name),
           cps_purchase_requisitions(project_site, project_code),
-          cps_po_line_items(id, description, quantity, unit, rate, gst_percent, total_value, sort_order)
+          cps_po_line_items(id, description, quantity, unit, rate, gst_percent, total_value, sort_order),
+          cps_po_payment_schedules(amount, paid_amount, status, paid_at)
         `)
-        .eq('finance_dispatch_status', 'sent')
-        .not('finance_paid_amount', 'is', null)
-        .gt('finance_paid_amount', 0)
         .neq('status', 'cancelled')
         .order('created_at', { ascending: true });
 
       if (error) { toast.error('Failed to load budget data'); setLoading(false); return; }
-      setAllPos((data ?? []) as unknown as PoRecord[]);
+      // A PO appears once Finance records its first payment — for tranche POs that means
+      // any tranche is paid; for legacy POs, the header finance_paid_amount > 0.
+      const paidPos = ((data ?? []) as unknown as PoRecord[]).filter(po => financeStateOf(po).qualifies);
+      setAllPos(paidPos);
       setLoading(false);
     }
     loadData();
@@ -154,12 +206,11 @@ export default function BudgetList() {
         map.set(key, { supplierName: name, pos: [], subtotal: 0, paidTotal: 0, balance: 0 });
       }
       const g = map.get(key)!;
+      const st = financeStateOf(po);
       g.pos.push(po);
       g.subtotal += Number(po.grand_total ?? 0);
-      g.paidTotal += Number(po.finance_paid_amount ?? 0);
-      g.balance += Number(
-        po.finance_balance_due ?? Math.max(0, Number(po.grand_total ?? 0) - Number(po.finance_paid_amount ?? 0))
-      );
+      g.paidTotal += st.paid;
+      g.balance += st.balance;
     });
     return Array.from(map.values()).sort((a, b) => a.supplierName.localeCompare(b.supplierName));
   }, [pos]);
@@ -238,7 +289,7 @@ export default function BudgetList() {
           rs(amtWithGst),
           po.po_number,
           deriveStatus(po),
-          fmtDate(po.finance_paid_at),
+          fmtDate(financeStateOf(po).paidAt),
         ]);
       });
       // Vendor subtotal row
@@ -430,7 +481,7 @@ export default function BudgetList() {
                               <td className="px-3 py-2 text-right font-medium tabular-nums">{inr(amtWithGst)}</td>
                               <td className="px-3 py-2 text-xs text-muted-foreground font-mono">{po.po_number}</td>
                               <td className="px-3 py-2"><StatusBadge po={po} /></td>
-                              <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{fmtDate(po.finance_paid_at)}</td>
+                              <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{fmtDate(financeStateOf(po).paidAt)}</td>
                             </tr>
                           );
                         })}
