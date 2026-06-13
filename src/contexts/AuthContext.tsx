@@ -76,11 +76,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       if (session?.user) loadProfile(session.user.id, session.user.email ?? undefined, session.user.user_metadata?.full_name);
       setLoading(false);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) loadProfile(session.user.id, session.user.email ?? undefined, session.user.user_metadata?.full_name);
-      else {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // NEVER call a supabase method synchronously inside this callback.
+      // supabase-js holds an internal auth lock while the callback runs; an
+      // awaited supabase call inside loadProfile() (supabase.from(...)) deadlocks
+      // that lock, so the JWT never attaches to the request, it goes out as anon,
+      // and the session gets dropped — i.e. "logged in for a second, then kicked
+      // back to login". Defer the work out of the callback with setTimeout.
+      if (event === "SIGNED_OUT" || !session?.user) {
         setUser(null);
         localStorage.removeItem("cps_user");
+        return;
+      }
+      // Only (re)load the profile on a real sign-in. TOKEN_REFRESHED fires on
+      // every silent token rotation (~hourly + on tab focus) and must NOT trigger
+      // a profile reload — the initial getSession() above already handles restore.
+      if (event === "SIGNED_IN") {
+        setTimeout(() => {
+          loadProfile(session.user.id, session.user.email ?? undefined, session.user.user_metadata?.full_name);
+        }, 0);
       }
     });
     return () => subscription.unsubscribe();
