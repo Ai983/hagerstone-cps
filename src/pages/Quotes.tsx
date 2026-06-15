@@ -317,6 +317,9 @@ export default function Quotes() {
   const [editedItems, setEditedItems] = useState<any[]>([]);
   const [extraCharges, setExtraCharges] = useState<Array<{ id: string; name: string; amount: string; taxable: boolean }>>([]);
   const [advancePayments, setAdvancePayments] = useState<Array<{ id: string; amount: string; method: string; date: string; paid_to_name: string; reference_number: string; notes: string }>>([]);
+  // Quotation total — system-calculated landed grand total, but editable.
+  // "" = use the auto-calculated value; any other string = manual override.
+  const [quoteTotalOverride, setQuoteTotalOverride] = useState<string>("");
   const [editedPaymentTerms, setEditedPaymentTerms] = useState("");
   const [editedDeliveryTerms, setEditedDeliveryTerms] = useState("");
   const [editedFreightTerms, setEditedFreightTerms] = useState("");
@@ -573,6 +576,7 @@ export default function Quotes() {
     setAiResult(null);
     setEditedItems([]);
     setExtraCharges([]);
+    setQuoteTotalOverride("");
     setAdvancePayments([]);
     setEditedPaymentTerms("");
     setEditedDeliveryTerms("");
@@ -1133,6 +1137,9 @@ Rules:
         .map((c) => ({ name: c.name.trim(), amount: parseFloat(c.amount) || 0, taxable: !!c.taxable }));
       const extraTotal = cleanCharges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
       const totalLanded = itemsLanded + extraTotal;
+      // If the reviewer manually edited the Quotation Total, persist that override;
+      // otherwise use the auto-calculated landed total (line items + extra charges).
+      const finalLanded = quoteTotalOverride !== "" ? (parseFloat(quoteTotalOverride) || 0) : totalLanded;
 
       // Clean advance payments — keep only entries with a positive amount
       const cleanAdvances = advancePayments
@@ -1165,7 +1172,7 @@ Rules:
         warranty_months: parseInt(editedWarranty) || null,
         validity_days: parseInt(editedValidity) || null,
         total_quoted_value: totalQuoted,
-        total_landed_value: totalLanded,
+        total_landed_value: finalLanded,
         reviewed_by: user.id,
         reviewed_at: new Date().toISOString(),
       }).eq("id", reviewQuote.id);
@@ -2348,6 +2355,7 @@ Rules:
                             if (result) {
                               setAiResult(result);
                               setEditedItems(result.items ?? []);
+                              setQuoteTotalOverride(""); // fresh parse → back to auto-calculated total
                               setEditedPaymentTerms(result.payment_terms ?? "");
                               setEditedDeliveryTerms(result.delivery_terms ?? "");
                               setEditedFreightTerms(result.freight_terms ?? "");
@@ -2639,6 +2647,52 @@ Rules:
                           </div>
                         )}
                       </div>
+
+                      {/* Quotation Total — system-calculated landed grand total, editable; includes extra charges */}
+                      {(() => {
+                        const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                        const subtotal = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0), 0);
+                        const gstAmt = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0) * ((parseFloat(li.gst_percent) || 18) / 100), 0);
+                        const freightPacking = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.quantity) || 0) * ((parseFloat(li.freight) || 0) + (parseFloat(li.packing) || 0)), 0);
+                        const extraTotal = extraCharges.reduce((s, c) => s + (parseFloat(c.amount) || 0) * (c.taxable ? 1.18 : 1), 0);
+                        const autoGrand = subtotal + gstAmt + freightPacking + extraTotal;
+                        const isOverridden = quoteTotalOverride !== "";
+                        const displayGrand = isOverridden ? quoteTotalOverride : autoGrand.toFixed(2);
+                        return (
+                          <div className="space-y-2 border-t border-border/60 pt-3">
+                            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quotation Total</div>
+                            <div className="bg-muted/40 rounded-lg p-3 space-y-1.5 text-sm">
+                              <div className="flex justify-between"><span className="text-muted-foreground">Subtotal (excl. GST)</span><span className="font-medium">₹{fmt(subtotal)}</span></div>
+                              <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-medium text-amber-700">₹{fmt(gstAmt)}</span></div>
+                              {freightPacking > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Freight + Packing</span><span className="font-medium">₹{fmt(freightPacking)}</span></div>}
+                              {extraTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Extra Charges</span><span className="font-medium">₹{fmt(extraTotal)}</span></div>}
+                              <div className="flex justify-between items-center border-t border-border pt-2 mt-1 gap-3">
+                                <span className="font-semibold">Grand Total (landed)&nbsp;₹</span>
+                                <div className="flex flex-col items-end gap-0.5">
+                                  <Input
+                                    type="number"
+                                    className="h-8 w-36 text-right text-sm font-bold text-primary"
+                                    value={displayGrand}
+                                    onChange={(e) => setQuoteTotalOverride(e.target.value)}
+                                  />
+                                  {isOverridden && (
+                                    <button
+                                      type="button"
+                                      className="text-[10px] text-muted-foreground hover:text-primary underline"
+                                      onClick={() => setQuoteTotalOverride("")}
+                                    >
+                                      Auto: ₹{fmt(autoGrand)} · reset
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground">
+                              Auto-calculated from line items + extra charges. Edit the Grand Total manually only if needed.
+                            </p>
+                          </div>
+                        );
+                      })()}
 
                       {/* Advance Paid (cash / bank advances given to vendor before PO) */}
                       <div className="space-y-3 border-t border-border/60 pt-3">
