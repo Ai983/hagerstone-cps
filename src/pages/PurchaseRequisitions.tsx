@@ -18,8 +18,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 
-import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight, ChevronDown, ClipboardCheck, Upload } from "lucide-react";
+import { Plus, Search, FileText, Trash2, Printer, X, CheckCircle2, ChevronRight, ChevronDown, ClipboardCheck, Upload, AlertTriangle } from "lucide-react";
 import GrnUploadDialog from "@/components/procurement/GrnUploadDialog";
 
 // DB CHECK constraint allows: pending, pending_design, validated, duplicate_flagged, rfq_created, po_issued, delivered, cancelled
@@ -825,6 +826,9 @@ export default function PurchaseRequisitions() {
   const [wizLineItems, setWizLineItems] = useState<LineItem[]>([]);
   const [wizNotes, setWizNotes] = useState("");
   const [wizSubmitting, setWizSubmitting] = useState(false);
+  // Final consent box (site engineer accepts responsibility before submitting)
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [consentChecked, setConsentChecked] = useState(false);
   const [wizDuplicates, setWizDuplicates] = useState<Array<{ id: string; pr_number: string; created_at: string; score: number }>>([]);
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [wizSuccess, setWizSuccess] = useState<{ prNumber: string; itemsCount: number } | null>(null);
@@ -2775,10 +2779,67 @@ export default function PurchaseRequisitions() {
                     <Button
                       className="h-12 px-8 rounded-lg"
                       disabled={wizSubmitting || !wizNotes.trim()}
-                      onClick={submitWizard}
+                      onClick={() => { setConsentChecked(false); setConsentOpen(true); }}
                     >
                       {wizSubmitting ? (lang === 'hi' ? 'Bhej rahe hain...' : 'Submitting...') : (lang === 'hi' ? 'Request Bhejo' : 'Submit PR')}
                     </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Final consent box — site engineer accepts responsibility ──
+                   Self-contained overlay at z-[310] so it sits ABOVE the wizard's
+                   own full-screen overlay (z-[200]); a shadcn dialog would render
+                   at z-50, i.e. behind the wizard, and appear to "do nothing". */}
+              {consentOpen && (
+                <div
+                  className="fixed inset-0 z-[310] flex items-center justify-center bg-black/60 p-4"
+                  onClick={() => { if (!wizSubmitting) setConsentOpen(false); }}
+                >
+                  <div
+                    className="w-full max-w-lg rounded-xl bg-background p-6 shadow-2xl space-y-4"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="mx-auto h-14 w-14 rounded-full bg-amber-100 flex items-center justify-center">
+                      <AlertTriangle className="h-7 w-7 text-amber-600" />
+                    </div>
+                    <h2 className="text-center text-xl font-semibold text-foreground">
+                      Ek baar phir confirm karein
+                    </h2>
+                    <p className="text-center text-base text-foreground/80">
+                      Kya aap confirm karte hain ki yeh <strong>material aur quantity</strong> site ke liye
+                      sach mein zaroori hai?
+                    </p>
+
+                    <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-[13px] text-amber-900">
+                      ⚠️ Aage chal kar agar material ya quantity mein koi bhi <strong>galti ya discrepancy</strong>{' '}
+                      paayi gayi, toh uski <strong>poori zimmedari aapki hogi</strong>.
+                    </div>
+
+                    <label className="flex items-start gap-3 cursor-pointer rounded-lg border border-border p-3 hover:bg-muted/40">
+                      <Checkbox
+                        checked={consentChecked}
+                        onCheckedChange={(v) => setConsentChecked(v === true)}
+                        className="mt-0.5"
+                      />
+                      <span className="text-sm text-foreground">
+                        Haan, main confirm karta/karti hoon ki yeh requirement sahi hai aur iski
+                        poori zimmedari leta/leti hoon.
+                      </span>
+                    </label>
+
+                    <div className="flex justify-end gap-2 pt-1">
+                      <Button variant="outline" onClick={() => setConsentOpen(false)} disabled={wizSubmitting}>
+                        Nahi, ruko
+                      </Button>
+                      <Button
+                        className="bg-primary hover:bg-primary/90"
+                        disabled={!consentChecked || wizSubmitting}
+                        onClick={() => { setConsentOpen(false); submitWizard(); }}
+                      >
+                        {wizSubmitting ? 'Bhej rahe hain...' : 'Haan, Request Bhejo'}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               )}

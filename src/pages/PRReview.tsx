@@ -18,7 +18,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 
-import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search, CheckCircle2, SendHorizonal } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search, CheckCircle2, SendHorizonal, FileDown, Upload, ShieldCheck, ShieldAlert } from "lucide-react";
+
+import { downloadPrApprovalSheet, loadPrSheetCompanyConfig } from "@/lib/generatePrApprovalSheetPdf";
+import { verifyApprovalSheetSignatures, type SignatureVerifyResult } from "@/lib/verifyApprovalSheet";
 
 // ---------- types ----------
 
@@ -38,6 +41,9 @@ type PR = {
   assigned_to_user_id: string | null;
   assigned_to_name: string | null;
   items_count: number;
+  approval_sheet_url: string | null;
+  approval_sheet_status: string | null;
+  approval_sheet_override_reason: string | null;
 };
 
 type LineItem = {
@@ -157,7 +163,7 @@ function SortIcon({ field, sortField, sortDir }: { field: string; sortField: str
 // ---------- component ----------
 
 export default function PRReview() {
-  const { user } = useAuth();
+  const { user, isProcurementHead } = useAuth();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -190,6 +196,20 @@ export default function PRReview() {
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
 
+  // ── Signed approval sheet (gate before RFQ) ──
+  const [sheetFile, setSheetFile] = useState<File | null>(null);
+  const [sheetVerifying, setSheetVerifying] = useState(false);
+  const [sheetVerify, setSheetVerify] = useState<SignatureVerifyResult | null>(null);
+  const [sheetStatus, setSheetStatus] = useState<string | null>(null);
+  const [sheetUrl, setSheetUrl] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [overriding, setOverriding] = useState(false);
+  // Gate passes when AI verified both signatures, or procurement head overrode.
+  const approvalGatePassed = sheetStatus === "verified" || sheetStatus === "overridden";
+
+  // Load authoritative company config once for the printable sheet.
+  useEffect(() => { loadPrSheetCompanyConfig(supabase); }, []);
+
   // RFQ creation
   const [rfqTitle, setRfqTitle] = useState("");
   const [rfqDeadline, setRfqDeadline] = useState("");
@@ -202,7 +222,7 @@ export default function PRReview() {
     try {
       const { data, error } = await supabase
         .from("cps_purchase_requisitions")
-        .select("id,pr_number,project_site,project_code,required_by,notes,status,created_at,requested_by,assigned_to_user_id")
+        .select("id,pr_number,project_site,project_code,required_by,notes,status,created_at,requested_by,assigned_to_user_id,approval_sheet_url,approval_sheet_status,approval_sheet_override_reason")
         .order("created_at", { ascending: false });
       if (error) throw error;
 
@@ -232,6 +252,9 @@ export default function PRReview() {
         requester_name: nameMap[r.requested_by] ?? "—",
         assigned_to_name: r.assigned_to_user_id ? (nameMap[r.assigned_to_user_id] ?? null) : null,
         items_count: countMap[r.id] ?? 0,
+        approval_sheet_url: r.approval_sheet_url ?? null,
+        approval_sheet_status: r.approval_sheet_status ?? null,
+        approval_sheet_override_reason: r.approval_sheet_override_reason ?? null,
       })));
     } catch (e: any) {
       toast.error(e.message || "Failed to load PRs");
@@ -284,6 +307,12 @@ export default function PRReview() {
     setEditPr(pr);
     setEditOpen(true);
     setLoadingItems(true);
+    // Reset signed-sheet gate state from this PR
+    setSheetFile(null);
+    setSheetVerify(null);
+    setOverrideReason("");
+    setSheetStatus(pr.approval_sheet_status ?? null);
+    setSheetUrl(pr.approval_sheet_url ?? null);
     // Pre-fill RFQ defaults
     setRfqTitle(`${pr.pr_number} — ${pr.project_site}`);
     const d = new Date(); d.setDate(d.getDate() + 3);
@@ -474,6 +503,10 @@ export default function PRReview() {
 
   const handleApprove = async () => {
     if (!editPr) return;
+    if (!approvalGatePassed) {
+      toast.error("Upload the signed approval sheet and pass the signature check before approving");
+      return;
+    }
     // Save any pending line item changes first
     const toDelete = lineItems.filter((li) => li._deleted && li.id);
     const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
@@ -538,8 +571,142 @@ export default function PRReview() {
     }
   };
 
+  // ── Download the printable approval sheet (uses current edited line items) ──
+  const handleDownloadSheet = () => {
+    if (!editPr) return;
+    const items = lineItems.filter((li) => !li._deleted);
+    if (items.length === 0) { toast.error("Add at least one line item before printing the sheet"); return; }
+    downloadPrApprovalSheet({
+      prNumber: editPr.pr_number,
+      projectName: null,
+      projectCode: editPr.project_code,
+      projectSite: editPr.project_site,
+      raisedByName: editPr.requester_name,
+      requiredBy: editPr.required_by,
+      createdAt: editPr.created_at,
+      notes: editPr.notes,
+      lineItems: items.map((li) => ({
+        description: li.description,
+        brand_make: li.brand_make,
+        specs: li.specs,
+        quantity: li.quantity,
+        unit: li.unit,
+      })),
+    });
+  };
+
+  // ── Upload scanned signed sheet → AI verifies both signatures → persist ──
+  const handleUploadAndVerify = async () => {
+    if (!editPr || !user) return;
+    if (!sheetFile) { toast.error("Choose the scanned signed sheet first"); return; }
+    if (sheetFile.size > 15 * 1024 * 1024) { toast.error("File too large (max 15 MB)"); return; }
+
+    setSheetVerifying(true);
+    setSheetVerify(null);
+    try {
+      // 1. AI signature check (blocking)
+      const res = await verifyApprovalSheetSignatures(sheetFile);
+      setSheetVerify(res);
+
+      // 2. Always store the scan so the proof is retained, regardless of result
+      const ext = sheetFile.name.split(".").pop() || "pdf";
+      const path = `pr-approval-sheets/${editPr.id}/signed-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("cps-quotes")
+        .upload(path, sheetFile, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from("cps-quotes").getPublicUrl(path);
+      const fileUrl = pub?.publicUrl ?? path;
+
+      const newStatus = res.bothPresent ? "verified" : "failed";
+
+      // 3. Persist on the PR
+      const { error: updErr } = await supabase
+        .from("cps_purchase_requisitions")
+        .update({
+          approval_sheet_url: fileUrl,
+          approval_sheet_status: newStatus,
+          approval_sheet_uploaded_at: new Date().toISOString(),
+          approval_sheet_signed_off_by: user.id,
+          approval_sheet_ai_result: res,
+          approval_sheet_override_reason: null, // clear any stale override on a fresh upload
+        })
+        .eq("id", editPr.id);
+      if (updErr) throw updErr;
+
+      setSheetStatus(newStatus);
+      setSheetUrl(fileUrl);
+
+      // 4. Audit
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id, user_name: user.name, user_role: user.role,
+        action_type: res.bothPresent ? "PR_APPROVAL_SHEET_VERIFIED" : "PR_APPROVAL_SHEET_REJECTED",
+        entity_type: "purchase_requisition",
+        entity_id: editPr.id,
+        entity_number: editPr.pr_number,
+        description: res.bothPresent
+          ? `Signed approval sheet verified by AI for ${editPr.pr_number} (design ✓, procurement ✓, confidence ${res.confidence}%).`
+          : `Signed approval sheet for ${editPr.pr_number} failed AI check — design: ${res.design_signed ? "✓" : "✗"}, procurement: ${res.procurement_signed ? "✓" : "✗"}. ${res.notes}`,
+        severity: res.bothPresent ? "info" : "warning",
+        logged_at: new Date().toISOString(),
+      });
+
+      if (res.bothPresent) {
+        toast.success("Both signatures verified — you can now create the RFQ");
+      } else {
+        toast.error("AI could not confirm both signatures — check the details below");
+      }
+      fetchPRs();
+    } catch (e: any) {
+      toast.error(e.message || "Verification failed");
+    } finally {
+      setSheetVerifying(false);
+    }
+  };
+
+  // ── Procurement Head manual override when AI keeps failing on a valid scan ──
+  const handleOverride = async () => {
+    if (!editPr || !user) return;
+    if (!overrideReason.trim()) { toast.error("Type a reason for the override"); return; }
+    setOverriding(true);
+    try {
+      const { error } = await supabase
+        .from("cps_purchase_requisitions")
+        .update({
+          approval_sheet_status: "overridden",
+          approval_sheet_override_reason: overrideReason.trim(),
+          approval_sheet_signed_off_by: user.id,
+        })
+        .eq("id", editPr.id);
+      if (error) throw error;
+
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id, user_name: user.name, user_role: user.role,
+        action_type: "PR_APPROVAL_SHEET_OVERRIDDEN",
+        entity_type: "purchase_requisition",
+        entity_id: editPr.id,
+        entity_number: editPr.pr_number,
+        description: `Procurement Head overrode the AI signature check for ${editPr.pr_number}. Reason: ${overrideReason.trim()}`,
+        severity: "warning",
+        logged_at: new Date().toISOString(),
+      });
+
+      setSheetStatus("overridden");
+      toast.success("Override recorded — RFQ unlocked");
+      fetchPRs();
+    } catch (e: any) {
+      toast.error(e.message || "Override failed");
+    } finally {
+      setOverriding(false);
+    }
+  };
+
   const handleCreateRfq = async () => {
     if (!editPr || !user) return;
+    if (!approvalGatePassed) {
+      toast.error("Upload the signed approval sheet and pass the signature check before creating the RFQ");
+      return;
+    }
     if (!rfqTitle.trim()) { toast.error("RFQ title is required"); return; }
     if (!rfqDeadline) { toast.error("Deadline is required"); return; }
     const visibleCount = lineItems.filter((li) => !li._deleted).length;
@@ -1045,6 +1212,118 @@ export default function PRReview() {
                     Note: Requestor details, project code, required-by date and PR status are read-only.
                   </p>
 
+                  {/* ── Signed Approval Sheet gate ── */}
+                  {(editPr?.status === "pending" || editPr?.status === "validated" || editPr?.status === "duplicate_flagged") && (
+                    <div className="mt-5 rounded-lg border border-amber-300 bg-amber-50/60 p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="text-sm font-semibold text-amber-900 flex items-center gap-2">
+                          <ShieldCheck className="h-4 w-4" /> Step 1 — Site Verification &amp; Approval Sheet
+                        </div>
+                        {approvalGatePassed ? (
+                          <Badge className="bg-green-100 text-green-800 border-0 text-xs">
+                            {sheetStatus === "overridden" ? "✓ Manually overridden" : "✓ Signatures verified"}
+                          </Badge>
+                        ) : sheetStatus === "failed" ? (
+                          <Badge className="bg-red-100 text-red-800 border-0 text-xs">Signature check failed</Badge>
+                        ) : (
+                          <Badge className="bg-amber-200 text-amber-900 border-0 text-xs">Required before RFQ</Badge>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-amber-900/80">
+                        Download the sheet, print it, get it signed by the <strong>Design Team Head</strong> and the
+                        {" "}<strong>Procurement Team Head</strong>, then upload the scanned copy. AI confirms both
+                        signatures before the RFQ can be created.
+                      </p>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={handleDownloadSheet}>
+                          <FileDown className="h-3.5 w-3.5 mr-1.5" /> Download Sheet (PDF)
+                        </Button>
+                        {sheetUrl && (
+                          <SignedRefAnchor url={sheetUrl} className="text-xs text-primary underline underline-offset-2">
+                            View uploaded scan
+                          </SignedRefAnchor>
+                        )}
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <input
+                          type="file"
+                          accept="application/pdf,image/png,image/jpeg"
+                          onChange={(e) => { setSheetFile(e.target.files?.[0] ?? null); setSheetVerify(null); }}
+                          className="text-xs file:mr-2 file:rounded file:border file:border-input file:bg-background file:px-2 file:py-1 file:text-xs"
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleUploadAndVerify}
+                          disabled={!sheetFile || sheetVerifying}
+                          className="bg-amber-700 hover:bg-amber-800 text-white"
+                        >
+                          {sheetVerifying ? (
+                            <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Verifying signatures…</>
+                          ) : (
+                            <><Upload className="h-3.5 w-3.5 mr-1.5" /> Upload &amp; Verify</>
+                          )}
+                        </Button>
+                      </div>
+
+                      {/* AI result details */}
+                      {sheetVerify && (
+                        <div className={`rounded-md border p-2.5 text-xs ${sheetVerify.bothPresent ? "border-green-300 bg-green-50 text-green-900" : "border-red-300 bg-red-50 text-red-900"}`}>
+                          <div className="flex gap-4 font-medium">
+                            <span>Design Head: {sheetVerify.design_signed ? "✓ signed" : "✗ missing"}</span>
+                            <span>Procurement Head: {sheetVerify.procurement_signed ? "✓ signed" : "✗ missing"}</span>
+                            <span className="text-muted-foreground">Confidence {sheetVerify.confidence}%</span>
+                          </div>
+                          {sheetVerify.notes && <p className="mt-1 italic opacity-80">{sheetVerify.notes}</p>}
+                        </div>
+                      )}
+
+                      {/* Procurement Head override when AI failed */}
+                      {sheetStatus === "failed" && !approvalGatePassed && (
+                        isProcurementHead ? (
+                          <div className="rounded-md border border-red-300 bg-white p-2.5 space-y-2">
+                            <div className="text-xs font-semibold text-red-800 flex items-center gap-1.5">
+                              <ShieldAlert className="h-3.5 w-3.5" /> Procurement Head override
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                              Only use this if the scan is genuinely signed by both but AI couldn't read it. This is logged to the audit trail.
+                            </p>
+                            <Textarea
+                              rows={2}
+                              value={overrideReason}
+                              onChange={(e) => setOverrideReason(e.target.value)}
+                              placeholder="Reason for override (e.g. scan blurry but both signatures present)…"
+                              className="text-xs resize-none"
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={handleOverride}
+                              disabled={overriding || !overrideReason.trim()}
+                              className="border-red-300 text-red-800 hover:bg-red-50"
+                            >
+                              {overriding ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving…</> : "Override & Unlock RFQ"}
+                            </Button>
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-red-700">
+                            AI couldn't confirm both signatures. Re-upload a clearer scan, or ask the Procurement Head to override.
+                          </p>
+                        )
+                      )}
+
+                      {sheetStatus === "overridden" && editPr?.approval_sheet_override_reason && (
+                        <p className="text-[11px] text-amber-800 italic">
+                          Overridden by Procurement Head — reason: {editPr.approval_sheet_override_reason}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {/* ── Create RFQ panel ── */}
                   {(editPr?.status === "pending" || editPr?.status === "validated" || editPr?.status === "duplicate_flagged") && (
                     <div className="mt-5 rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
@@ -1072,10 +1351,15 @@ export default function PRReview() {
                       <p className="text-xs text-muted-foreground">
                         This will create a <strong>draft RFQ</strong> with all {lineItems.filter(li => !li._deleted).length} items. Go to the RFQ page to add suppliers and send.
                       </p>
+                      {!approvalGatePassed && (
+                        <p className="text-xs font-medium text-amber-700 flex items-center gap-1.5">
+                          <ShieldAlert className="h-3.5 w-3.5" /> Upload &amp; verify the signed approval sheet above to unlock this.
+                        </p>
+                      )}
                       <Button
                         className="bg-primary hover:bg-primary/90 text-primary-foreground"
                         onClick={handleCreateRfq}
-                        disabled={creatingRfq || loadingItems}
+                        disabled={creatingRfq || loadingItems || !approvalGatePassed}
                       >
                         {creatingRfq ? (
                           <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Creating RFQ…</>
