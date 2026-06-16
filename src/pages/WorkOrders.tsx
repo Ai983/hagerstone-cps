@@ -51,6 +51,7 @@ type WoRow = {
   created_at: string;
   created_by: string | null;
   wo_pdf_url: string | null;
+  sent_to_finance: boolean | null;
 };
 
 type Supplier = {
@@ -197,13 +198,16 @@ export default function WorkOrders() {
   const [addColumnOpen, setAddColumnOpen] = useState(false);
   const [newColumnLabel, setNewColumnLabel] = useState("");
 
+  // Send-to-Finance dialog (captures bank details, hands the WO to the finance app)
+  const [sendFinanceWo, setSendFinanceWo] = useState<WoRow | null>(null);
+
   // ── fetch list ──
   const fetchAll = async () => {
     setLoading(true);
     try {
       const { data, error } = await supabase
         .from("cps_work_orders")
-        .select("id, wo_number, category, status, project_site, project_code, supplier_id, supplier_name_text, grand_total, created_at, created_by, wo_pdf_url")
+        .select("id, wo_number, category, status, project_site, project_code, supplier_id, supplier_name_text, grand_total, created_at, created_by, wo_pdf_url, sent_to_finance")
         .order("created_at", { ascending: false });
       if (error) throw error;
       const woRows = (data ?? []) as WoRow[];
@@ -1111,6 +1115,22 @@ Rules:
                   <Badge variant="outline" className="text-[10px]">{r.category}</Badge>
                   <span className="font-medium">{canViewPrices ? fmtINR(r.grand_total) : "***"}</span>
                 </div>
+                {canManageWO && r.status === "issued" && (
+                  <div className="pt-1" onClick={(e) => e.stopPropagation()}>
+                    {r.sent_to_finance ? (
+                      <Badge className="text-[10px] border-0 bg-green-100 text-green-800">Sent to Finance ✓</Badge>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs border-green-300 text-green-700 hover:bg-green-50"
+                        onClick={() => setSendFinanceWo(r)}
+                      >
+                        Send to Finance
+                      </Button>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           ))
@@ -1174,6 +1194,20 @@ Rules:
                         )}
                         {canManageWO && (
                           <Button variant="outline" size="sm" onClick={() => openEdit(r)}>Edit</Button>
+                        )}
+                        {canManageWO && r.status === "issued" && (
+                          r.sent_to_finance ? (
+                            <Badge className="text-[10px] border-0 bg-green-100 text-green-800">Sent to Finance ✓</Badge>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-green-300 text-green-700 hover:bg-green-50"
+                              onClick={() => setSendFinanceWo(r)}
+                            >
+                              Send to Finance
+                            </Button>
+                          )
                         )}
                       </div>
                     </TableCell>
@@ -1683,6 +1717,145 @@ Rules:
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Send Work Order to Finance — capture bank details, then hand off */}
+      {sendFinanceWo && (
+        <SendToFinanceModal
+          wo={sendFinanceWo}
+          userId={user?.id ?? null}
+          onClose={() => setSendFinanceWo(null)}
+          onDone={() => { setSendFinanceWo(null); fetchAll(); }}
+        />
+      )}
     </div>
+  );
+}
+
+// ─── Send to Finance modal ──────────────────────────────────────────
+// Procurement fills the payee bank details (required) and hands the issued
+// WO to the finance app. Writes the bank fields + sent_to_finance flag onto
+// cps_work_orders; the finance app reads these rows directly.
+function SendToFinanceModal({
+  wo, userId, onClose, onDone,
+}: {
+  wo: WoRow;
+  userId: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [holder, setHolder] = useState("");
+  const [bankName, setBankName] = useState("");
+  const [ifsc, setIfsc] = useState("");
+  const [accountNumber, setAccountNumber] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [prefilling, setPrefilling] = useState(true);
+
+  // Pre-fill from the supplier's most recent PO bank details (if any), then
+  // fall back to anything already saved on this WO.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const { data: woRow } = await supabase
+          .from("cps_work_orders")
+          .select("bank_account_holder_name, bank_name, bank_ifsc, bank_account_number")
+          .eq("id", wo.id)
+          .maybeSingle();
+        let src: any = woRow && (woRow as any).bank_account_number ? woRow : null;
+        if (!src && wo.supplier_id) {
+          const { data: prevPo } = await supabase
+            .from("cps_purchase_orders")
+            .select("bank_account_holder_name, bank_name, bank_ifsc, bank_account_number")
+            .eq("supplier_id", wo.supplier_id)
+            .not("bank_account_number", "is", null)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          src = prevPo ?? null;
+        }
+        if (active && src) {
+          setHolder(src.bank_account_holder_name ?? "");
+          setBankName(src.bank_name ?? "");
+          setIfsc(src.bank_ifsc ?? "");
+          setAccountNumber(src.bank_account_number ?? "");
+        }
+      } catch { /* pre-fill is best-effort */ }
+      finally { if (active) setPrefilling(false); }
+    })();
+    return () => { active = false; };
+  }, [wo.id, wo.supplier_id]);
+
+  const canSend =
+    holder.trim() && bankName.trim() && ifsc.trim() && accountNumber.trim() && !submitting;
+
+  const handleSend = async () => {
+    if (!canSend) return;
+    setSubmitting(true);
+    try {
+      const { error } = await supabase
+        .from("cps_work_orders")
+        .update({
+          bank_account_holder_name: holder.trim(),
+          bank_name: bankName.trim(),
+          bank_ifsc: ifsc.trim().toUpperCase(),
+          bank_account_number: accountNumber.trim(),
+          sent_to_finance: true,
+          sent_to_finance_at: new Date().toISOString(),
+          sent_to_finance_by: userId,
+        })
+        .eq("id", wo.id);
+      if (error) throw error;
+      toast.success(`${wo.wo_number} sent to finance`);
+      onDone();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to send to finance");
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
+        <DialogHeader>
+          <DialogTitle>Send Work Order to Finance</DialogTitle>
+          <DialogDescription>
+            {wo.wo_number} — {wo.supplier_name_text ?? "—"} · {fmtINR(wo.grand_total)}
+            <br />Enter the payee bank details. All fields are required before sending.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 py-1">
+          <div className="space-y-1">
+            <Label>Account Holder Name *</Label>
+            <Input value={holder} onChange={(e) => setHolder(e.target.value)} placeholder="As per bank records" disabled={prefilling} />
+          </div>
+          <div className="space-y-1">
+            <Label>Bank Name *</Label>
+            <Input value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="e.g. HDFC Bank" disabled={prefilling} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label>IFSC *</Label>
+              <Input value={ifsc} onChange={(e) => setIfsc(e.target.value.toUpperCase())} placeholder="HDFC0001234" disabled={prefilling} />
+            </div>
+            <div className="space-y-1">
+              <Label>Account Number *</Label>
+              <Input value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} placeholder="Account no." disabled={prefilling} />
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button
+            className="bg-green-600 hover:bg-green-700 text-white"
+            onClick={handleSend}
+            disabled={!canSend}
+          >
+            {submitting ? "Sending…" : "Send to Finance"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
