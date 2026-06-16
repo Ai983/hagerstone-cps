@@ -749,6 +749,87 @@ export async function uploadWoPdf(
   return publicUrl;
 }
 
+// Rebuild a WO's PDF straight from its database row (work order + line items)
+// and upload it. Used to backfill PDFs for already-issued WOs and to guarantee
+// a PDF exists when a WO is sent to finance — without needing the edit wizard open.
+export async function ensureWoPdfFromDb(
+  supabase: SupabaseClient,
+  woId: string,
+  logoBase64?: string | null
+): Promise<string | null> {
+  const { data: wo } = await supabase
+    .from("cps_work_orders")
+    .select("*")
+    .eq("id", woId)
+    .maybeSingle();
+  if (!wo) return null;
+  const w = wo as any;
+
+  const { data: items } = await supabase
+    .from("cps_wo_line_items")
+    .select("*")
+    .eq("wo_id", woId)
+    .order("sort_order", { ascending: true });
+
+  const pdfData: WoPdfData = {
+    woNumber: w.wo_number,
+    category: w.category ?? "",
+    supplierName: w.supplier_name_text ?? "",
+    supplierGstin: w.supplier_gstin ?? null,
+    supplierState: w.supplier_state ?? null,
+    supplierKindAttn: w.supplier_kind_attn ?? null,
+    supplierContact: w.supplier_contact ?? null,
+    supplierEmail: w.supplier_email ?? null,
+    supplierAddress: w.supplier_address ?? null,
+    workAtName: w.project_site ?? null,
+    workAddress: w.work_address ?? null,
+    priceBasis: w.price_basis ?? null,
+    dispatchBy: w.dispatch_by ?? null,
+    freightLabour: w.freight_labour ?? null,
+    insurance: w.insurance ?? null,
+    packingTerms: w.packing_terms ?? null,
+    warranty: w.warranty ?? null,
+    testCertificate: w.test_certificate ?? null,
+    transporter: w.transporter ?? null,
+    deliverySchedule: w.delivery_schedule ?? null,
+    poIssueDate: w.po_issue_date ?? null,
+    poUptoDate: w.po_upto_date ?? null,
+    validUpto: w.valid_upto ?? null,
+    effectiveDate: w.effective_date ?? null,
+    modeOfPayment: w.mode_of_payment ?? null,
+    paymentTerms: w.payment_terms ?? null,
+    subtotal: Number(w.subtotal ?? 0),
+    gstAmount: Number(w.gst_amount ?? 0),
+    grandTotal: Number(w.grand_total ?? 0),
+    customColumns: (w.custom_columns as WoPdfCustomColumn[]) ?? [],
+    customTotalRows: (w.custom_total_rows as WoPdfCustomTotalRow[]) ?? [],
+    standardTerms: (w.standard_terms as string[]) ?? [],
+    workRemarks: (w.work_remarks as string[]) ?? [],
+    preparedByName: w.prepared_by_name ?? null,
+    checkedByName: w.checked_by_name ?? null,
+    authorisedSignatory: w.authorised_signatory ?? null,
+    logoBase64: logoBase64 ?? null,
+    lineItems: ((items ?? []) as any[]).map((it) => ({
+      item: it.item ?? null,
+      hsn_code: it.hsn_code ?? null,
+      description: it.description ?? "",
+      delivery_date: it.delivery_date ?? null,
+      quantity: it.quantity != null ? Number(it.quantity) : 0,
+      unit: it.unit ?? null,
+      rate: it.rate != null ? Number(it.rate) : 0,
+      discount: it.discount != null ? Number(it.discount) : 0,
+      total_value: it.total_value != null ? Number(it.total_value) : 0,
+      sgst_percent: it.sgst_percent != null ? Number(it.sgst_percent) : 0,
+      cgst_percent: it.cgst_percent != null ? Number(it.cgst_percent) : 0,
+      igst_percent: it.igst_percent != null ? Number(it.igst_percent) : 0,
+      custom_data: (it.custom_data as Record<string, string>) ?? {},
+    })),
+  };
+
+  const blob = buildWoPdf(pdfData);
+  return uploadWoPdf(supabase, woId, w.wo_number, blob);
+}
+
 export async function uploadWoRateList(
   supabase: SupabaseClient,
   woId: string,

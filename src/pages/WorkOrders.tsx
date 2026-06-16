@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 
 import {
-  buildWoPdf, uploadWoPdf, uploadWoRateList,
+  buildWoPdf, uploadWoPdf, uploadWoRateList, ensureWoPdfFromDb,
   WO_CATEGORIES, WO_DEFAULT_STANDARD_TERMS, WO_DEFAULT_WORK_REMARKS,
   type WoPdfData, type WoPdfLineItem, type WoPdfCustomColumn, type WoPdfCustomTotalRow,
 } from "@/lib/generateWoPdf";
@@ -198,6 +198,8 @@ export default function WorkOrders() {
 
   // Send-to-Finance dialog (captures bank details, hands the WO to the finance app)
   const [sendFinanceWo, setSendFinanceWo] = useState<WoRow | null>(null);
+  // One-time backfill: generate + store PDFs for issued WOs missing one
+  const [backfilling, setBackfilling] = useState(false);
 
   // ── fetch list ──
   const fetchAll = async () => {
@@ -359,6 +361,27 @@ export default function WorkOrders() {
     resetWizard();
     setPreparedBy(user?.name ?? "");
     setWizardOpen(true);
+  };
+
+  // Issued work orders whose PDF was never stored (e.g. created before the
+  // cps-wo-pdfs bucket existed). Drives the "Generate missing PDFs" button.
+  const missingPdfCount = rows.filter((r) => r.status === "issued" && !r.wo_pdf_url).length;
+
+  // Rebuild + upload PDFs for every issued WO that doesn't have one yet.
+  const backfillMissingPdfs = async () => {
+    const targets = rows.filter((r) => r.status === "issued" && !r.wo_pdf_url);
+    if (targets.length === 0) { toast.info("All issued work orders already have a PDF"); return; }
+    setBackfilling(true);
+    let done = 0, failed = 0;
+    for (const r of targets) {
+      try {
+        const url = await ensureWoPdfFromDb(supabase, r.id, logoBase64);
+        if (url) done++; else failed++;
+      } catch { failed++; }
+    }
+    setBackfilling(false);
+    toast.success(`Generated ${done} PDF${done === 1 ? "" : "s"}${failed ? ` · ${failed} failed` : ""}`);
+    fetchAll();
   };
 
   const openEdit = async (row: WoRow) => {
@@ -1016,9 +1039,17 @@ Rules:
           </p>
         </div>
         {canManageWO && (
-          <Button onClick={openCreate}>
-            <Plus className="h-4 w-4 mr-2" /> Create Work Order
-          </Button>
+          <div className="flex items-center gap-2">
+            {missingPdfCount > 0 && (
+              <Button variant="outline" onClick={backfillMissingPdfs} disabled={backfilling}
+                title="Generate & store PDFs for issued work orders that don't have one yet">
+                {backfilling ? "Generating…" : `Generate ${missingPdfCount} missing PDF${missingPdfCount > 1 ? "s" : ""}`}
+              </Button>
+            )}
+            <Button onClick={openCreate}>
+              <Plus className="h-4 w-4 mr-2" /> Create Work Order
+            </Button>
+          </div>
         )}
       </div>
 
@@ -1679,6 +1710,7 @@ Rules:
         <SendToFinanceModal
           wo={sendFinanceWo}
           userId={user?.id ?? null}
+          logoBase64={logoBase64}
           onClose={() => setSendFinanceWo(null)}
           onDone={() => { setSendFinanceWo(null); fetchAll(); }}
         />
@@ -1692,10 +1724,11 @@ Rules:
 // WO to the finance app. Writes the bank fields + sent_to_finance flag onto
 // cps_work_orders; the finance app reads these rows directly.
 function SendToFinanceModal({
-  wo, userId, onClose, onDone,
+  wo, userId, logoBase64, onClose, onDone,
 }: {
   wo: WoRow;
   userId: string | null;
+  logoBase64: string | null;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -1748,6 +1781,11 @@ function SendToFinanceModal({
     if (!canSend) return;
     setSubmitting(true);
     try {
+      // Ensure the WO PDF exists so it travels to finance with the bank details.
+      // (Older WOs may have no stored PDF — rebuild + upload it from the DB row.)
+      if (!wo.wo_pdf_url) {
+        await ensureWoPdfFromDb(supabase, wo.id, logoBase64);
+      }
       const { error } = await supabase
         .from("cps_work_orders")
         .update({
