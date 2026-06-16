@@ -181,8 +181,6 @@ export default function WorkOrders() {
   const [w_lineItems, setLineItems] = useState<LineItem[]>([newLineItem()]);
   const [w_customColumns, setCustomColumns] = useState<WoPdfCustomColumn[]>([]);
   const [w_customTotalRows, setCustomTotalRows] = useState<WoPdfCustomTotalRow[]>([]);
-  const [w_subtotalOverride, setSubtotalOverride] = useState<string>("");      // blank = auto from line items
-  const [w_grandTotalOverride, setGrandTotalOverride] = useState<string>("");  // blank = auto from subtotal + extras
   const [w_standardTerms, setStandardTerms] = useState<string[]>([...WO_DEFAULT_STANDARD_TERMS]);
   const [w_workRemarks, setWorkRemarks] = useState<string[]>([...WO_DEFAULT_WORK_REMARKS]);
 
@@ -299,12 +297,10 @@ export default function WorkOrders() {
     return { draft, issued, completed, totalValue };
   }, [rows]);
 
-  // ── computed totals during editing ──
-  // Subtotal: auto = sum of line item Totals; user can override by typing.
-  // Extra rows: pure display (CGST, SGST, IGST, Freight, Discount, etc.) — they
-  //             do NOT auto-add to Grand Total. User fills the Grand Total
-  //             themselves to whatever final number they want.
-  // Grand Total: typed by user. Placeholder defaults to Subtotal as a hint.
+  // ── computed totals during editing (system-calculated, read-only) ──
+  // Subtotal  = sum of line item Totals.
+  // Extra rows (CGST, SGST, IGST, Freight, Discount, …) ADD into the Grand Total.
+  // Grand Total = Subtotal + sum(extra rows). Neither is manually editable.
   const computedTotals = useMemo(() => {
     const parseCustomVal = (s: string): number => {
       if (!s) return 0;
@@ -324,14 +320,12 @@ export default function WorkOrders() {
       autoSubtotal += lineTotal;
     }
 
-    const subOverride = (w_subtotalOverride ?? "").trim();
-    const subtotal = subOverride === "" ? autoSubtotal : parseCustomVal(subOverride);
+    const subtotal = autoSubtotal;
+    const customSum = w_customTotalRows.reduce((s, r) => s + parseCustomVal(r.value), 0);
+    const grandTotal = subtotal + customSum;
 
-    const grandOverride = (w_grandTotalOverride ?? "").trim();
-    const grandTotal = grandOverride === "" ? subtotal : parseCustomVal(grandOverride);
-
-    return { autoSubtotal, autoGrand: subtotal, subtotal, customSum: 0, grandTotal, gstAmount: 0 };
-  }, [w_lineItems, w_subtotalOverride, w_grandTotalOverride]);
+    return { autoSubtotal, autoGrand: grandTotal, subtotal, customSum, grandTotal, gstAmount: 0 };
+  }, [w_lineItems, w_customTotalRows]);
 
   // ── wizard helpers ──
   const resetWizard = () => {
@@ -352,8 +346,6 @@ export default function WorkOrders() {
     setLineItems([newLineItem()]);
     setCustomColumns([]);
     setCustomTotalRows([]);
-    setSubtotalOverride("");
-    setGrandTotalOverride("");
     setStandardTerms([...WO_DEFAULT_STANDARD_TERMS]);
     setWorkRemarks([...WO_DEFAULT_WORK_REMARKS]);
     setPreparedBy(user?.name ?? "");
@@ -429,35 +421,9 @@ export default function WorkOrders() {
       setCustomColumns(((wo as any).custom_columns as WoPdfCustomColumn[]) ?? []);
       setCustomTotalRows(((wo as any).custom_total_rows as WoPdfCustomTotalRow[]) ?? []);
 
-      // Re-hydrate the totals overrides from the saved WO. The PDF preview
-      // recomputes Subtotal/Grand Total from these inputs (blank = auto sum of
-      // line items). If a stored total does NOT match the plain line-item sum
-      // it was a deliberate override — pre-fill the input so the previewed PDF
-      // shows the exact figure the WO was saved with. When it matches the
-      // line-item sum, leave the input blank so totals keep auto-updating as
-      // line items change.
-      const loadedItems = (items ?? []) as any[];
-      const autoSub = loadedItems.reduce((sum, it) => {
-        const tv = it.total_value != null ? Number(it.total_value) : NaN;
-        const line = Number.isFinite(tv)
-          ? tv
-          : (Number(it.quantity) || 0) * (Number(it.rate) || 0);
-        return sum + line;
-      }, 0);
-      const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
-      const storedSub = (wo as any).subtotal != null ? Number((wo as any).subtotal) : null;
-      const storedGrand = (wo as any).grand_total != null ? Number((wo as any).grand_total) : null;
-      setSubtotalOverride(
-        storedSub != null && Number.isFinite(storedSub) && !near(storedSub, autoSub)
-          ? String(storedSub)
-          : "",
-      );
-      const effectiveSub = storedSub != null && Number.isFinite(storedSub) ? storedSub : autoSub;
-      setGrandTotalOverride(
-        storedGrand != null && Number.isFinite(storedGrand) && !near(storedGrand, effectiveSub)
-          ? String(storedGrand)
-          : "",
-      );
+      // Totals are now fully system-calculated (Subtotal = line items,
+      // Grand Total = Subtotal + extra totals rows), so there is nothing to
+      // re-hydrate here — the saved custom_total_rows drive the Grand Total.
       setPreparedBy((wo as any).prepared_by_name ?? "");
       setCheckedBy((wo as any).checked_by_name ?? "");
       setAuthorisedSignatory((wo as any).authorised_signatory ?? "MR.DHRUV AGARWAL");
@@ -1503,24 +1469,14 @@ Rules:
                   </table>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-end gap-3 text-sm pt-2">
-                  <Label className="text-xs text-muted-foreground shrink-0">Subtotal</Label>
-                  <Input
-                    className="h-8 w-44 text-right font-mono text-sm"
-                    placeholder={String(computedTotals.autoSubtotal)}
-                    value={w_subtotalOverride}
-                    onChange={(e) => setSubtotalOverride(e.target.value)}
-                  />
-                  <Label className="text-sm font-bold shrink-0">Grand Total</Label>
-                  <Input
-                    className="h-9 w-44 text-right font-mono text-base font-bold text-primary"
-                    placeholder={String(computedTotals.autoGrand)}
-                    value={w_grandTotalOverride}
-                    onChange={(e) => setGrandTotalOverride(e.target.value)}
-                  />
+                <div className="flex flex-wrap items-center justify-end gap-4 text-sm pt-2">
+                  <span className="text-xs text-muted-foreground">Subtotal</span>
+                  <span className="w-44 text-right font-mono text-sm font-medium">{fmtINR(computedTotals.subtotal)}</span>
+                  <span className="text-sm font-bold">Grand Total</span>
+                  <span className="w-44 text-right font-mono text-base font-bold text-primary">{fmtINR(computedTotals.grandTotal)}</span>
                 </div>
                 <p className="text-[11px] text-muted-foreground text-right -mt-1">
-                  Subtotal default = sum of line items. Grand Total default = Subtotal. Both editable. Extras shown on PDF for reference — they do not change Grand Total.
+                  Auto-calculated. Subtotal = sum of line items. Grand Total = Subtotal + all Extra Totals Rows (CGST, SGST, freight, discount, etc.) below.
                 </p>
 
                 {/* Custom totals rows — show on PDF between IGST and Round Off */}
