@@ -838,6 +838,23 @@ export default function ComparisonSheetPage() {
         validity_days: t.validity_days ?? null,
       };
     });
+    // The frozen totals snapshot doesn't store the quote file path, but the quote
+    // PDF is immutable reference data (not a frozen number) — load it live so the
+    // "View quote" link keeps working after the sheet is frozen.
+    const snapQuoteIds = totalsRows.map((t) => t.quote_id).filter(Boolean) as string[];
+    if (snapQuoteIds.length) {
+      const { data: qFiles } = await supabase
+        .from("cps_quotes")
+        .select("supplier_id,raw_file_path,legacy_file_url")
+        .in("id", snapQuoteIds);
+      (qFiles ?? []).forEach((qf: any) => {
+        const sId = String(qf.supplier_id);
+        if (quoteMap[sId]) {
+          quoteMap[sId].raw_file_path = qf.raw_file_path ?? null;
+          quoteMap[sId].legacy_file_url = qf.legacy_file_url ?? null;
+        }
+      });
+    }
     setQuoteBySupplierId(quoteMap);
 
     // Extra charges per supplier (from totals snapshot)
