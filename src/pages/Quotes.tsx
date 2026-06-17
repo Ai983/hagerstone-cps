@@ -731,6 +731,25 @@ export default function Quotes() {
   //   2. The RFQ is still active (not closed/cancelled)
   //   3. No PO has been created from this quote (comparison may exist but no PO yet)
   // This is used when a vendor sends an updated quote and procurement wants to replace the old one.
+  // An RFQ's quotes lock the moment a PO is sent to founders ("Send to Founder
+  // & Freeze"), which always creates a PO for the RFQ. Quotes must not be
+  // revised, re-approved, or re-uploaded while a live PO is in play — editing
+  // only reopens once that PO is cancelled, rejected, or revised (superseded).
+  // Returns a blocking message, or null when editing is allowed.
+  const getRfqLockMessage = async (rfqId: string): Promise<string | null> => {
+    const { data: pos } = await supabase
+      .from("cps_purchase_orders")
+      .select("po_number,status")
+      .eq("rfq_id", rfqId);
+    const live = (pos ?? []).find(
+      (p) => !["cancelled", "rejected", "superseded"].includes(String((p as { status?: string }).status ?? "")),
+    );
+    if (live) {
+      return `Locked — PO ${(live as { po_number?: string }).po_number} has been sent to founders for this RFQ. Cancel or revise the PO before editing quotes.`;
+    }
+    return null;
+  };
+
   const deleteQuote = async () => {
     if (!user || !reviewQuote) return;
     if (!isProcurementTeam) { toast.error("Only procurement team can delete quotes"); return; }
@@ -860,10 +879,29 @@ export default function Quotes() {
       (s, li) => s + (Number(li.quantity) || 0) * (Number(li.rate) || 0),
       0,
     );
-    const landed = items.reduce(
+    const itemsLanded = items.reduce(
       (s, li) => s + (Number(li.quantity) || 0) * (Number(li.total_landed_rate) || 0),
       0,
     );
+    // Extra charges are stored in ai_parsed_data.extra_charges, NOT as line
+    // items — they must be folded into the landed total here, otherwise the
+    // header drifts below the live modal/PO total (taxable extras get 18% GST,
+    // mirroring confirmAndSaveReview). Without this the Quotes list and the
+    // comparison sheet read a stale, extras-less landed value.
+    const { data: qRow } = await supabase
+      .from("cps_quotes")
+      .select("ai_parsed_data")
+      .eq("id", quoteId)
+      .maybeSingle();
+    const charges = ((qRow?.ai_parsed_data as any)?.extra_charges ?? []) as Array<{
+      amount: number | string | null;
+      taxable?: boolean | null;
+    }>;
+    const extraTotal = charges.reduce(
+      (s, c) => s + (Number(c.amount) || 0) * (c.taxable ? 1.18 : 1),
+      0,
+    );
+    const landed = itemsLanded + extraTotal;
     await supabase
       .from("cps_quotes")
       .update({
@@ -877,6 +915,10 @@ export default function Quotes() {
     if (!user) {
       toast.error("Please sign in");
       return;
+    }
+    if (reviewQuote) {
+      const lockMsg = await getRfqLockMessage(reviewQuote.rfq_id);
+      if (lockMsg) { toast.error(lockMsg); return; }
     }
     const draft = editDraftByItemId[item.id] ?? {};
     const entries = buildCorrectionEntries(item, draft);
@@ -1088,6 +1130,9 @@ Rules:
   const confirmAndSaveReview = async () => {
     if (!user || !reviewQuote || !aiResult) return;
 
+    const lockMsg = await getRfqLockMessage(reviewQuote.rfq_id);
+    if (lockMsg) { toast.error(lockMsg); return; }
+
     // Brand is mandatory on every line. If a quote line is matched to a PR
     // line and the brand differs from the PR's brand_make, a reason for the
     // change is also mandatory — this keeps the audit story tight.
@@ -1273,6 +1318,9 @@ Rules:
   // Approve a manually-entered quote (no AI parse needed — data already exists in line items or header)
   const approveManualQuote = async () => {
     if (!user || !reviewQuote) return;
+
+    const lockMsg = await getRfqLockMessage(reviewQuote.rfq_id);
+    if (lockMsg) { toast.error(lockMsg); return; }
 
     // Block approval when quote has no line items AND no header totals.
     // Otherwise downstream comparison sheet shows ₹0 for this supplier.
@@ -1500,6 +1548,11 @@ Rules:
     }
 
     let resolvedSupplierId = logForm.supplierId;
+
+    if (logForm.rfqId) {
+      const lockMsg = await getRfqLockMessage(logForm.rfqId);
+      if (lockMsg) { toast.error(lockMsg); return; }
+    }
 
     // If new vendor mode: insert vendor first
     if (newVendorMode) {

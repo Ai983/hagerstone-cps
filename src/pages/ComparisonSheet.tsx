@@ -2184,6 +2184,10 @@ export default function ComparisonSheetPage() {
       const quote = quoteBySupplierId[sup.id];
       const headerSubtotal = Number(quote?.total_quoted_value ?? 0);
       const headerLanded = Number(quote?.total_landed_value ?? 0);
+      // Header totals are authoritative: they're set on save (now including extra
+      // charges) and, for legacy/captured quotes, carry the real document total
+      // even when line items are partial. Recomputing from possibly-incomplete
+      // lines would understate those. Derive GST as the residual.
       const subtotal = headerSubtotal > 0 ? headerSubtotal : lineSubtotal;
       let landedTotal: number; let gst: number;
       if (headerLanded > 0) {
@@ -3819,6 +3823,9 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           const quote = quoteBySupplierId[sup.id];
           const headerSubtotal = Number(quote?.total_quoted_value ?? 0);
           const headerLanded = Number(quote?.total_landed_value ?? 0);
+          // Header totals are authoritative (set on save, incl. extras; legacy
+          // quotes carry the real document total even with partial line items).
+          // Derive GST as the residual rather than recomputing from lines.
           const subtotal = headerSubtotal > 0 ? headerSubtotal : lineSubtotal;
           let landedTotal: number;
           let gst: number;

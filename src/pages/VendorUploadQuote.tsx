@@ -306,6 +306,21 @@ export default function VendorUploadQuote() {
       toast.error("Please upload a file or enter at least one item rate");
       return;
     }
+    // Block submission once this RFQ has been frozen — a PO has been sent to the
+    // founders and quotes are locked until it is cancelled/revised. Best-effort:
+    // if RLS hides POs from this public page the query is a no-op and submission
+    // proceeds as before.
+    const { data: pos } = await supabase
+      .from("cps_purchase_orders")
+      .select("status")
+      .eq("rfq_id", tokenRecord.rfq_id);
+    const frozen = (pos ?? []).some(
+      (p) => !["cancelled", "rejected", "superseded"].includes(String((p as { status?: string }).status ?? "")),
+    );
+    if (frozen) {
+      toast.error("This RFQ is locked — a purchase order has already been issued. Please contact Hagerstone procurement.");
+      return;
+    }
     setSubmitting(true);
     try {
       // 1. Upload files (one or many)
