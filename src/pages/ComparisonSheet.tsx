@@ -665,6 +665,20 @@ export default function ComparisonSheetPage() {
     }
   };
 
+  // Open a private cps-quotes file via a short-lived signed URL. The bucket is
+  // private, so the stored /object/public/cps-quotes/... URL 404s with
+  // "Bucket not found" — we must sign it on demand instead.
+  const openSignedQuote = async (stored: string | null | undefined, path: string | null | undefined) => {
+    const value = stored || path;
+    if (!value) { toast.error("No quote file on record for this supplier"); return; }
+    // Open the tab synchronously (inside the click) so the browser doesn't block it,
+    // then point it at the signed URL once resolved.
+    const win = window.open("", "_blank");
+    const url = await resolveToSignedUrl(value);
+    if (!url) { toast.error("Could not open the quote file"); win?.close(); return; }
+    if (win) win.location.href = url; else window.open(url, "_blank");
+  };
+
   // Reject the comparison after Mark-as-Reviewed — sends it back to in_review
   // so the procurement head can re-pick a supplier or update notes.
   const handleRejectComparison = async () => {
@@ -4089,11 +4103,11 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <Badge variant="outline" className="text-[10px]">{["1st","2nd","3rd","4th","5th"][idx] ?? `${idx+1}th`}</Badge>
                               {(t.quoteFileUrl || t.quoteFilePath) && (
-                                <a
-                                  href={t.quoteFileUrl ?? `https://tpfvnerrjhqwipyonngf.supabase.co/storage/v1/object/public/cps-quotes/${t.quoteFilePath}`}
-                                  target="_blank" rel="noopener noreferrer"
+                                <button
+                                  type="button"
+                                  onClick={() => openSignedQuote(t.quoteFileUrl, t.quoteFilePath)}
                                   className="text-[10px] text-blue-700 hover:underline"
-                                >View quote</a>
+                                >View quote</button>
                               )}
                             </div>
                           </div>
