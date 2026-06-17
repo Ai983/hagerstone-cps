@@ -2677,15 +2677,13 @@ Rules:
                               </Card>
                             ))}
 
-                            {/* Subtotal */}
+                            {/* Pre-GST sum — these amounts join the subtotal and are
+                                taxed at the end, so show them before GST (not ×1.18). */}
                             {extraCharges.some((c) => parseFloat(c.amount) > 0) && (
                               <div className="flex justify-between items-center pt-1 text-xs">
-                                <span className="text-muted-foreground">Extra Charges Total</span>
+                                <span className="text-muted-foreground">Extra Charges Total (excl. GST)</span>
                                 <span className="font-semibold text-primary">
-                                  ₹{extraCharges.reduce((s, c) => {
-                                    const amt = parseFloat(c.amount) || 0;
-                                    return s + amt * (c.taxable ? 1.18 : 1);
-                                  }, 0).toFixed(2)}
+                                  ₹{extraCharges.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0).toFixed(2)}
                                 </span>
                               </div>
                             )}
@@ -2693,29 +2691,35 @@ Rules:
                         )}
                       </div>
 
-                      {/* Quotation Total — system-calculated landed grand total, editable; includes extra charges */}
+                      {/* Quotation Total — vendor-format: extra charges sit in the
+                          subtotal (pre-GST) and GST is applied once at the end, matching
+                          how the vendor's own quotation totals up. Grand total is identical
+                          to the per-line method; only the breakdown differs. */}
                       {(() => {
                         const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                        const subtotal = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0), 0);
-                        const gstAmt = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0) * ((parseFloat(li.gst_percent) || 18) / 100), 0);
+                        const subtotalMaterials = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0), 0);
+                        const gstMaterials = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0) * ((parseFloat(li.gst_percent) || 18) / 100), 0);
                         const freightPacking = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.quantity) || 0) * ((parseFloat(li.freight) || 0) + (parseFloat(li.packing) || 0)), 0);
-                        const extraTotal = extraCharges.reduce((s, c) => s + (parseFloat(c.amount) || 0) * (c.taxable ? 1.18 : 1), 0);
-                        const autoGrand = subtotal + gstAmt + freightPacking + extraTotal;
+                        const extraPreGst = extraCharges.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+                        const extraGst = extraCharges.reduce((s, c) => s + (parseFloat(c.amount) || 0) * (c.taxable ? 0.18 : 0), 0);
+                        const subtotalExclGst = subtotalMaterials + extraPreGst;
+                        const gstAll = gstMaterials + extraGst;
+                        const autoGrand = subtotalExclGst + gstAll + freightPacking;
                         return (
                           <div className="space-y-2 border-t border-border/60 pt-3">
                             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quotation Total</div>
                             <div className="bg-muted/40 rounded-lg p-3 space-y-1.5 text-sm">
-                              <div className="flex justify-between"><span className="text-muted-foreground">Subtotal (excl. GST)</span><span className="font-medium">₹{fmt(subtotal)}</span></div>
-                              <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-medium text-amber-700">₹{fmt(gstAmt)}</span></div>
+                              <div className="flex justify-between"><span className="text-muted-foreground">Subtotal (excl. GST){extraPreGst > 0 ? " — incl. charges" : ""}</span><span className="font-medium">₹{fmt(subtotalExclGst)}</span></div>
+                              {extraPreGst > 0 && <div className="flex justify-between text-[11px]"><span className="text-muted-foreground pl-2">of which extra charges</span><span className="text-muted-foreground">₹{fmt(extraPreGst)}</span></div>}
+                              <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-medium text-amber-700">₹{fmt(gstAll)}</span></div>
                               {freightPacking > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Freight + Packing</span><span className="font-medium">₹{fmt(freightPacking)}</span></div>}
-                              {extraTotal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Extra Charges</span><span className="font-medium">₹{fmt(extraTotal)}</span></div>}
                               <div className="flex justify-between items-center border-t border-border pt-2 mt-1">
                                 <span className="font-semibold">Grand Total (landed)</span>
                                 <span className="text-base font-bold text-primary">₹{fmt(autoGrand)}</span>
                               </div>
                             </div>
                             <p className="text-[10px] text-muted-foreground">
-                              Auto-calculated from line items + extra charges.
+                              Extra charges are added to the subtotal and taxed with everything else (GST at the end), matching the vendor's quotation.
                             </p>
                           </div>
                         );

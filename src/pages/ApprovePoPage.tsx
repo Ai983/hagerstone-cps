@@ -247,7 +247,7 @@ export default function ApprovePoPage() {
           .select("po_number,created_at,ship_to_address,project_code,payment_terms,delivery_date,total_value,gst_amount,grand_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,advance_payments,advance_paid_total,version,revision_reason,supplier_id")
           .eq("id", poId).single(),
         supabase.from("cps_po_line_items")
-          .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code,sort_order")
+          .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code,sort_order,is_charge")
           .eq("po_id", poId).order("sort_order"),
       ]);
       if (!poFull) return;
@@ -308,6 +308,7 @@ export default function ApprovePoPage() {
           total_value: Number(li.total_value ?? 0),
           hsn_code: li.hsn_code,
           brand: li.brand,
+          is_charge: li.is_charge ?? false,
         })),
       });
       const pdf_base64 = await blobToBase64(blob);

@@ -16,6 +16,10 @@ export interface PoPdfLineItem {
   /* Optional brand / make — when present, appended to the description in the
      rendered table so the founder sees which make is being procured. */
   brand?: string | null;
+  /* True for extra-charge rows (installation, loading, freight, …). These are
+     excluded from the numbered goods table and instead rendered as named rows
+     in the totals box (pre-GST), matching the vendor's own quotation layout. */
+  is_charge?: boolean | null;
 }
 
 export interface PoPdfData {
@@ -483,7 +487,12 @@ export function buildPoPdf(data: PoPdfData): Blob {
   const taxHead = isIntraState ? ["SGST%", "CGST%"] : ["IGST%"];
   const tableHead = [...baseHead, ...taxHead];
 
-  const tableBody = data.lineItems.map((li, i) => {
+  // Split extra charges out of the goods table — they render in the totals box
+  // (pre-GST, like the vendor's quotation) instead of as numbered line items.
+  const goodsItems = data.lineItems.filter((li) => !li.is_charge);
+  const chargeItems = data.lineItems.filter((li) => li.is_charge);
+
+  const tableBody = goodsItems.map((li, i) => {
     // Append brand / make to description so the founder sees which make is
     // being procured (e.g. "TMT Bars (16mm) — WELSPUN"). Skip if the brand
     // is already mentioned in the description to avoid double-printing.
@@ -611,8 +620,24 @@ export function buildPoPdf(data: PoPdfData): Blob {
     return n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
-  drawTotalRow("Total", fmtPlain(data.subTotal));
-  drawTotalRow("Freight / Loading", "");
+  // Goods subtotal (excl GST). Derived from the goods rows so it always matches
+  // the table above, independent of what the caller passed as subTotal.
+  const goodsSubtotal = goodsItems.reduce((s, li) => s + (Number(li.total_value) || 0), 0);
+  const chargesSum = chargeItems.reduce((s, li) => s + (Number(li.total_value) || 0), 0);
+
+  drawTotalRow("Total", fmtPlain(goodsSubtotal));
+  if (chargeItems.length > 0) {
+    // Extra charges listed individually (pre-GST), then a taxable-value subtotal —
+    // mirrors the vendor quotation's "Total Amount Without GST" line.
+    for (const c of chargeItems) {
+      const label = (c.description ?? "Charge").trim();
+      const shortLabel = label.length > 30 ? label.slice(0, 29) + "…" : label;
+      drawTotalRow(shortLabel, fmtPlain(Number(c.total_value) || 0));
+    }
+    drawTotalRow("Taxable Value", fmtPlain(goodsSubtotal + chargesSum));
+  } else {
+    drawTotalRow("Freight / Loading", "");
+  }
   if (isIntraState) {
     // Intra-state: tax split as CGST + SGST
     drawTotalRow("CGST", fmtPlain(data.gstAmount / 2));

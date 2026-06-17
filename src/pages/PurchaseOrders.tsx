@@ -321,6 +321,7 @@ type CreateLine = {
   gst_percent: number;
   gst_amount: number;
   total_value: number;
+  is_charge?: boolean;
 };
 
 /**
@@ -344,7 +345,7 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
     (po as any).pr_id
       ? supabase.from("cps_purchase_requisitions").select("pr_number,project_code,project_site").eq("id", (po as any).pr_id).maybeSingle()
       : Promise.resolve({ data: null } as any),
-    supabase.from("cps_po_line_items").select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code,sort_order").eq("po_id", poId).order("sort_order"),
+    supabase.from("cps_po_line_items").select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code,sort_order,is_charge").eq("po_id", poId).order("sort_order"),
     (po as any).created_by
       ? supabase.from("cps_users").select("name,email").eq("id", (po as any).created_by).maybeSingle()
       : Promise.resolve({ data: null } as any),
@@ -421,6 +422,7 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
       total_value: Number(li.total_value ?? 0),
       hsn_code: li.hsn_code,
       brand: li.brand,
+      is_charge: (li as { is_charge?: boolean | null }).is_charge ?? false,
     })),
   });
 };
@@ -1028,6 +1030,7 @@ export default function PurchaseOrders() {
           unit: "lot",
           rate: amount,
           gst_percent: charge?.taxable ? 18 : 0,
+          is_charge: true,
         };
         newLines.push(computeLineTotals(baseLine) as CreateLine);
       });
@@ -1196,6 +1199,7 @@ export default function PurchaseOrders() {
         balance_quantity: li.quantity,
         hsn_code: li.hsn_code || null,
         sort_order: li.sort_order,
+        is_charge: li.is_charge ?? false,
       }));
 
       const { error: insLinesErr } = await supabase.from("cps_po_line_items").insert(poLinesPayload);
@@ -1930,7 +1934,7 @@ export default function PurchaseOrders() {
         // "Revise PO" in that window produced an empty revision — confirmed in prod.)
         const { data: freshLineItems, error: liFetchErr } = await supabase
           .from("cps_po_line_items")
-          .select("description, brand, quantity, unit, rate, gst_percent, gst_amount, total_value, hsn_code, sort_order")
+          .select("description, brand, quantity, unit, rate, gst_percent, gst_amount, total_value, hsn_code, sort_order, is_charge")
           .eq("po_id", viewPo.id)
           .order("sort_order", { ascending: true });
         if (liFetchErr) throw liFetchErr;
@@ -1947,6 +1951,7 @@ export default function PurchaseOrders() {
           total_value: li.total_value,
           hsn_code: li.hsn_code,
           sort_order: li.sort_order,
+          is_charge: li.is_charge ?? false,
         }));
         if (clonedItems.length > 0) {
           const { error: lineErr } = await supabase.from("cps_po_line_items").insert(clonedItems);

@@ -453,6 +453,7 @@ export default function ComparisonSheetPage() {
           total_value: lineTotal,
           hsn_code: li.hsn_code ?? null,
           brand: li.brand ?? null,
+          is_charge: false,
         };
       });
 
@@ -475,6 +476,7 @@ export default function ComparisonSheetPage() {
           total_value: amount,
           hsn_code: null,
           brand: null,
+          is_charge: true,
         });
       });
 
@@ -2055,7 +2057,10 @@ export default function ComparisonSheetPage() {
         supplier_name: t.sup.name,
         quote_id: quote?.id ?? null,
         blind_quote_ref: quote?.id ? blindRefByQuoteId[quote.id] ?? null : null,
-        subtotal: Number(t.subtotal) || 0,
+        // Persist materials-only subtotal (t.subtotal now bundles extras pre-GST).
+        // On hydrate this is reloaded as total_quoted_value and the display re-adds
+        // extras from extras_breakdown — storing the bundled value would double-count.
+        subtotal: Math.max(0, (Number(t.subtotal) || 0) - (Number(t.extraSum) || 0)),
         gst_amount: Number(t.gst) || 0,
         freight_amount: Number(t.freight) || 0,
         extras_amount: Number(t.extraSum) || 0,
@@ -2180,7 +2185,10 @@ export default function ComparisonSheetPage() {
       const lineSubtotal = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
       const lineGst = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
       const freight = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
-      const extraSum = charges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
+      // Vendor-format: extra charges join the subtotal PRE-GST and are taxed with
+      // everything else (one GST figure at the end), not added post-GST.
+      const extraPreGst = charges.reduce((s, c) => s + c.amount, 0);
+      const extraGst = charges.reduce((s, c) => s + c.amount * (c.taxable ? 0.18 : 0), 0);
       const quote = quoteBySupplierId[sup.id];
       const headerSubtotal = Number(quote?.total_quoted_value ?? 0);
       const headerLanded = Number(quote?.total_landed_value ?? 0);
@@ -2188,14 +2196,15 @@ export default function ComparisonSheetPage() {
       // charges) and, for legacy/captured quotes, carry the real document total
       // even when line items are partial. Recomputing from possibly-incomplete
       // lines would understate those. Derive GST as the residual.
-      const subtotal = headerSubtotal > 0 ? headerSubtotal : lineSubtotal;
+      const subtotal = (headerSubtotal > 0 ? headerSubtotal : lineSubtotal) + extraPreGst;
+      const extraSum = extraPreGst;
       let landedTotal: number; let gst: number;
       if (headerLanded > 0) {
         landedTotal = headerLanded;
-        gst = Math.max(0, landedTotal - subtotal - freight - extraSum);
+        gst = Math.max(0, landedTotal - subtotal - freight);
       } else {
-        gst = lineGst;
-        landedTotal = subtotal + gst + freight + extraSum;
+        gst = lineGst + extraGst;
+        landedTotal = subtotal + gst + freight;
       }
       return {
         sup, subtotal, gst, freight, extraSum, landedTotal,
@@ -2335,7 +2344,7 @@ export default function ComparisonSheetPage() {
 
     rows.push(["Subtotal (excl GST)", "", ...supplierTotals.map((t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—"), "", "", "", "", ""]);
     rows.push(["GST", "", ...supplierTotals.map((t) => t.gst > 0 ? fmtINR(t.gst) : "—"), "", "", "", "", ""]);
-    rows.push(["Freight / Extras", "", ...supplierTotals.map((t) => (t.freight + t.extraSum) > 0 ? fmtINR(t.freight + t.extraSum) : "—"), "", "", "", "", ""]);
+    rows.push(["Freight", "", ...supplierTotals.map((t) => t.freight > 0 ? fmtINR(t.freight) : "—"), "", "", "", "", ""]);
     rows.push([
       "LANDED TOTAL", "",
       ...supplierTotals.map((t) => {
@@ -2550,7 +2559,7 @@ export default function ComparisonSheetPage() {
 
     pushTotalsRow("Subtotal (excl GST)", "subtotal", (t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—");
     pushTotalsRow("GST", "gst", (t) => t.gst > 0 ? fmtINR(t.gst) : "—");
-    pushTotalsRow("Freight / Extras", "freight", (t) => (t.freight + t.extraSum) > 0 ? fmtINR(t.freight + t.extraSum) : "—");
+    pushTotalsRow("Freight", "freight", (t) => t.freight > 0 ? fmtINR(t.freight) : "—");
     pushTotalsRow("LANDED TOTAL", "landed", (t) => t.landedTotal > 0 ? fmtINR(t.landedTotal) : "—");
     pushTotalsRow("Payment Terms", "term", (t) => t.paymentTerms ?? "—");
     pushTotalsRow("Delivery", "term", (t) => t.deliveryTerms ?? "—");
@@ -2771,8 +2780,11 @@ export default function ComparisonSheetPage() {
           const subtotalFromLines = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
           const gstFromLines = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
           const freightFromLines = allLines.reduce((acc, li) => acc + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
-          const extraTotal = extras.reduce((acc, c) => acc + c.amount * (c.taxable ? 1.18 : 1), 0);
-          const landedFromLines = subtotalFromLines + gstFromLines + freightFromLines + extraTotal;
+          // Vendor-format (consistent with the displayed totals): extras join the
+          // subtotal pre-GST and are taxed with everything else; one GST at the end.
+          const extraPreGst = extras.reduce((acc, c) => acc + c.amount, 0);
+          const extraGst = extras.reduce((acc, c) => acc + c.amount * (c.taxable ? 0.18 : 0), 0);
+          const landedFromLines = subtotalFromLines + gstFromLines + freightFromLines + extraPreGst + extraGst;
 
           // Quote-header values were captured directly from the supplier's PDF at
           // upload time, so they are authoritative for landed/subtotal. Line-item
@@ -2781,16 +2793,16 @@ export default function ComparisonSheetPage() {
           const headerLanded = Number(quote?.total_landed_value ?? 0);
           const headerQuoted = Number(quote?.total_quoted_value ?? 0);
 
-          const subtotal = headerQuoted > 0 ? headerQuoted : subtotalFromLines;
+          const subtotal = (headerQuoted > 0 ? headerQuoted : subtotalFromLines) + extraPreGst;
           const freight = freightFromLines;
           let landed: number;
           let gst: number;
           if (headerLanded > 0) {
             landed = headerLanded;
-            gst = Math.max(0, landed - subtotal - freight - extraTotal);
+            gst = Math.max(0, landed - subtotal - freight);
           } else {
-            gst = gstFromLines;
-            landed = subtotal + gst + freight + extraTotal;
+            gst = gstFromLines + extraGst;
+            landed = subtotal + gst + freight;
           }
 
           return {
@@ -2812,7 +2824,7 @@ export default function ComparisonSheetPage() {
               subtotal_excl_gst: Number(subtotal.toFixed(2)),
               gst_amount: Number(gst.toFixed(2)),
               freight_total: Number(freight.toFixed(2)),
-              extra_charges_total: Number(extraTotal.toFixed(2)),
+              extra_charges_total: Number(extraPreGst.toFixed(2)),
               landed_total: Number(landed.toFixed(2)),
             },
             terms: {
@@ -3078,6 +3090,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           hsn_code:          li.hsn_code ?? null,
           total_value:       lineTotal,
           gst_amount:        lineGst,
+          is_charge:         false,
         };
       });
 
@@ -3105,6 +3118,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           hsn_code:          null,
           total_value:       amount,
           gst_amount:        gstAmt,
+          is_charge:         true,
         });
       });
 
@@ -3333,7 +3347,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           /* fetch line items for PDF table (totals already stored correctly in DB) */
           const { data: lineRes } = await supabase
             .from("cps_po_line_items")
-            .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code")
+            .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code,is_charge")
             .eq("po_id", poId);
           const calcLineItems = (lineRes ?? []) as any[];
 
@@ -3819,22 +3833,26 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           const lineSubtotal = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
           const lineGst = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0) * Number(li.gst_percent ?? 0) / 100, 0);
           const freight = lines.reduce((s, li) => s + Number(li.quantity ?? 0) * Number(li.freight ?? 0), 0);
-          const extraSum = charges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
+          // Vendor-format: extra charges join the subtotal PRE-GST and are taxed
+          // with everything else (one GST figure at the end), not added post-GST.
+          const extraPreGst = charges.reduce((s, c) => s + c.amount, 0);
+          const extraGst = charges.reduce((s, c) => s + c.amount * (c.taxable ? 0.18 : 0), 0);
           const quote = quoteBySupplierId[sup.id];
           const headerSubtotal = Number(quote?.total_quoted_value ?? 0);
           const headerLanded = Number(quote?.total_landed_value ?? 0);
           // Header totals are authoritative (set on save, incl. extras; legacy
           // quotes carry the real document total even with partial line items).
           // Derive GST as the residual rather than recomputing from lines.
-          const subtotal = headerSubtotal > 0 ? headerSubtotal : lineSubtotal;
+          const subtotal = (headerSubtotal > 0 ? headerSubtotal : lineSubtotal) + extraPreGst;
+          const extraSum = extraPreGst;
           let landedTotal: number;
           let gst: number;
           if (headerLanded > 0) {
             landedTotal = headerLanded;
-            gst = Math.max(0, landedTotal - subtotal - freight - extraSum);
+            gst = Math.max(0, landedTotal - subtotal - freight);
           } else {
-            gst = lineGst;
-            landedTotal = subtotal + gst + freight + extraSum;
+            gst = lineGst + extraGst;
+            landedTotal = subtotal + gst + freight;
           }
           return {
             sup,
@@ -4202,9 +4220,9 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                       <TableCell />
                     </TableRow>
                     <TableRow>
-                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Freight / Extras</TableCell>
+                      <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Freight</TableCell>
                       {supplierTotals.map((t) => {
-                        const v = t.freight + t.extraSum;
+                        const v = t.freight;
                         return <TableCell key={t.sup.id} className="text-right text-sm font-mono">{v > 0 ? `₹${v.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>;
                       })}
                       <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
