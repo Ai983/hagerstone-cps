@@ -480,6 +480,30 @@ export default function ComparisonSheetPage() {
         });
       });
 
+      // Reconcile to the vendor's authoritative quoted total (see createPO) so the
+      // founder preview matches the comparison sheet and the PO that gets created.
+      {
+        const headerLanded = Number(quote.total_landed_value ?? 0);
+        const builtLanded = calcLineItems.reduce((s, li) => s + li.total_value + (li.gst_amount ?? 0), 0);
+        const gapLanded = Math.round((headerLanded - builtLanded) * 100) / 100;
+        if (headerLanded > 0 && gapLanded > 1) {
+          const baseGap = Math.round((gapLanded / 1.18) * 100) / 100;
+          const gstGap = Math.round((gapLanded - baseGap) * 100) / 100;
+          calcLineItems.push({
+            description: "Charges as per quotation",
+            quantity: 1,
+            unit: "lot",
+            rate: baseGap,
+            gst_percent: 18,
+            gst_amount: gstGap,
+            total_value: baseGap,
+            hsn_code: null,
+            brand: null,
+            is_charge: true,
+          });
+        }
+      }
+
       // Inherit advance payments recorded during quote review — same logic
       // createPO uses, so the preview matches exactly.
       const advanceRows = Array.isArray((quoteFull as any)?.ai_parsed_data?.advance_payments)
@@ -3121,6 +3145,41 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           is_charge:         true,
         });
       });
+
+      // Reconcile to the vendor's authoritative quoted total. Legacy quotes can
+      // carry footer charges baked into the header total_landed_value that were
+      // never itemised as line items or extra charges. Without this, the PO
+      // (built line-by-line) under-bills and won't match the comparison sheet
+      // (which shows the header total). Add the un-itemised remainder as one
+      // taxable "Charges as per quotation" line so the PO grand total equals the
+      // quoted total. Going forward, the AI parser should capture footer charges
+      // directly, making this a no-op.
+      {
+        const headerLanded = Number(quote.total_landed_value ?? 0);
+        const builtLanded = poLineItemsToInsert.reduce((s, li) => s + li.total_value + li.gst_amount, 0);
+        const gapLanded = Math.round((headerLanded - builtLanded) * 100) / 100;
+        if (headerLanded > 0 && gapLanded > 1) {
+          const baseGap = Math.round((gapLanded / 1.18) * 100) / 100;
+          const gstGap = Math.round((gapLanded - baseGap) * 100) / 100;
+          poLineItemsToInsert.push({
+            pr_line_item_id:   null,
+            item_id:           null,
+            description:       "Charges as per quotation",
+            brand:             null,
+            quantity:          1,
+            unit:              "lot",
+            rate:              baseGap,
+            gst_percent:       18,
+            freight:           0,
+            packing:           0,
+            total_landed_rate: baseGap + gstGap,
+            hsn_code:          null,
+            total_value:       baseGap,
+            gst_amount:        gstGap,
+            is_charge:         true,
+          });
+        }
+      }
 
       const poSubTotal   = poLineItemsToInsert.reduce((s, li) => s + li.total_value, 0);
       const poGstTotal   = poLineItemsToInsert.reduce((s, li) => s + li.gst_amount, 0);
