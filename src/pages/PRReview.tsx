@@ -22,16 +22,30 @@ import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Se
 import { Checkbox } from "@/components/ui/checkbox";
 import { DESIGN_TEAM_HEAD, getProcurementSignature, isProcurementOnlySite, type SignatureEntry } from "@/config/verificationSignatures";
 
-// The verification declaration the PR assignee + Design Team Head must read & agree to.
-const VERIFY_DECLARATION =
-  "I have checked this requirement at site and confirm that the items, specifications and " +
-  "quantities listed above are correct and genuinely required for the said project. I take full " +
-  "responsibility for the accuracy of this requirement and for any excess, wastage or wrong ordering arising from it.";
+// ── Role-specific declarations + terms shown on the PR Verification Document ──
 
-const VERIFY_TERMS = [
-  "This requisition is treated as VERIFIED only after BOTH approvers below (PR Assignee and Design Team Head) read and agree to this document.",
-  "By agreeing, the signatories accept ownership of the quantities approved here — any excess, wastage or wrong procurement traceable to this requirement is accountable to them.",
-  "The Procurement (PR Assignee) confirms the quantities sent by the site have been checked against the project scope / BOQ before approval.",
+// Procurement (PR Assignee) section
+const PROCUREMENT_DECLARATION =
+  "I, as the Procurement (PR Assignee), confirm that the quantities listed have been checked against the " +
+  "project scope / BOQ, that the brands and specifications are correctly captured, and that this requirement " +
+  "is genuinely required for the said project. I take full responsibility for the procurement accuracy of this requirement.";
+
+const PROCUREMENT_TERMS = [
+  "The quantities sent by the site have been verified against the project scope / BOQ before approval.",
+  "Any excess, wastage or wrong procurement traceable to this requirement is accountable to procurement.",
+  "Rates and brands will be finalised fairly through the RFQ and comparison process; no vendor is pre-committed at this stage.",
+];
+
+// Design Team Head section
+const DESIGN_DECLARATION =
+  "I, as the Design Team Head, confirm that the items, specifications and finishes listed conform to the " +
+  "approved design and drawings, and are required for the said project. I take responsibility for the design " +
+  "correctness of this requirement.";
+
+const DESIGN_TERMS = [
+  "The items, specifications and finishes conform to the approved design / drawings.",
+  "Any design-related discrepancy in the items, specifications or finishes is accountable to the design team.",
+  "Any change to design intent after this approval must be re-verified before procurement proceeds.",
 ];
 
 // ---------- types ----------
@@ -1177,6 +1191,35 @@ export default function PRReview() {
                       </div>
                     );
 
+                    // A self-contained role section: heading + its own declaration + its
+                    // own terms + signature + agree checkbox.
+                    const renderRoleSection = (args: {
+                      heading: string; declaration: string; terms: string[];
+                      who: string; agreed: boolean; sig: SignatureEntry | null; agreedAt?: string | null;
+                      checked: boolean; onCheck: (v: boolean) => void; agreeLabel: React.ReactNode;
+                    }) => (
+                      <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2.5">
+                        <div className="text-[11px] font-bold uppercase tracking-wide text-primary">{args.heading}</div>
+                        <div className="rounded-md border border-primary/20 bg-primary/5 p-2.5">
+                          <div className="text-[10px] font-semibold text-primary mb-1">DECLARATION</div>
+                          <p className="text-xs text-foreground/90">{args.declaration}</p>
+                        </div>
+                        <div>
+                          <div className="text-[10px] font-semibold text-muted-foreground mb-1">TERMS &amp; CONDITIONS</div>
+                          <ol className="list-decimal pl-5 space-y-1 text-[11px] text-muted-foreground">
+                            {args.terms.map((t, i) => <li key={i}>{t}</li>)}
+                          </ol>
+                        </div>
+                        {renderSig({ title: "Signature", who: args.who, agreed: args.agreed, sig: args.sig, agreedAt: args.agreedAt })}
+                        {!verificationDone && (
+                          <label className="flex items-start gap-2 cursor-pointer text-xs">
+                            <Checkbox checked={args.checked} onCheckedChange={(v) => args.onCheck(v === true)} className="mt-0.5" />
+                            <span>{args.agreeLabel}</span>
+                          </label>
+                        )}
+                      </div>
+                    );
+
                     return (
                       <div className="mt-5 rounded-lg border border-amber-300 bg-amber-50/60 p-4 space-y-3">
                         <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1208,36 +1251,35 @@ export default function PRReview() {
                               <div className="text-[11px] text-muted-foreground">{editPr?.pr_number} · {editPr?.project_site}</div>
                             </div>
 
-                            <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
-                              <div className="text-[11px] font-semibold text-primary mb-1">DECLARATION</div>
-                              <p className="text-xs text-foreground/90">{VERIFY_DECLARATION}</p>
-                            </div>
+                            <p className="text-[11px] text-muted-foreground text-center">
+                              Each team below has its own declaration and terms — read and agree to your section.
+                            </p>
 
-                            <ol className="list-decimal pl-5 space-y-1 text-[11px] text-muted-foreground">
-                              {VERIFY_TERMS.map((t, i) => <li key={i}>{t}</li>)}
-                            </ol>
-
-                            <div className={`grid grid-cols-1 gap-3 ${designRequired ? "sm:grid-cols-2" : ""}`}>
-                              <div className="space-y-2">
-                                {renderSig({ title: "Procurement — PR Assignee", who: assigneeName, agreed: assigneeAgreed, sig: procSig, agreedAt: verifyRecord?.assignee?.agreed_at })}
-                                {!verificationDone && (
-                                  <label className="flex items-start gap-2 cursor-pointer text-xs">
-                                    <Checkbox checked={verifyAssigneeOk} onCheckedChange={(v) => setVerifyAssigneeOk(v === true)} className="mt-0.5" />
-                                    <span>I, <strong>{assigneeName}</strong>, have read and agree to this document.</span>
-                                  </label>
-                                )}
-                              </div>
-                              {designRequired && (
-                                <div className="space-y-2">
-                                  {renderSig({ title: "Design Team Head", who: DESIGN_TEAM_HEAD.name, agreed: designAgreed, sig: designSig, agreedAt: verifyRecord?.design_head?.agreed_at })}
-                                  {!verificationDone && (
-                                    <label className="flex items-start gap-2 cursor-pointer text-xs">
-                                      <Checkbox checked={verifyDesignOk} onCheckedChange={(v) => setVerifyDesignOk(v === true)} className="mt-0.5" />
-                                      <span><strong>{DESIGN_TEAM_HEAD.name}</strong> has read and agrees to this document.</span>
-                                    </label>
-                                  )}
-                                </div>
-                              )}
+                            <div className={`grid grid-cols-1 gap-3 ${designRequired ? "lg:grid-cols-2" : ""}`}>
+                              {renderRoleSection({
+                                heading: "Procurement — PR Assignee",
+                                declaration: PROCUREMENT_DECLARATION,
+                                terms: PROCUREMENT_TERMS,
+                                who: assigneeName,
+                                agreed: assigneeAgreed,
+                                sig: procSig,
+                                agreedAt: verifyRecord?.assignee?.agreed_at,
+                                checked: verifyAssigneeOk,
+                                onCheck: setVerifyAssigneeOk,
+                                agreeLabel: <>I, <strong>{assigneeName}</strong>, have read and agree to the Procurement declaration &amp; terms above.</>,
+                              })}
+                              {designRequired && renderRoleSection({
+                                heading: "Design Team Head",
+                                declaration: DESIGN_DECLARATION,
+                                terms: DESIGN_TERMS,
+                                who: DESIGN_TEAM_HEAD.name,
+                                agreed: designAgreed,
+                                sig: designSig,
+                                agreedAt: verifyRecord?.design_head?.agreed_at,
+                                checked: verifyDesignOk,
+                                onCheck: setVerifyDesignOk,
+                                agreeLabel: <><strong>{DESIGN_TEAM_HEAD.name}</strong> has read and agrees to the Design declaration &amp; terms above.</>,
+                              })}
                             </div>
 
                             {!verificationDone && (
