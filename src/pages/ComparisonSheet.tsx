@@ -453,12 +453,14 @@ export default function ComparisonSheetPage() {
           total_value: lineTotal,
           hsn_code: li.hsn_code ?? null,
           brand: li.brand ?? null,
-          is_charge: false,
+          is_charge: !!li.is_charge,
         };
       });
 
-      // Append extra charges (Installation, Transportation, etc.) from the quote.
-      const extraCharges = Array.isArray((quoteFull as any)?.ai_parsed_data?.extra_charges)
+      // Charges are is_charge line items now (already mapped above). Fall back to
+      // ai_parsed_data.extra_charges only for legacy quotes with no charge lines.
+      const hasChargeLines = (quoteLineItems ?? []).some((li: any) => li.is_charge);
+      const extraCharges = !hasChargeLines && Array.isArray((quoteFull as any)?.ai_parsed_data?.extra_charges)
         ? (quoteFull as any).ai_parsed_data.extra_charges
         : [];
       extraCharges.forEach((charge: any) => {
@@ -1096,7 +1098,8 @@ export default function ComparisonSheetPage() {
         .from("cps_quotes")
         .select("id,rfq_id,supplier_id,parse_status,total_quoted_value,total_landed_value,commercial_score,compliance_status,payment_terms,delivery_terms,warranty_months,validity_days,raw_file_path,raw_file_type,legacy_file_url,channel,is_legacy")
         .eq("rfq_id", rfqId)
-        .neq("channel", "po_revision");
+        .neq("channel", "po_revision")
+        .is("superseded_at", null);
       if (quotesErr) throw quotesErr;
 
       const quotes = (quotesRows ?? []) as QuoteRow[];
@@ -1133,6 +1136,7 @@ export default function ComparisonSheetPage() {
             .from("cps_quote_line_items")
             .select("id,quote_id,pr_line_item_id,item_id,original_description,brand,quantity,unit,rate,gst_percent,freight,packing,total_landed_rate,lead_time_days,hsn_code,confidence_score,human_corrected,correction_log")
             .in("quote_id", approvedQuoteIds)
+            .eq("is_charge", false) // goods only — charges shown via the extras breakdown, not as PR-line rates
         : { data: [], error: null };
       if (liErr) throw liErr;
 
@@ -1501,7 +1505,7 @@ export default function ComparisonSheetPage() {
         });
       }
 
-      const { data: quotes, error: qErr } = await supabase.from("cps_quotes").select("id").eq("rfq_id", rfqId).neq("channel", "po_revision");
+      const { data: quotes, error: qErr } = await supabase.from("cps_quotes").select("id").eq("rfq_id", rfqId).neq("channel", "po_revision").is("superseded_at", null);
       if (qErr) throw qErr;
       const total = (quotes ?? []).length;
 
@@ -3145,12 +3149,16 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           hsn_code:          li.hsn_code ?? null,
           total_value:       lineTotal,
           gst_amount:        lineGst,
-          is_charge:         false,
+          is_charge:         !!li.is_charge,
         };
       });
 
-      // Append extra charges (Installation, Transportation, etc.) added during quote review
-      const extraCharges = Array.isArray((quoteFull as any)?.ai_parsed_data?.extra_charges)
+      // Charges (Installation, Freight, discounts) are is_charge LINE ITEMS now, so
+      // they are already in poLineItemsToInsert above. Only fall back to the older
+      // ai_parsed_data.extra_charges for legacy quotes that have no charge lines —
+      // otherwise the charge would be counted twice.
+      const hasChargeLines = dedupedQuoteLineItems.some((li: any) => li.is_charge);
+      const extraCharges = !hasChargeLines && Array.isArray((quoteFull as any)?.ai_parsed_data?.extra_charges)
         ? (quoteFull as any).ai_parsed_data.extra_charges
         : [];
       extraCharges.forEach((charge: any) => {
@@ -4836,13 +4844,25 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               </div>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex-wrap gap-2">
             <Button variant="outline" onClick={() => setPoPreviewOpen(false)}>
               Close Preview
             </Button>
             {poPreviewUrl && (
               <Button variant="outline" onClick={() => window.open(poPreviewUrl, "_blank")}>
                 Open in new tab
+              </Button>
+            )}
+            {/* Found an issue while reviewing the PO? Send the comparison back to
+                In-Review to fix/add a quote, then re-review. Only meaningful before
+                it is frozen (sent to founder). */}
+            {canApprove && sheet && !sheet.is_locked && sheet.manual_review_status === "reviewed" && (
+              <Button
+                variant="outline"
+                className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                onClick={() => { setPoPreviewOpen(false); setRejectReason(""); setRejectDialogOpen(true); }}
+              >
+                Found an issue? Send back to In-Review
               </Button>
             )}
           </DialogFooter>

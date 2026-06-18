@@ -720,7 +720,8 @@ export default function PurchaseOrders() {
       const { data: approvedQuotes, error: aqErr } = await supabase
         .from("cps_quotes")
         .select("rfq_id")
-        .eq("parse_status", "approved");
+        .eq("parse_status", "approved")
+        .is("superseded_at", null);
       if (aqErr) throw aqErr;
 
       const quoteRfqIds = (approvedQuotes ?? []).map((q: any) => String(q.rfq_id)).filter(Boolean);
@@ -884,6 +885,7 @@ export default function PurchaseOrders() {
           .select("supplier_id")
           .eq("rfq_id", rfqId)
           .eq("parse_status", "approved")
+          .is("superseded_at", null)
           .order("received_at", { ascending: false })
           .limit(1);
 
@@ -902,7 +904,8 @@ export default function PurchaseOrders() {
       const { data: allQuotes } = await supabase
         .from("cps_quotes")
         .select("supplier_id")
-        .eq("rfq_id", rfqId);
+        .eq("rfq_id", rfqId)
+        .is("superseded_at", null);
       const uniqueSupplierCount = new Set((allQuotes ?? []).map((q: any) => q.supplier_id)).size;
       setIsSingleVendor(!sheetRow || uniqueSupplierCount < 2);
 
@@ -950,6 +953,7 @@ export default function PurchaseOrders() {
         .select("id,received_at,ai_parsed_data")
         .eq("rfq_id", rfqId)
         .eq("supplier_id", recSupplierId)
+        .is("superseded_at", null)
         .order("received_at", { ascending: false });
       if (qErr) throw qErr;
 

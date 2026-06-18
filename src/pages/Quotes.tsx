@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { headerTotalsFromLines, extraChargeToLineRow } from "@/lib/quoteTotals";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -223,7 +224,7 @@ const buildCorrectionEntries = (oldRow: QuoteLineItem, next: Partial<QuoteLineIt
 };
 
 export default function Quotes() {
-  const { user, canViewPrices, canCreateRFQ } = useAuth();
+  const { user, canViewPrices, canCreateRFQ, isProcurementHead } = useAuth();
   const isProcurementTeam = canCreateRFQ; // procurement_executive / procurement_head / it_head
 
   const [loading, setLoading] = useState(true);
@@ -374,6 +375,7 @@ export default function Quotes() {
       const { data, error } = await supabase
         .from("cps_quotes")
         .select("id, blind_quote_ref, rfq_id, quote_number, received_at, channel, parse_status, parse_confidence, compliance_status, payment_terms, delivery_terms, warranty_months, validity_days, total_quoted_value, total_landed_value, commercial_score, submitted_by_human, reviewed_at, supplier_id, ai_parse_confidence, freight_terms, reviewed_by, raw_file_path, missing_fields, ai_summary, ai_parsed_data, is_legacy, legacy_vendor_name, is_site_submitted")
+        .is("superseded_at", null)
         .order("received_at", { ascending: false });
       if (error) throw error;
 
@@ -750,62 +752,114 @@ export default function Quotes() {
     return null;
   };
 
+  // Comparison-aware gate for adding / approving / deleting a quote.
+  // Returns true if the caller may proceed (possibly after auto-reverting an
+  // already-reviewed comparison back to In-Review), false if it must stop.
+  // Cutoff rule: quotes can change freely until the comparison is "reviewed";
+  // once reviewed a Procurement Head may still change them, but doing so reopens
+  // the review; once sent_for_approval / locked / a live PO exists → hard block.
+  const applyQuoteChangeGate = async (rfqId: string): Promise<boolean> => {
+    // 1) Hard block — a live PO already exists for this RFQ.
+    const poMsg = await getRfqLockMessage(rfqId);
+    if (poMsg) { toast.error(poMsg); return false; }
+
+    // 2) Comparison sheet state (latest sheet for this RFQ).
+    const { data: cs } = await supabase
+      .from("cps_comparison_sheets")
+      .select("id,manual_review_status,is_locked")
+      .eq("rfq_id", rfqId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!cs) return true; // no comparison yet → free to change
+
+    const status = (cs as { manual_review_status?: string }).manual_review_status ?? "";
+    const locked = Boolean((cs as { is_locked?: boolean }).is_locked);
+    const sheetId = (cs as { id: string }).id;
+
+    if (locked || status === "sent_for_approval") {
+      toast.error("Locked — this comparison has been sent to the founder. Reopen or cancel it before changing quotes.");
+      return false;
+    }
+
+    if (status === "reviewed") {
+      if (!isProcurementHead) {
+        toast.error("This comparison is already Reviewed — only a Procurement Head can change quotes now (it reopens the review).");
+        return false;
+      }
+      const ok = window.confirm(
+        "This comparison is already REVIEWED. Adding / deleting a quote will send it back to In-Review and clear the selected supplier — you'll need to review again.\n\nContinue?",
+      );
+      if (!ok) return false;
+      const { error } = await supabase
+        .from("cps_comparison_sheets")
+        .update({
+          manual_review_status: "in_review",
+          reviewer_recommendation: null,
+          reviewer_recommendation_reason: null,
+          above_market_justification: null,
+          above_market_justified_by: null,
+          above_market_justified_at: null,
+        })
+        .eq("id", sheetId);
+      if (error) { toast.error("Failed to reopen the comparison sheet"); return false; }
+      await supabase.from("cps_audit_log").insert({
+        user_id: user?.id, user_name: user?.name, user_role: user?.role,
+        action_type: "COMPARISON_REVERTED_TO_REVIEW",
+        entity_type: "cps_comparison_sheets", entity_id: sheetId, entity_number: null,
+        description: "Comparison reverted to In-Review — a quote was added/deleted after review; selection cleared, re-review required.",
+        severity: "warning", logged_at: new Date().toISOString(),
+      }).then(() => {}, () => {});
+      toast.message("Comparison reopened to In-Review — please review again after this change.");
+    }
+    return true;
+  };
+
   const deleteQuote = async () => {
     if (!user || !reviewQuote) return;
     if (!isProcurementTeam) { toast.error("Only procurement team can delete quotes"); return; }
+    if (reviewQuote.parse_status === "approved" && !isProcurementHead) {
+      toast.error("Only a Procurement Head can delete an approved quote.");
+      return;
+    }
 
-    // 1. Check RFQ status — block only when RFQ is closed normally (likely has a PO downstream).
-    // Cancelled RFQs are explicitly killed, so their quotes are safe to clean up.
+    // RFQ closed → block (it is finished, likely has a PO downstream).
     const { data: rfqRow } = await supabase
       .from("cps_rfqs")
       .select("status")
       .eq("id", reviewQuote.rfq_id)
       .maybeSingle();
-    const rfqStatus = (rfqRow as { status?: string } | null)?.status ?? "";
-    if (rfqStatus === "closed") {
+    if (((rfqRow as { status?: string } | null)?.status ?? "") === "closed") {
       toast.error("Cannot delete — RFQ is already closed");
       return;
     }
 
-    // 2. Check if any PO exists based on this quote's RFQ
-    const { data: poRow } = await supabase
-      .from("cps_purchase_orders")
-      .select("id,po_number,status")
-      .eq("rfq_id", reviewQuote.rfq_id)
-      .maybeSingle();
-    if (poRow) {
-      const poStatus = (poRow as { status?: string })?.status ?? "";
-      // Block delete if a real PO exists (anything beyond draft is locked; even drafts are risky)
-      if (!["cancelled", "rejected"].includes(poStatus)) {
-        toast.error(`Cannot delete — PO ${(poRow as any).po_number} has already been created for this RFQ (${poStatus})`);
-        return;
-      }
-    }
+    // Comparison-aware gate: hard-blocks if a live PO exists; if the comparison is
+    // already reviewed, a Procurement Head can proceed and it reopens to In-Review.
+    if (!(await applyQuoteChangeGate(reviewQuote.rfq_id))) return;
 
     const confirmed = window.confirm(
-      `Delete quote ${reviewQuote.blind_quote_ref}? This will permanently remove the quote, its line items, and the uploaded file. This action cannot be undone.`
+      `Remove quote ${reviewQuote.blind_quote_ref}? It will be marked SUPERSEDED — excluded from the comparison and PO, but kept for the audit trail. You can add a corrected quote afterwards.`
     );
     if (!confirmed) return;
 
     setSavingReview(true);
     try {
-      // 3. Delete the stored file (best effort, non-blocking)
-      if (reviewQuote.raw_file_path) {
-        await supabase.storage.from("cps-quotes").remove([reviewQuote.raw_file_path]);
-      }
+      // Soft-delete: mark superseded. The quote row, its line items and the file are
+      // RETAINED for audit; everything downstream filters out superseded quotes.
+      const { error: supErr } = await supabase
+        .from("cps_quotes")
+        .update({ superseded_at: new Date().toISOString(), superseded_by: user.id })
+        .eq("id", reviewQuote.id);
+      if (supErr) throw supErr;
 
-      // 4. Delete line items
-      await supabase.from("cps_quote_line_items").delete().eq("quote_id", reviewQuote.id);
-
-      // 5. Release the upload token (RESTRICT FK -> blocks the quote delete otherwise).
-      //    Reopening it (quote_id + used_at null) also lets the vendor resubmit via
-      //    the same link if it hasn't expired.
+      // Release the upload token so the vendor can resubmit via the same link.
       await supabase
         .from("cps_quote_upload_tokens")
         .update({ quote_id: null, used_at: null })
         .eq("quote_id", reviewQuote.id);
 
-      // 6. Reset response_status on rfq_suppliers so they can submit another
+      // Reset response_status on rfq_suppliers so they can submit another.
       if (reviewQuote.supplier_id) {
         await supabase
           .from("cps_rfq_suppliers")
@@ -813,10 +867,6 @@ export default function Quotes() {
           .eq("rfq_id", reviewQuote.rfq_id)
           .eq("supplier_id", reviewQuote.supplier_id);
       }
-
-      // 7. Delete the quote itself
-      const { error: delErr } = await supabase.from("cps_quotes").delete().eq("id", reviewQuote.id);
-      if (delErr) throw delErr;
 
       // 8. Roll back the RFQ's status if it no longer has enough approved quotes.
       //    The RFQ is auto-promoted to "comparison_ready" at >= 3 approved quotes;
@@ -826,7 +876,8 @@ export default function Quotes() {
         .from("cps_quotes")
         .select("id", { count: "exact", head: true })
         .eq("rfq_id", reviewQuote.rfq_id)
-        .eq("parse_status", "approved");
+        .eq("parse_status", "approved")
+        .is("superseded_at", null);
       if ((approvedAfterDelete ?? 0) < 3) {
         await supabase
           .from("cps_rfqs")
@@ -840,16 +891,16 @@ export default function Quotes() {
         user_id: user.id,
         user_name: user.name,
         user_role: user.role,
-        action_type: "QUOTE_DELETED",
+        action_type: "QUOTE_SUPERSEDED",
         entity_type: "quote",
         entity_id: reviewQuote.id,
         entity_number: reviewQuote.blind_quote_ref,
-        description: `Quote ${reviewQuote.blind_quote_ref} deleted by ${user.name} (vendor likely resubmitting updated quote).`,
+        description: `Quote ${reviewQuote.blind_quote_ref} superseded (soft-deleted) by ${user.name} — excluded from comparison/PO, retained for audit.`,
         severity: "warning",
         logged_at: new Date().toISOString(),
       });
 
-      toast.success(`Quote ${reviewQuote.blind_quote_ref} deleted — vendor can now resubmit`);
+      toast.success(`Quote ${reviewQuote.blind_quote_ref} removed — vendor can now resubmit`);
       setReviewOpen(false);
       await fetchQuotes();
     } catch (e: any) {
@@ -863,51 +914,19 @@ export default function Quotes() {
   // cps_quotes header. Call this after ANY line-item insert/update/delete so the
   // comparison sheet (which prefers header values) never shows stale numbers.
   const recomputeQuoteHeaderTotals = async (quoteId: string) => {
+    // Single source of truth: charges are real line items (is_charge), so the
+    // header is just the canonical sum of ALL the quote's lines — goods + charges.
+    // No separate extras folding (that would double-count).
     const { data: rows } = await supabase
       .from("cps_quote_line_items")
-      .select("quantity, rate, gst_percent, freight, packing, total_landed_rate")
+      .select("quantity, rate, gst_percent, freight, packing, is_charge")
       .eq("quote_id", quoteId);
-    const items = (rows ?? []) as Array<{
-      quantity: number | string | null;
-      rate: number | string | null;
-      gst_percent: number | string | null;
-      freight: number | string | null;
-      packing: number | string | null;
-      total_landed_rate: number | string | null;
-    }>;
-    const subtotal = items.reduce(
-      (s, li) => s + (Number(li.quantity) || 0) * (Number(li.rate) || 0),
-      0,
+    const { total_quoted_value, total_landed_value } = headerTotalsFromLines(
+      (rows ?? []) as Parameters<typeof headerTotalsFromLines>[0],
     );
-    const itemsLanded = items.reduce(
-      (s, li) => s + (Number(li.quantity) || 0) * (Number(li.total_landed_rate) || 0),
-      0,
-    );
-    // Extra charges are stored in ai_parsed_data.extra_charges, NOT as line
-    // items — they must be folded into the landed total here, otherwise the
-    // header drifts below the live modal/PO total (taxable extras get 18% GST,
-    // mirroring confirmAndSaveReview). Without this the Quotes list and the
-    // comparison sheet read a stale, extras-less landed value.
-    const { data: qRow } = await supabase
-      .from("cps_quotes")
-      .select("ai_parsed_data")
-      .eq("id", quoteId)
-      .maybeSingle();
-    const charges = ((qRow?.ai_parsed_data as any)?.extra_charges ?? []) as Array<{
-      amount: number | string | null;
-      taxable?: boolean | null;
-    }>;
-    const extraTotal = charges.reduce(
-      (s, c) => s + (Number(c.amount) || 0) * (c.taxable ? 1.18 : 1),
-      0,
-    );
-    const landed = itemsLanded + extraTotal;
     await supabase
       .from("cps_quotes")
-      .update({
-        total_quoted_value: Number(subtotal.toFixed(2)),
-        total_landed_value: Number(landed.toFixed(2)),
-      })
+      .update({ total_quoted_value, total_landed_value })
       .eq("id", quoteId);
   };
 
@@ -917,6 +936,10 @@ export default function Quotes() {
       return;
     }
     if (reviewQuote) {
+      if (reviewQuote.parse_status === "approved") {
+        toast.error("This quote is approved and locked. Delete it and add a corrected quote to make changes.");
+        return;
+      }
       const lockMsg = await getRfqLockMessage(reviewQuote.rfq_id);
       if (lockMsg) { toast.error(lockMsg); return; }
     }
@@ -1130,8 +1153,7 @@ Rules:
   const confirmAndSaveReview = async () => {
     if (!user || !reviewQuote || !aiResult) return;
 
-    const lockMsg = await getRfqLockMessage(reviewQuote.rfq_id);
-    if (lockMsg) { toast.error(lockMsg); return; }
+    if (!(await applyQuoteChangeGate(reviewQuote.rfq_id))) return;
 
     // Brand is mandatory on every line. If a quote line is matched to a PR
     // line and the brand differs from the PR's brand_make, a reason for the
@@ -1268,14 +1290,34 @@ Rules:
           confidence_score: aiResult.confidence,
           human_corrected: true,
           ai_suggested: true,
+          is_charge: false,
         };
       });
-      if (lineItems.length > 0) {
-        const { error: liErr } = await supabase.from("cps_quote_line_items").insert(lineItems);
+      // Materialize extra charges (Installation, Freight, discounts) as real
+      // is_charge line items so the quote / comparison / PO all reconcile to the
+      // SAME lines. They are kept in ai_parsed_data too, only for the review UI.
+      const chargeLines = cleanCharges
+        .map((c) => extraChargeToLineRow(c, reviewQuote.id))
+        .filter((r): r is NonNullable<typeof r> => r !== null);
+      const allLines = [...lineItems, ...chargeLines];
+      if (allLines.length > 0) {
+        const { error: liErr } = await supabase.from("cps_quote_line_items").insert(allLines);
         if (liErr) toast.error("Failed to insert line items");
       }
-      // Keep quote header totals in sync with the just-replaced line items.
+      // Keep quote header totals in sync with the just-replaced line items (incl charges).
       await recomputeQuoteHeaderTotals(reviewQuote.id);
+
+      // One active approved quote per supplier per RFQ: supersede any OTHER active
+      // approved quote from the same supplier (the corrected/newer one wins).
+      if (reviewQuote.supplier_id) {
+        await supabase.from("cps_quotes")
+          .update({ superseded_at: new Date().toISOString(), superseded_by: user.id })
+          .eq("rfq_id", reviewQuote.rfq_id)
+          .eq("supplier_id", reviewQuote.supplier_id)
+          .eq("parse_status", "approved")
+          .is("superseded_at", null)
+          .neq("id", reviewQuote.id);
+      }
 
       if (reviewQuote.supplier_id) {
         await supabase.from("cps_rfq_suppliers")
@@ -1319,8 +1361,7 @@ Rules:
   const approveManualQuote = async () => {
     if (!user || !reviewQuote) return;
 
-    const lockMsg = await getRfqLockMessage(reviewQuote.rfq_id);
-    if (lockMsg) { toast.error(lockMsg); return; }
+    if (!(await applyQuoteChangeGate(reviewQuote.rfq_id))) return;
 
     // Block approval when quote has no line items AND no header totals.
     // Otherwise downstream comparison sheet shows ₹0 for this supplier.
@@ -1550,8 +1591,7 @@ Rules:
     let resolvedSupplierId = logForm.supplierId;
 
     if (logForm.rfqId) {
-      const lockMsg = await getRfqLockMessage(logForm.rfqId);
-      if (lockMsg) { toast.error(lockMsg); return; }
+      if (!(await applyQuoteChangeGate(logForm.rfqId))) return;
     }
 
     // If new vendor mode: insert vendor first
@@ -2386,9 +2426,14 @@ Rules:
               {/* RIGHT PANEL — AI Parsing + Editable Data */}
               <div className="lg:w-[45%] flex flex-col overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-muted/30 shrink-0">
-                  <span className="text-sm font-semibold">AI Quote Analysis</span>
+                  <span className="text-sm font-semibold">
+                    AI Quote Analysis
+                    {reviewQuote?.parse_status === "approved" && (
+                      <span className="ml-2 text-[11px] font-medium text-green-700">🔒 Approved &amp; locked — delete &amp; re-add to change</span>
+                    )}
+                  </span>
                   <div className="flex gap-2">
-                    {fileUrl && (
+                    {fileUrl && reviewQuote?.parse_status !== "approved" && (
                       <Button
                         size="sm"
                         variant="outline"
