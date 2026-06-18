@@ -18,7 +18,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 
-import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search, CheckCircle2, SendHorizonal } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search, CheckCircle2, SendHorizonal, ShieldCheck, ShieldAlert, FileText } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DESIGN_TEAM_HEAD, getProcurementSignature, isProcurementOnlySite, type SignatureEntry } from "@/config/verificationSignatures";
+
+// The verification declaration the PR assignee + Design Team Head must read & agree to.
+const VERIFY_DECLARATION =
+  "I have checked this requirement at site and confirm that the items, specifications and " +
+  "quantities listed above are correct and genuinely required for the said project. I take full " +
+  "responsibility for the accuracy of this requirement and for any excess, wastage or wrong ordering arising from it.";
+
+const VERIFY_TERMS = [
+  "This requisition is treated as VERIFIED only after BOTH approvers below (PR Assignee and Design Team Head) read and agree to this document.",
+  "By agreeing, the signatories accept ownership of the quantities approved here — any excess, wastage or wrong procurement traceable to this requirement is accountable to them.",
+  "The Procurement (PR Assignee) confirms the quantities sent by the site have been checked against the project scope / BOQ before approval.",
+];
 
 // ---------- types ----------
 
@@ -38,6 +52,8 @@ type PR = {
   assigned_to_user_id: string | null;
   assigned_to_name: string | null;
   items_count: number;
+  approval_sheet_status: string | null;
+  approval_sheet_ai_result: any | null;
 };
 
 type LineItem = {
@@ -195,6 +211,17 @@ export default function PRReview() {
   const [rfqDeadline, setRfqDeadline] = useState("");
   const [creatingRfq, setCreatingRfq] = useState(false);
 
+  // ── Procurement verification (digital sign-off gate before RFQ) ──
+  const [verifyDocOpen, setVerifyDocOpen] = useState(false);
+  const [verifyAssigneeOk, setVerifyAssigneeOk] = useState(false);
+  const [verifyDesignOk, setVerifyDesignOk] = useState(false);
+  const [verifySaving, setVerifySaving] = useState(false);
+  const [prVerifyStatus, setPrVerifyStatus] = useState<string | null>(null);
+  const [verifyRecord, setVerifyRecord] = useState<any | null>(null);
+  const [assigneeEmail, setAssigneeEmail] = useState<string | null>(null);
+  // Gate passes once both approvers have read & agreed (status persisted as 'verified').
+  const verificationDone = prVerifyStatus === "verified";
+
   // ---------- fetch PRs ----------
 
   const fetchPRs = async () => {
@@ -202,7 +229,7 @@ export default function PRReview() {
     try {
       const { data, error } = await supabase
         .from("cps_purchase_requisitions")
-        .select("id,pr_number,project_site,project_code,required_by,notes,status,created_at,requested_by,assigned_to_user_id")
+        .select("id,pr_number,project_site,project_code,required_by,notes,status,created_at,requested_by,assigned_to_user_id,approval_sheet_status,approval_sheet_ai_result")
         .order("created_at", { ascending: false });
       if (error) throw error;
 
@@ -232,6 +259,8 @@ export default function PRReview() {
         requester_name: nameMap[r.requested_by] ?? "—",
         assigned_to_name: r.assigned_to_user_id ? (nameMap[r.assigned_to_user_id] ?? null) : null,
         items_count: countMap[r.id] ?? 0,
+        approval_sheet_status: r.approval_sheet_status ?? null,
+        approval_sheet_ai_result: r.approval_sheet_ai_result ?? null,
       })));
     } catch (e: any) {
       toast.error(e.message || "Failed to load PRs");
@@ -284,6 +313,17 @@ export default function PRReview() {
     setEditPr(pr);
     setEditOpen(true);
     setLoadingItems(true);
+    // Reset verification gate state from this PR
+    setVerifyDocOpen(false);
+    setVerifyAssigneeOk(false);
+    setVerifyDesignOk(false);
+    setPrVerifyStatus(pr.approval_sheet_status ?? null);
+    setVerifyRecord(pr.approval_sheet_ai_result ?? null);
+    setAssigneeEmail(null);
+    if (pr.assigned_to_user_id) {
+      supabase.from("cps_users").select("email").eq("id", pr.assigned_to_user_id).maybeSingle()
+        .then(({ data }) => setAssigneeEmail((data as any)?.email ?? null));
+    }
     // Pre-fill RFQ defaults
     setRfqTitle(`${pr.pr_number} — ${pr.project_site}`);
     const d = new Date(); d.setDate(d.getDate() + 3);
@@ -472,8 +512,67 @@ export default function PRReview() {
     }
   };
 
+  // ── Confirm sign-offs and mark the PR verified ──
+  const handleConfirmVerification = async () => {
+    if (!editPr || !user) return;
+    // M3M / MAX sites only need procurement acknowledgement; everywhere else the
+    // Design Team Head must agree too.
+    const designRequired = !isProcurementOnlySite(editPr.project_site, editPr.project_code);
+    if (!verifyAssigneeOk || (designRequired && !verifyDesignOk)) {
+      toast.error(designRequired
+        ? "Both the PR Assignee and the Design Team Head must read and agree first"
+        : "The PR Assignee must read and agree first");
+      return;
+    }
+    setVerifySaving(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const record = {
+        type: "procurement_verification",
+        assignee: { name: editPr.assigned_to_name ?? user.name, email: assigneeEmail, agreed_at: nowIso },
+        design_head: designRequired ? { name: DESIGN_TEAM_HEAD.name, agreed_at: nowIso } : null,
+        design_skipped_reason: designRequired ? null : "Procurement-only site (M3M/MAX)",
+        confirmed_by: user.id, confirmed_by_name: user.name, confirmed_at: nowIso,
+      };
+      const { error } = await supabase
+        .from("cps_purchase_requisitions")
+        .update({
+          approval_sheet_status: "verified",
+          approval_sheet_signed_off_by: user.id,
+          approval_sheet_uploaded_at: nowIso,
+          approval_sheet_ai_result: record,
+        })
+        .eq("id", editPr.id);
+      if (error) throw error;
+
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id, user_name: user.name, user_role: user.role,
+        action_type: "PR_PROCUREMENT_VERIFIED",
+        entity_type: "purchase_requisition", entity_id: editPr.id, entity_number: editPr.pr_number,
+        description: designRequired
+          ? `PR ${editPr.pr_number} verified — ${record.assignee.name} (PR Assignee) & ${DESIGN_TEAM_HEAD.name} (Design Team Head) read and agreed to the verification document.`
+          : `PR ${editPr.pr_number} verified — ${record.assignee.name} (PR Assignee) acknowledged. Design Team Head sign-off skipped (procurement-only site).`,
+        severity: "info", logged_at: nowIso,
+      });
+
+      setPrVerifyStatus("verified");
+      setVerifyRecord(record);
+      setVerifyDocOpen(false);
+      toast.success("Verification complete — you can now create the RFQ");
+      fetchPRs();
+    } catch (e: any) {
+      toast.error(e.message || "Verification failed");
+    } finally {
+      setVerifySaving(false);
+    }
+  };
+
   const handleApprove = async () => {
     if (!editPr) return;
+    if (!verificationDone) {
+      toast.error("Complete the procurement verification (both sign-offs) before approving");
+      return;
+    }
     // Save any pending line item changes first
     const toDelete = lineItems.filter((li) => li._deleted && li.id);
     const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
@@ -540,6 +639,10 @@ export default function PRReview() {
 
   const handleCreateRfq = async () => {
     if (!editPr || !user) return;
+    if (!verificationDone) {
+      toast.error("Complete the procurement verification (both sign-offs) before creating the RFQ");
+      return;
+    }
     if (!rfqTitle.trim()) { toast.error("RFQ title is required"); return; }
     if (!rfqDeadline) { toast.error("Deadline is required"); return; }
     const visibleCount = lineItems.filter((li) => !li._deleted).length;
@@ -1045,6 +1148,126 @@ export default function PRReview() {
                     Note: Requestor details, project code, required-by date and PR status are read-only.
                   </p>
 
+                  {/* ── Procurement Verification gate ── */}
+                  {(editPr?.status === "pending" || editPr?.status === "validated" || editPr?.status === "duplicate_flagged") && (() => {
+                    const procSig = getProcurementSignature(assigneeEmail);
+                    const designSig: SignatureEntry | null = DESIGN_TEAM_HEAD.signatureUrl
+                      ? { name: DESIGN_TEAM_HEAD.name, signatureUrl: DESIGN_TEAM_HEAD.signatureUrl }
+                      : null;
+                    // M3M / MAX sites: only procurement acknowledgement, no Design Head.
+                    const designRequired = !isProcurementOnlySite(editPr?.project_site, editPr?.project_code);
+                    const assigneeAgreed = verificationDone || verifyAssigneeOk;
+                    const designAgreed = verificationDone || verifyDesignOk;
+                    const assigneeName = editPr?.assigned_to_name ?? "PR Assignee";
+                    const fmtWhen = (iso?: string | null) =>
+                      iso ? new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+
+                    const renderSig = (args: { title: string; who: string; agreed: boolean; sig: SignatureEntry | null; agreedAt?: string | null }) => (
+                      <div className="rounded-md border border-border bg-background p-3 space-y-2">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{args.title}</div>
+                        <div className="text-sm font-medium">{args.sig?.name ?? args.who}</div>
+                        <div className="h-14 flex items-center justify-center rounded border border-dashed border-border/70 bg-muted/30">
+                          {args.agreed
+                            ? (args.sig?.signatureUrl
+                                ? <img src={args.sig.signatureUrl} alt="signature" className="max-h-12 object-contain" />
+                                : <span className="text-[11px] italic text-primary">✓ Agreed (signature image pending)</span>)
+                            : <span className="text-[11px] text-muted-foreground">Awaiting agreement</span>}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">{args.agreed ? `Agreed${args.agreedAt ? " · " + fmtWhen(args.agreedAt) : ""}` : "Not yet agreed"}</div>
+                      </div>
+                    );
+
+                    return (
+                      <div className="mt-5 rounded-lg border border-amber-300 bg-amber-50/60 p-4 space-y-3">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="text-sm font-semibold text-amber-900 flex items-center gap-2">
+                            <ShieldCheck className="h-4 w-4" /> Procurement Verification
+                          </div>
+                          {verificationDone
+                            ? <Badge className="bg-green-100 text-green-800 border-0 text-xs">✓ Verified</Badge>
+                            : <Badge className="bg-amber-200 text-amber-900 border-0 text-xs">Required before RFQ</Badge>}
+                        </div>
+
+                        {!verifyDocOpen && !verificationDone && (
+                          <>
+                            <p className="text-xs text-amber-900/80">
+                              {designRequired
+                                ? <>Before this PR can move to RFQ, the <strong>PR Assignee</strong> and the <strong>Design Team Head</strong> must open the verification document, read it, and both agree.</>
+                                : <>This is a <strong>procurement-only site (M3M / MAX)</strong> — only the <strong>PR Assignee</strong> needs to open the verification document, read it, and agree (no Design Team Head sign-off).</>}
+                            </p>
+                            <Button type="button" variant="outline" size="sm" onClick={() => setVerifyDocOpen(true)}>
+                              <FileText className="h-3.5 w-3.5 mr-1.5" /> Open Verification Document
+                            </Button>
+                          </>
+                        )}
+
+                        {(verifyDocOpen || verificationDone) && (
+                          <div className="rounded-lg border border-border bg-white p-4 space-y-3">
+                            <div className="text-center">
+                              <div className="text-sm font-bold text-foreground">PR Verification Document</div>
+                              <div className="text-[11px] text-muted-foreground">{editPr?.pr_number} · {editPr?.project_site}</div>
+                            </div>
+
+                            <div className="rounded-md border border-primary/30 bg-primary/5 p-3">
+                              <div className="text-[11px] font-semibold text-primary mb-1">DECLARATION</div>
+                              <p className="text-xs text-foreground/90">{VERIFY_DECLARATION}</p>
+                            </div>
+
+                            <ol className="list-decimal pl-5 space-y-1 text-[11px] text-muted-foreground">
+                              {VERIFY_TERMS.map((t, i) => <li key={i}>{t}</li>)}
+                            </ol>
+
+                            <div className={`grid grid-cols-1 gap-3 ${designRequired ? "sm:grid-cols-2" : ""}`}>
+                              <div className="space-y-2">
+                                {renderSig({ title: "Procurement — PR Assignee", who: assigneeName, agreed: assigneeAgreed, sig: procSig, agreedAt: verifyRecord?.assignee?.agreed_at })}
+                                {!verificationDone && (
+                                  <label className="flex items-start gap-2 cursor-pointer text-xs">
+                                    <Checkbox checked={verifyAssigneeOk} onCheckedChange={(v) => setVerifyAssigneeOk(v === true)} className="mt-0.5" />
+                                    <span>I, <strong>{assigneeName}</strong>, have read and agree to this document.</span>
+                                  </label>
+                                )}
+                              </div>
+                              {designRequired && (
+                                <div className="space-y-2">
+                                  {renderSig({ title: "Design Team Head", who: DESIGN_TEAM_HEAD.name, agreed: designAgreed, sig: designSig, agreedAt: verifyRecord?.design_head?.agreed_at })}
+                                  {!verificationDone && (
+                                    <label className="flex items-start gap-2 cursor-pointer text-xs">
+                                      <Checkbox checked={verifyDesignOk} onCheckedChange={(v) => setVerifyDesignOk(v === true)} className="mt-0.5" />
+                                      <span><strong>{DESIGN_TEAM_HEAD.name}</strong> has read and agrees to this document.</span>
+                                    </label>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {!verificationDone && (
+                              <div className="flex items-center gap-2 justify-end pt-1">
+                                <Button type="button" variant="ghost" size="sm" onClick={() => setVerifyDocOpen(false)} disabled={verifySaving}>Close</Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  className="bg-amber-700 hover:bg-amber-800 text-white"
+                                  onClick={handleConfirmVerification}
+                                  disabled={verifySaving || !verifyAssigneeOk || (designRequired && !verifyDesignOk)}
+                                >
+                                  {verifySaving ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving…</> : "Confirm & Proceed"}
+                                </Button>
+                              </div>
+                            )}
+
+                            {verificationDone && verifyRecord && (
+                              <p className="text-[11px] text-green-700 text-center">
+                                ✓ Verified by {verifyRecord?.assignee?.name} (PR Assignee)
+                                {verifyRecord?.design_head?.name ? ` & ${verifyRecord.design_head.name} (Design Team Head)` : " — procurement-only site (no Design Head sign-off)"}
+                                {verifyRecord?.confirmed_at ? ` on ${fmtWhen(verifyRecord.confirmed_at)}` : ""}.
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* ── Create RFQ panel ── */}
                   {(editPr?.status === "pending" || editPr?.status === "validated" || editPr?.status === "duplicate_flagged") && (
                     <div className="mt-5 rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
@@ -1072,10 +1295,15 @@ export default function PRReview() {
                       <p className="text-xs text-muted-foreground">
                         This will create a <strong>draft RFQ</strong> with all {lineItems.filter(li => !li._deleted).length} items. Go to the RFQ page to add suppliers and send.
                       </p>
+                      {!verificationDone && (
+                        <p className="text-xs font-medium text-amber-700 flex items-center gap-1.5">
+                          <ShieldAlert className="h-3.5 w-3.5" /> Complete the Procurement Verification above (both sign-offs) to unlock this.
+                        </p>
+                      )}
                       <Button
                         className="bg-primary hover:bg-primary/90 text-primary-foreground"
                         onClick={handleCreateRfq}
-                        disabled={creatingRfq || loadingItems}
+                        disabled={creatingRfq || loadingItems || !verificationDone}
                       >
                         {creatingRfq ? (
                           <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Creating RFQ…</>
