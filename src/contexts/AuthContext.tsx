@@ -1,7 +1,7 @@
 import React, { createContext, use, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "it_head" | "management" | "finance" | "site_receiver" | "auditor" | "accounts_team";
+export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "it_head" | "management" | "finance" | "site_receiver" | "auditor" | "accounts_team" | "design_team";
 
 export interface CpsUser {
   id: string; email: string; name: string; role: CpsRole;
@@ -17,6 +17,12 @@ interface AuthContextType {
   canIssueStock: boolean; canAdjustStock: boolean; canViewStock: boolean;
   isProcurementHead: boolean; isManagement: boolean;
   isEmployee: boolean;
+  /**
+   * Design Team Head — view-only across all procurement pages, plus the
+   * Design acknowledgement on the PR verification gate. Holds NO write
+   * permissions (cannot approve, create RFQ, manage suppliers, adjust stock).
+   */
+  isDesignTeam: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -119,17 +125,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       user, loading, signIn, signOut,
       canApprove: role === "procurement_head" || role === "it_head" || role === "management" || role === "procurement_executive",
       canCreateRFQ: role === "procurement_executive" || role === "procurement_head" || role === "it_head",
-      canViewAudit: role === "auditor" || role === "procurement_head" || role === "it_head" || role === "management" || role === "procurement_executive",
+      canViewAudit: role === "auditor" || role === "procurement_head" || role === "it_head" || role === "management" || role === "procurement_executive" || role === "design_team",
       canViewPrices: role !== "requestor" && role !== "site_receiver",
       canManageSuppliers: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
       // Stock permissions — anyone with a role can view. Issue is for site team (receiver/requestor) + procurement.
       // Adjust (corrections, opening stock, thresholds) is procurement-only.
       canViewStock: !!role,
-      canIssueStock: role === "site_receiver" || role === "requestor" || role === "procurement_executive" || role === "procurement_head" || role === "it_head",
-      canAdjustStock: role === "procurement_executive" || role === "procurement_head" || role === "it_head",
+      // design_team has a deliberate stock-write exception (otherwise view-only):
+      // she manages Site Stock + Stock Overview after reviewing sites.
+      canIssueStock: role === "site_receiver" || role === "requestor" || role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team",
+      canAdjustStock: role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team",
       isProcurementHead: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
       isManagement: role === "management",
       isEmployee: role === "requestor" || role === "site_receiver",
+      isDesignTeam: role === "design_team",
     }}>
       {children}
     </AuthContext.Provider>

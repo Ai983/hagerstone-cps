@@ -45,6 +45,8 @@ type PurchaseRequisition = {
   priority?: PRPriority | null;
   duplicate_of_pr_id?: string | null;
   duplicate_score?: number | null;
+  // Verification gate state: null/sent_back → with procurement; procurement_ack → with design; verified → both done.
+  approval_sheet_status?: string | null;
 };
 
 const priorityConfig: Record<PRPriority, { label: string; className: string }> = {
@@ -896,7 +898,7 @@ export default function PurchaseRequisitions() {
     setLoading(true);
     let prQuery = supabase
       .from("cps_purchase_requisitions")
-      .select("id, pr_number, project_site, project_code, requested_by, assigned_to_user_id, status, required_by, notes, created_at, priority, duplicate_of_pr_id, duplicate_score")
+      .select("id, pr_number, project_site, project_code, requested_by, assigned_to_user_id, status, required_by, notes, created_at, priority, duplicate_of_pr_id, duplicate_score, approval_sheet_status")
       .order("created_at", { ascending: false });
     const isRestrictedRole = user?.role === "requestor" || user?.role === "site_receiver";
     if (isRestrictedRole) prQuery = prQuery.eq("requested_by", user?.id ?? "");
@@ -1729,6 +1731,9 @@ export default function PurchaseRequisitions() {
   }, [prList]);
 
   const isProcurementUser = user?.role === "procurement_executive" || user?.role === "procurement_head" || user?.role === "it_head" || user?.role === "management";
+  // Design Team Head — view-only, but opens the same review screen to add her
+  // Design acknowledgement on the verification gate.
+  const isDesignTeam = user?.role === "design_team";
 
   return (
     <div className="space-y-4 lg:space-y-6">
@@ -2058,6 +2063,17 @@ export default function PurchaseRequisitions() {
                               className="bg-amber-600 hover:bg-amber-700 text-white"
                             >
                               <ClipboardCheck className="h-3.5 w-3.5 mr-1" /> Review
+                            </Button>
+                          )}
+                          {isDesignTeam && pr.approval_sheet_status === "procurement_ack" && (
+                            <Button
+                              variant="default"
+                              size="sm"
+                              onClick={() => navigate(`/pr-review?pr=${pr.id}`)}
+                              title="Procurement has sent this PR for your review — open to review and acknowledge (or send back)"
+                              className="bg-violet-600 hover:bg-violet-700 text-white"
+                            >
+                              <ClipboardCheck className="h-3.5 w-3.5 mr-1" /> Review &amp; Acknowledge
                             </Button>
                           )}
                           {(pr.status === "pending" || pr.status === "pending_design" || pr.status === "duplicate_flagged") && (
