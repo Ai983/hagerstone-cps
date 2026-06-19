@@ -80,6 +80,9 @@ type ExtractedData = {
   total_value: number;
   total_with_gst: number;
   special_notes: string;
+  // Flat add-on charges the vendor lists separately from line items (cartage,
+  // freight, loading, packing, installation…). AI-extracted, then editable.
+  extra_charges?: Array<{ name: string; amount: number; taxable: boolean }>;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -199,6 +202,9 @@ Return ONLY a valid JSON object (no markdown):
   ],
   "total_value": number,
   "total_with_gst": number,
+  "extra_charges": [
+    { "name": "string — e.g. Cartage, Freight, Loading, Packing, Installation, Labour", "amount": number, "taxable": boolean }
+  ],
   "special_notes": "string or empty"
 }
 
@@ -215,6 +221,13 @@ Rules:
   amount / quantity and put list_rate = rate, discount_pct = 0, special_discount_pct = 0.
 - total is line amount including GST (rate × quantity × (1 + gst_percent/100)).
 - hsn_code is the HSN/SAC code printed against the item (8-digit string or empty).
+- extra_charges are flat add-on charges the quote lists SEPARATELY from the item
+  rows — e.g. Cartage, Freight/Transport (when shown as an amount), Loading,
+  Packing, Installation, Labour, Site charges. Each needs: name (as written),
+  amount (plain number), and taxable=true if GST is applied to that charge in the
+  quote, else false. Return an empty array [] if there are none. Do NOT repeat a
+  line item here, and do NOT invent a charge for freight that is only described in
+  words with no rupee amount (e.g. "FOR destination", "Freight included").
 - CRITICAL JSON RULE: Indian quotes use inch marks (") in item names like 1" CPVC Pipe, 3/4" Elbow, 4" PVC Pipe. In your JSON output you MUST escape them as \" (e.g. "1\" CPVC Pipe") OR replace with 'in' (e.g. "1in CPVC Pipe"). Never output a bare " inside a JSON string value.`,
             },
           ],
@@ -575,6 +588,21 @@ export function LegacyQuoteUploadModal({
       };
       setExtracted(normalised);
       setEditedExtracted(JSON.parse(JSON.stringify(normalised)));
+
+      // Pre-fill the editable Extra Charges rows from what the AI found (cartage,
+      // freight, loading…). The rows stay fully editable so procurement can fix a
+      // misread name/amount or toggle GST before submitting.
+      const aiCharges = Array.isArray(result.extra_charges) ? result.extra_charges : [];
+      setExtraCharges(
+        aiCharges
+          .filter((c) => c && String(c.name ?? "").trim() && Number(c.amount) > 0)
+          .map((c, idx) => ({
+            id: `ai-${idx}-${Date.now()}`,
+            name: String(c.name).trim(),
+            amount: String(Number(c.amount)),
+            taxable: !!c.taxable,
+          })),
+      );
     } catch (e: any) {
       const detail = e?.message ? ` (${e.message})` : "";
       toast.error(`AI extraction failed${detail} — you can still fill details manually`);
