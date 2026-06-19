@@ -1491,14 +1491,18 @@ export function LegacyQuoteUploadModal({
                         {formatCurrency(totals.itemsExclGst)}
                       </span>
                     </div>
-                    {totals.extraBase > 0 && (
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Extra charges (excl. GST)</span>
-                        <span className="font-medium">
-                          {formatCurrency(totals.extraBase)}
-                        </span>
-                      </div>
-                    )}
+                    {extraCharges
+                      .filter((c) => (parseFloat(c.amount) || 0) > 0)
+                      .map((c) => (
+                        <div key={c.id} className="flex justify-between">
+                          <span className="text-muted-foreground">
+                            {c.name.trim() || "Extra charge"} (excl. GST)
+                          </span>
+                          <span className="font-medium">
+                            {formatCurrency(parseFloat(c.amount) || 0)}
+                          </span>
+                        </div>
+                      ))}
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">GST</span>
                       <span className="font-medium">
