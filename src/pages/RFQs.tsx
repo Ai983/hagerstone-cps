@@ -311,7 +311,10 @@ export default function RFQs() {
       const { data: quotesData } = await supabase
         .from("cps_quotes")
         .select("rfq_id, parse_status")
-        .in("rfq_id", rfqIds);
+        .in("rfq_id", rfqIds)
+        // Match the Quotes page: superseded (soft-deleted) quotes are excluded so
+        // the "View Quotes (N)" count reflects only live quotes, never a dead-end.
+        .is("superseded_at", null);
       const totalMap: Record<string, number> = {};
       const approvedMap: Record<string, number> = {};
       (quotesData ?? []).forEach((q: any) => {
