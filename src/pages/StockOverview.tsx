@@ -68,7 +68,7 @@ type OverviewRow = {
 
 const norm = (s: string) => s.trim().toLowerCase();
 
-const REVIEW_STOCK_ROLES = new Set(["procurement_executive", "procurement_head", "it_head", "management"]);
+const REVIEW_STOCK_ROLES = new Set(["procurement_executive", "procurement_head", "it_head", "management", "design_team"]);
 
 export default function StockOverview() {
   const { user } = useAuth();

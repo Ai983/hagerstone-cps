@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search, CheckCircle2, SendHorizonal, ShieldCheck, ShieldAlert, FileText } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { DESIGN_TEAM_HEAD, getProcurementSignature, isProcurementOnlySite, type SignatureEntry } from "@/config/verificationSignatures";
+import { DESIGN_TEAM_HEAD, getProcurementSignature, isDesignRequiredSite, type SignatureEntry } from "@/config/verificationSignatures";
 
 // ── Role-specific declarations + terms shown on the PR Verification Document ──
 
@@ -187,8 +187,11 @@ function SortIcon({ field, sortField, sortDir }: { field: string; sortField: str
 // ---------- component ----------
 
 export default function PRReview() {
-  const { user } = useAuth();
+  const { user, isProcurementHead, isDesignTeam } = useAuth();
   const [searchParams] = useSearchParams();
+  // Procurement roles (incl. it_head admin) may edit line items / create the RFQ.
+  // The Design Team Head is view-only here — she can ONLY add her acknowledgement.
+  const canWrite = isProcurementHead;
   const navigate = useNavigate();
 
   // True when this page was opened with ?pr=<id> from the main /requisitions page.
@@ -214,7 +217,6 @@ export default function PRReview() {
   // edit dialog
   const [editOpen, setEditOpen] = useState(false);
   const [editPr, setEditPr] = useState<PR | null>(null);
-  const isEditable = editPr?.status === "pending" || editPr?.status === "duplicate_flagged";
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -233,8 +235,38 @@ export default function PRReview() {
   const [prVerifyStatus, setPrVerifyStatus] = useState<string | null>(null);
   const [verifyRecord, setVerifyRecord] = useState<any | null>(null);
   const [assigneeEmail, setAssigneeEmail] = useState<string | null>(null);
-  // Gate passes once both approvers have read & agreed (status persisted as 'verified').
-  const verificationDone = prVerifyStatus === "verified";
+  const [returnReason, setReturnReason] = useState("");
+
+  // ── Sequential two-gate acknowledgement (derived from the persisted record) ──
+  // STRICT ORDER: procurement reviews & fills brand/make → acknowledges (this
+  // auto-sends to the Design Head & LOCKS the items) → she reviews → she either
+  // acknowledges (PR is verified → RFQ unlocks) or sends it back (items unlock,
+  // procurement's ack clears, they revise and re-send). The Design Head step
+  // applies ONLY to the design-scoped projects (Hero Homes, Dee Development/Bhuj,
+  // Vaneet, Koko, Sael); every other project is procurement-only.
+  //
+  // approval_sheet_status: null / 'sent_back' → with procurement (editable);
+  //   'procurement_ack' → with design (locked); 'verified' → both done.
+  const designRequired = isDesignRequiredSite(editPr?.project_site, editPr?.project_code);
+  const procurementAgreed = !!verifyRecord?.assignee?.agreed_at;
+  const designAgreed = !!verifyRecord?.design_head?.agreed_at;
+  const sentBack = prVerifyStatus === "sent_back";
+  const verificationDone =
+    prVerifyStatus === "verified" ||
+    (procurementAgreed && (!designRequired || designAgreed));
+  // STRICT separation: each acknowledgement can be signed ONLY by its true owner.
+  // Procurement sign-off → procurement_executive / procurement_head only.
+  // Design sign-off → design_team only. it_head (admin) can edit & create the RFQ
+  // but deliberately CANNOT sign either accountability acknowledgement.
+  const canSignProcurement = user?.role === "procurement_executive" || user?.role === "procurement_head";
+  const canSignDesign = isDesignTeam;
+  // Items are editable only by a write role while the PR is open AND still on the
+  // procurement side (not yet acknowledged/sent to design, and not verified).
+  const isEditable =
+    canWrite &&
+    (editPr?.status === "pending" || editPr?.status === "duplicate_flagged") &&
+    !procurementAgreed &&
+    !verificationDone;
 
   // ---------- fetch PRs ----------
 
@@ -331,6 +363,7 @@ export default function PRReview() {
     setVerifyDocOpen(false);
     setVerifyAssigneeOk(false);
     setVerifyDesignOk(false);
+    setReturnReason("");
     setPrVerifyStatus(pr.approval_sheet_status ?? null);
     setVerifyRecord(pr.approval_sheet_ai_result ?? null);
     setAssigneeEmail(null);
@@ -470,6 +503,44 @@ export default function PRReview() {
       }));
   };
 
+  // Persist pending line-item edits (deletes + dirty upserts) with unit validation.
+  // Returns true on success, false if unit validation failed (already toasted).
+  // Throws on a DB error so callers can surface it. Shared by Save / Acknowledge / RFQ.
+  const persistLineItemEdits = async (): Promise<boolean> => {
+    const toDelete = lineItems.filter((li) => li._deleted && li.id);
+    const toUpsert = lineItems.filter((li) => !li._deleted && li._dirty);
+    const unitAuditRows = validateAndCollectUnitAudit(toUpsert);
+    if (unitAuditRows === null) return false;
+    if (toDelete.length) {
+      const { error } = await supabase.from("cps_pr_line_items").delete().in("id", toDelete.map((li) => li.id!));
+      if (error) throw error;
+    }
+    if (toUpsert.length) {
+      const payload = toUpsert.map((li, idx) => ({
+        id: li.id || (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : undefined),
+        pr_id: li.pr_id,
+        item_id: li.item_id,
+        description: li.description.trim(),
+        quantity: parseFloat(li.quantity) || 1,
+        unit: li.unit, // canonical — validated above
+        specs: composeSpecsWithImages(li.specs, li._imageUrls ?? []),
+        preferred_brands: li.preferred_brands
+          ? li.preferred_brands.split(",").map((b) => b.trim()).filter(Boolean)
+          : null,
+        brand_make: li.brand_make.trim() || null,
+        colour_code: li.colour_code.trim() || null,
+        design_notes: li.design_notes.trim() || null,
+        sort_order: li.sort_order ?? idx,
+      }));
+      const { error } = await supabase.from("cps_pr_line_items").upsert(payload);
+      if (error) throw error;
+    }
+    if (unitAuditRows.length) {
+      await supabase.from("cps_audit_log").insert(unitAuditRows);
+    }
+    return true;
+  };
+
   // ---------- save ----------
 
   const handleSave = async () => {
@@ -526,56 +597,208 @@ export default function PRReview() {
     }
   };
 
-  // ── Confirm sign-offs and mark the PR verified ──
-  const handleConfirmVerification = async () => {
+  // ── Add ONE side's acknowledgement (procurement OR design) ──
+  // Sequential: procurement acknowledges FIRST (which auto-sends to the Design
+  // Head and locks the items); only then can the Design Head acknowledge, which
+  // verifies the PR. Each call re-reads the record before writing so a concurrent
+  // edit can't be silently clobbered.
+  const handleConfirmSection = async (section: "procurement" | "design") => {
     if (!editPr || !user) return;
-    // M3M / MAX sites only need procurement acknowledgement; everywhere else the
-    // Design Team Head must agree too.
-    const designRequired = !isProcurementOnlySite(editPr.project_site, editPr.project_code);
-    if (!verifyAssigneeOk || (designRequired && !verifyDesignOk)) {
-      toast.error(designRequired
-        ? "Both the PR Assignee and the Design Team Head must read and agree first"
-        : "The PR Assignee must read and agree first");
+    if (section === "procurement" && !canSignProcurement) {
+      toast.error("Only the procurement team can sign the Procurement acknowledgement");
       return;
     }
+    if (section === "design" && !canSignDesign) {
+      toast.error("Only the Design Team Head can acknowledge");
+      return;
+    }
+    if (section === "procurement" && !verifyAssigneeOk) {
+      toast.error("Tick “I have read and agree” for the Procurement section first");
+      return;
+    }
+    if (section === "design" && !verifyDesignOk) {
+      toast.error("Tick “I have read and agree” for the Design section first");
+      return;
+    }
+    // STRICT ORDER: the Design Head cannot acknowledge before procurement has.
+    if (section === "design" && !procurementAgreed) {
+      toast.error("Procurement must review and acknowledge this PR before you can.");
+      return;
+    }
+    // Procurement must finish the spec (Brand / Make on every line) before sending
+    // to the Design Head — she reviews the finalised requirement.
+    if (section === "procurement") {
+      const missingBrand = lineItems
+        .map((li, idx) => ({ li, idx }))
+        .filter(({ li }) => !li._deleted && !li.brand_make.trim());
+      if (missingBrand.length > 0) {
+        const rows = missingBrand.map(({ idx }) => `#${idx + 1}`).join(", ");
+        toast.error(`Fill Brand / Make for line ${rows} before acknowledging & sending to design`);
+        return;
+      }
+    }
+
     setVerifySaving(true);
     try {
       const nowIso = new Date().toISOString();
-      const record = {
+
+      // Procurement's acknowledgement finalises the PR — persist the line-item
+      // edits (brand/make, unit, etc.) so the Design Head reviews exactly what was
+      // entered. (Validates that every unit is canonical; toasts + aborts if not.)
+      if (section === "procurement") {
+        const saved = await persistLineItemEdits();
+        if (!saved) { setVerifySaving(false); return; }
+      }
+
+      const { data: fresh } = await supabase
+        .from("cps_purchase_requisitions")
+        .select("approval_sheet_ai_result")
+        .eq("id", editPr.id)
+        .maybeSingle();
+      const prev = ((fresh as any)?.approval_sheet_ai_result ?? verifyRecord ?? {}) as any;
+
+      const record: any = {
         type: "procurement_verification",
-        assignee: { name: editPr.assigned_to_name ?? user.name, email: assigneeEmail, agreed_at: nowIso },
-        design_head: designRequired ? { name: DESIGN_TEAM_HEAD.name, agreed_at: nowIso } : null,
-        design_skipped_reason: designRequired ? null : "Procurement-only site (M3M/MAX)",
-        confirmed_by: user.id, confirmed_by_name: user.name, confirmed_at: nowIso,
+        assignee: prev.assignee ?? null,
+        design_head: prev.design_head ?? null,
+        design_skipped_reason: null,
+        last_return: prev.last_return ?? null,
+        confirmed_by: prev.confirmed_by ?? null,
+        confirmed_by_name: prev.confirmed_by_name ?? null,
+        confirmed_at: prev.confirmed_at ?? null,
       };
+
+      if (section === "procurement") {
+        record.assignee = {
+          name: editPr.assigned_to_name ?? user.name,
+          email: assigneeEmail,
+          user_id: user.id,
+          agreed_at: nowIso,
+        };
+        // (Re)submitting to design — clear any prior/stale design sign-off.
+        record.design_head = null;
+      } else {
+        record.design_head = {
+          name: DESIGN_TEAM_HEAD.name,
+          user_id: user.id,
+          user_name: user.name,
+          agreed_at: nowIso,
+        };
+      }
+
+      const procDone = !!record.assignee?.agreed_at;
+      const desDone = !!record.design_head?.agreed_at;
+      const fullyVerified = procDone && (!designRequired || desDone);
+      // Procurement ack → 'procurement_ack' (with design); design ack or a
+      // procurement-only site → 'verified'.
+      const newStatus = fullyVerified ? "verified" : "procurement_ack";
+
+      if (fullyVerified) {
+        record.design_skipped_reason = designRequired ? null : "Project does not require Design Team Head sign-off";
+        record.confirmed_by = user.id;
+        record.confirmed_by_name = user.name;
+        record.confirmed_at = nowIso;
+      }
+
+      const update: any = {
+        approval_sheet_status: newStatus,
+        approval_sheet_ai_result: record,
+      };
+      if (fullyVerified) {
+        update.approval_sheet_signed_off_by = user.id;
+        update.approval_sheet_uploaded_at = nowIso;
+      }
+
+      const { error } = await supabase
+        .from("cps_purchase_requisitions")
+        .update(update)
+        .eq("id", editPr.id);
+      if (error) throw error;
+
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id, user_name: user.name, user_role: user.role,
+        action_type: section === "procurement" ? "PR_PROCUREMENT_ACK" : "PR_DESIGN_ACK",
+        entity_type: "purchase_requisition", entity_id: editPr.id, entity_number: editPr.pr_number,
+        description: section === "procurement"
+          ? `PR ${editPr.pr_number}: ${record.assignee.name} (Procurement) acknowledged${designRequired ? " and sent to the Design Team Head for review." : " — project does not require Design sign-off, so the PR is verified."}`
+          : `PR ${editPr.pr_number}: ${DESIGN_TEAM_HEAD.name} (Design Team Head) reviewed and acknowledged. PR is verified — procurement can create the RFQ.`,
+        severity: "info", logged_at: nowIso,
+      });
+
+      setPrVerifyStatus(newStatus);
+      setVerifyRecord(record);
+      toast.success(
+        fullyVerified
+          ? (section === "design"
+              ? "Acknowledged — the PR is verified and can move to RFQ."
+              : "Verified — this PR can move to RFQ.")
+          : "Acknowledged & sent to the Design Team Head for review."
+      );
+      fetchPRs();
+    } catch (e: any) {
+      toast.error(e.message || "Acknowledgement failed");
+    } finally {
+      setVerifySaving(false);
+    }
+  };
+
+  // ── Design Head sends the PR back to procurement for changes ──
+  // Clears procurement's acknowledgement so they must revise and re-send; the
+  // reason is shown to procurement and logged.
+  const handleSendBack = async () => {
+    if (!editPr || !user) return;
+    if (!canSignDesign) {
+      toast.error("Only the Design Team Head can send a PR back");
+      return;
+    }
+    if (prVerifyStatus !== "procurement_ack") {
+      toast.error("This PR is not currently awaiting your review");
+      return;
+    }
+    if (!returnReason.trim()) {
+      toast.error("Add a short reason so procurement knows what to change");
+      return;
+    }
+
+    setVerifySaving(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const record: any = {
+        type: "procurement_verification",
+        assignee: null,      // procurement must review & re-acknowledge after changes
+        design_head: null,
+        design_skipped_reason: null,
+        last_return: { by: user.id, by_name: user.name, at: nowIso, reason: returnReason.trim() },
+        confirmed_by: null, confirmed_by_name: null, confirmed_at: null,
+      };
+
       const { error } = await supabase
         .from("cps_purchase_requisitions")
         .update({
-          approval_sheet_status: "verified",
-          approval_sheet_signed_off_by: user.id,
-          approval_sheet_uploaded_at: nowIso,
+          approval_sheet_status: "sent_back",
           approval_sheet_ai_result: record,
+          approval_sheet_signed_off_by: null,
+          approval_sheet_uploaded_at: null,
         })
         .eq("id", editPr.id);
       if (error) throw error;
 
       await supabase.from("cps_audit_log").insert({
         user_id: user.id, user_name: user.name, user_role: user.role,
-        action_type: "PR_PROCUREMENT_VERIFIED",
+        action_type: "PR_DESIGN_RETURNED",
         entity_type: "purchase_requisition", entity_id: editPr.id, entity_number: editPr.pr_number,
-        description: designRequired
-          ? `PR ${editPr.pr_number} verified — ${record.assignee.name} (PR Assignee) & ${DESIGN_TEAM_HEAD.name} (Design Team Head) read and agreed to the verification document.`
-          : `PR ${editPr.pr_number} verified — ${record.assignee.name} (PR Assignee) acknowledged. Design Team Head sign-off skipped (procurement-only site).`,
+        description: `PR ${editPr.pr_number}: ${DESIGN_TEAM_HEAD.name} (Design Team Head) sent back to procurement for changes — "${returnReason.trim()}"`,
         severity: "info", logged_at: nowIso,
       });
 
-      setPrVerifyStatus("verified");
+      setPrVerifyStatus("sent_back");
       setVerifyRecord(record);
-      setVerifyDocOpen(false);
-      toast.success("Verification complete — you can now create the RFQ");
+      setVerifyDesignOk(false);
+      setReturnReason("");
+      toast.success("Sent back to procurement with your note.");
       fetchPRs();
     } catch (e: any) {
-      toast.error(e.message || "Verification failed");
+      toast.error(e.message || "Send back failed");
     } finally {
       setVerifySaving(false);
     }
@@ -1095,7 +1318,8 @@ export default function PRReview() {
                                   <Input
                                     className="h-8 text-sm w-28"
                                     value={li.colour_code}
-                                    onChange={(e) => updateItem(idx, { colour_code: e.target.value })}
+                                    onChange={(e) => isEditable && updateItem(idx, { colour_code: e.target.value })}
+                                    readOnly={!isEditable}
                                     placeholder="e.g. RAL 9010"
                                   />
                                 </TableCell>
@@ -1104,7 +1328,8 @@ export default function PRReview() {
                                     rows={1}
                                     className="text-xs min-w-[130px] resize-none"
                                     value={li.design_notes}
-                                    onChange={(e) => updateItem(idx, { design_notes: e.target.value })}
+                                    onChange={(e) => isEditable && updateItem(idx, { design_notes: e.target.value })}
+                                    readOnly={!isEditable}
                                     placeholder="Any additional notes…"
                                   />
                                 </TableCell>
@@ -1168,10 +1393,8 @@ export default function PRReview() {
                     const designSig: SignatureEntry | null = DESIGN_TEAM_HEAD.signatureUrl
                       ? { name: DESIGN_TEAM_HEAD.name, signatureUrl: DESIGN_TEAM_HEAD.signatureUrl }
                       : null;
-                    // M3M / MAX sites: only procurement acknowledgement, no Design Head.
-                    const designRequired = !isProcurementOnlySite(editPr?.project_site, editPr?.project_code);
-                    const assigneeAgreed = verificationDone || verifyAssigneeOk;
-                    const designAgreed = verificationDone || verifyDesignOk;
+                    // designRequired / procurementAgreed / designAgreed come from
+                    // component scope (derived from the persisted record).
                     const assigneeName = editPr?.assigned_to_name ?? "PR Assignee";
                     const fmtWhen = (iso?: string | null) =>
                       iso ? new Date(iso).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
@@ -1192,11 +1415,14 @@ export default function PRReview() {
                     );
 
                     // A self-contained role section: heading + its own declaration + its
-                    // own terms + signature + agree checkbox.
+                    // own terms + signature. The agree checkbox + confirm button appear
+                    // ONLY to the role that owns this section, and only while it's unsigned.
                     const renderRoleSection = (args: {
                       heading: string; declaration: string; terms: string[];
                       who: string; agreed: boolean; sig: SignatureEntry | null; agreedAt?: string | null;
                       checked: boolean; onCheck: (v: boolean) => void; agreeLabel: React.ReactNode;
+                      canSign: boolean; onConfirm: () => void; pendingHint: string;
+                      confirmLabel?: string; footer?: React.ReactNode;
                     }) => (
                       <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2.5">
                         <div className="text-[11px] font-bold uppercase tracking-wide text-primary">{args.heading}</div>
@@ -1211,32 +1437,79 @@ export default function PRReview() {
                           </ol>
                         </div>
                         {renderSig({ title: "Signature", who: args.who, agreed: args.agreed, sig: args.sig, agreedAt: args.agreedAt })}
-                        {!verificationDone && (
-                          <label className="flex items-start gap-2 cursor-pointer text-xs">
-                            <Checkbox checked={args.checked} onCheckedChange={(v) => args.onCheck(v === true)} className="mt-0.5" />
-                            <span>{args.agreeLabel}</span>
-                          </label>
+                        {!args.agreed && (
+                          args.canSign ? (
+                            <div className="space-y-2">
+                              <label className="flex items-start gap-2 cursor-pointer text-xs">
+                                <Checkbox checked={args.checked} onCheckedChange={(v) => args.onCheck(v === true)} className="mt-0.5" />
+                                <span>{args.agreeLabel}</span>
+                              </label>
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="bg-amber-700 hover:bg-amber-800 text-white"
+                                onClick={args.onConfirm}
+                                disabled={verifySaving || !args.checked}
+                              >
+                                {verifySaving ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving…</> : (args.confirmLabel ?? "Confirm my acknowledgement")}
+                              </Button>
+                              {args.footer}
+                            </div>
+                          ) : (
+                            <p className="text-[11px] italic text-muted-foreground">{args.pendingHint}</p>
+                          )
                         )}
                       </div>
                     );
+
+                    const returnInfo = verifyRecord?.last_return;
+                    // Design section is signable only once procurement has acknowledged
+                    // (strict order) and only by the design_team role.
+                    const designCanSignNow = canSignDesign && procurementAgreed && !designAgreed;
+                    const designPendingHint = !procurementAgreed
+                      ? "Procurement is still preparing this PR — you can review and acknowledge once they send it to you."
+                      : "Awaiting the Design Team Head's review & acknowledgement.";
 
                     return (
                       <div className="mt-5 rounded-lg border border-amber-300 bg-amber-50/60 p-4 space-y-3">
                         <div className="flex items-center justify-between gap-2 flex-wrap">
                           <div className="text-sm font-semibold text-amber-900 flex items-center gap-2">
-                            <ShieldCheck className="h-4 w-4" /> Procurement Verification
+                            <ShieldCheck className="h-4 w-4" /> PR Verification
                           </div>
                           {verificationDone
                             ? <Badge className="bg-green-100 text-green-800 border-0 text-xs">✓ Verified</Badge>
-                            : <Badge className="bg-amber-200 text-amber-900 border-0 text-xs">Required before RFQ</Badge>}
+                            : sentBack
+                              ? <Badge className="bg-red-100 text-red-800 border-0 text-xs">↩ Sent back to procurement</Badge>
+                              : procurementAgreed
+                                ? <Badge className="bg-violet-100 text-violet-800 border-0 text-xs">With Design Team Head</Badge>
+                                : <Badge className="bg-amber-200 text-amber-900 border-0 text-xs">Required before RFQ</Badge>}
                         </div>
 
-                        {!verifyDocOpen && !verificationDone && (
+                        {/* Sent-back note — procurement sees why design returned it. */}
+                        {sentBack && returnInfo && (
+                          <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-[11px] text-red-800 flex items-start gap-2">
+                            <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                            <span>
+                              <strong>{returnInfo.by_name ?? "Design Team Head"} sent this back for changes:</strong> “{returnInfo.reason}”.
+                              {canWrite ? " Make the changes, then acknowledge again to re-send." : ""}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* With-design waiting banner. */}
+                        {!verificationDone && procurementAgreed && !designAgreed && designRequired && (
+                          <div className="rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-[11px] text-violet-900 flex items-start gap-2">
+                            <ShieldAlert className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                            <span>Procurement has acknowledged and sent this PR to the <strong>Design Team Head</strong> for review. Waiting for her acknowledgement.</span>
+                          </div>
+                        )}
+
+                        {!verifyDocOpen && !verificationDone && !procurementAgreed && !sentBack && (
                           <>
                             <p className="text-xs text-amber-900/80">
                               {designRequired
-                                ? <>Before this PR can move to RFQ, the <strong>PR Assignee</strong> and the <strong>Design Team Head</strong> must open the verification document, read it, and both agree.</>
-                                : <>This is a <strong>procurement-only site (M3M / MAX)</strong> — only the <strong>PR Assignee</strong> needs to open the verification document, read it, and agree (no Design Team Head sign-off).</>}
+                                ? <>Procurement reviews the PR and fills Brand / Make, then acknowledges — that <strong>sends it to the Design Team Head</strong> for review. Once she acknowledges, the RFQ can be created.</>
+                                : <>This project does <strong>not require Design Team Head sign-off</strong> — only the <strong>PR Assignee</strong> needs to acknowledge, then the RFQ can be created.</>}
                             </p>
                             <Button type="button" variant="outline" size="sm" onClick={() => setVerifyDocOpen(true)}>
                               <FileText className="h-3.5 w-3.5 mr-1.5" /> Open Verification Document
@@ -1244,7 +1517,7 @@ export default function PRReview() {
                           </>
                         )}
 
-                        {(verifyDocOpen || verificationDone) && (
+                        {(verifyDocOpen || verificationDone || procurementAgreed || sentBack) && (
                           <div className="rounded-lg border border-border bg-white p-4 space-y-3">
                             <div className="text-center">
                               <div className="text-sm font-bold text-foreground">PR Verification Document</div>
@@ -1252,7 +1525,7 @@ export default function PRReview() {
                             </div>
 
                             <p className="text-[11px] text-muted-foreground text-center">
-                              Each team below has its own declaration and terms — read and agree to your section.
+                              Procurement acknowledges first; the PR then goes to the Design Team Head. You may only act on your own section.
                             </p>
 
                             <div className={`grid grid-cols-1 gap-3 ${designRequired ? "lg:grid-cols-2" : ""}`}>
@@ -1261,12 +1534,16 @@ export default function PRReview() {
                                 declaration: PROCUREMENT_DECLARATION,
                                 terms: PROCUREMENT_TERMS,
                                 who: assigneeName,
-                                agreed: assigneeAgreed,
+                                agreed: procurementAgreed,
                                 sig: procSig,
                                 agreedAt: verifyRecord?.assignee?.agreed_at,
                                 checked: verifyAssigneeOk,
                                 onCheck: setVerifyAssigneeOk,
-                                agreeLabel: <>I, <strong>{assigneeName}</strong>, have read and agree to the Procurement declaration &amp; terms above.</>,
+                                agreeLabel: <>I, <strong>{assigneeName}</strong>, have reviewed this PR, filled Brand / Make, and agree to the Procurement declaration &amp; terms above.</>,
+                                canSign: canSignProcurement && !procurementAgreed,
+                                onConfirm: () => handleConfirmSection("procurement"),
+                                confirmLabel: designRequired ? "Acknowledge & send to Design" : "Acknowledge",
+                                pendingHint: "Awaiting the procurement team — they review and acknowledge this first.",
                               })}
                               {designRequired && renderRoleSection({
                                 heading: "Design Team Head",
@@ -1278,30 +1555,47 @@ export default function PRReview() {
                                 agreedAt: verifyRecord?.design_head?.agreed_at,
                                 checked: verifyDesignOk,
                                 onCheck: setVerifyDesignOk,
-                                agreeLabel: <><strong>{DESIGN_TEAM_HEAD.name}</strong> has read and agrees to the Design declaration &amp; terms above.</>,
+                                agreeLabel: <>I, <strong>{DESIGN_TEAM_HEAD.name}</strong>, have reviewed this PR and agree to the Design declaration &amp; terms above.</>,
+                                canSign: designCanSignNow,
+                                onConfirm: () => handleConfirmSection("design"),
+                                confirmLabel: "Acknowledge",
+                                pendingHint: designPendingHint,
+                                footer: designCanSignNow ? (
+                                  <div className="mt-2 rounded-md border border-red-200 bg-red-50/60 p-2 space-y-1.5">
+                                    <div className="text-[10px] font-semibold text-red-700">Not right? Send it back to procurement</div>
+                                    <Textarea
+                                      rows={2}
+                                      className="text-xs resize-none bg-white"
+                                      placeholder="Reason for sending back (what needs changing)…"
+                                      value={returnReason}
+                                      onChange={(e) => setReturnReason(e.target.value)}
+                                    />
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="border-red-300 text-red-700 hover:bg-red-100"
+                                      onClick={handleSendBack}
+                                      disabled={verifySaving || !returnReason.trim()}
+                                    >
+                                      ↩ Send back to procurement
+                                    </Button>
+                                  </div>
+                                ) : null,
                               })}
                             </div>
 
                             {!verificationDone && (
-                              <div className="flex items-center gap-2 justify-end pt-1">
-                                <Button type="button" variant="ghost" size="sm" onClick={() => setVerifyDocOpen(false)} disabled={verifySaving}>Close</Button>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  className="bg-amber-700 hover:bg-amber-800 text-white"
-                                  onClick={handleConfirmVerification}
-                                  disabled={verifySaving || !verifyAssigneeOk || (designRequired && !verifyDesignOk)}
-                                >
-                                  {verifySaving ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Saving…</> : "Confirm & Proceed"}
-                                </Button>
+                              <div className="flex items-center justify-end pt-1">
+                                <Button type="button" variant="ghost" size="sm" onClick={() => setVerifyDocOpen(false)} disabled={verifySaving}>Close document</Button>
                               </div>
                             )}
 
                             {verificationDone && verifyRecord && (
                               <p className="text-[11px] text-green-700 text-center">
-                                ✓ Verified by {verifyRecord?.assignee?.name} (PR Assignee)
-                                {verifyRecord?.design_head?.name ? ` & ${verifyRecord.design_head.name} (Design Team Head)` : " — procurement-only site (no Design Head sign-off)"}
-                                {verifyRecord?.confirmed_at ? ` on ${fmtWhen(verifyRecord.confirmed_at)}` : ""}.
+                                ✓ Verified — {verifyRecord?.assignee?.name} (PR Assignee)
+                                {verifyRecord?.design_head?.name ? ` & ${verifyRecord.design_head.name} (Design Team Head approved)` : " — this project does not require Design Team Head sign-off"}
+                                {verifyRecord?.confirmed_at ? ` · ${fmtWhen(verifyRecord.confirmed_at)}` : ""}.
                               </p>
                             )}
                           </div>
@@ -1310,8 +1604,8 @@ export default function PRReview() {
                     );
                   })()}
 
-                  {/* ── Create RFQ panel ── */}
-                  {(editPr?.status === "pending" || editPr?.status === "validated" || editPr?.status === "duplicate_flagged") && (
+                  {/* ── Create RFQ panel (procurement only — design_team is view-only) ── */}
+                  {canWrite && (editPr?.status === "pending" || editPr?.status === "validated" || editPr?.status === "duplicate_flagged") && (
                     <div className="mt-5 rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
                       <div className="text-sm font-semibold text-primary">Create RFQ from this PR</div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1339,7 +1633,12 @@ export default function PRReview() {
                       </p>
                       {!verificationDone && (
                         <p className="text-xs font-medium text-amber-700 flex items-center gap-1.5">
-                          <ShieldAlert className="h-3.5 w-3.5" /> Complete the Procurement Verification above (both sign-offs) to unlock this.
+                          <ShieldAlert className="h-3.5 w-3.5" />
+                          {sentBack
+                            ? "Design Team Head sent this back — make the changes and acknowledge again to re-send."
+                            : procurementAgreed && designRequired
+                              ? "Waiting for the Design Team Head to acknowledge — RFQ unlocks once she approves."
+                              : "Acknowledge the verification above (procurement → design) to unlock this."}
                         </p>
                       )}
                       <Button

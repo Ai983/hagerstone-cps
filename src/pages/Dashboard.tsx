@@ -40,7 +40,7 @@ interface NotifItem {
 }
 
 export default function Dashboard() {
-  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead, isEmployee } = useAuth();
+  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead, isEmployee, isDesignTeam } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
@@ -69,6 +69,10 @@ export default function Dashboard() {
   // Low-stock widget for site users
   type LowStockItem = { id: string; project_site: string; current_qty: number; min_threshold: number | null; unit: string | null; item_name: string };
   const [lowStockItems, setLowStockItems] = useState<LowStockItem[]>([]);
+
+  // Design Team Head — PRs awaiting her design acknowledgement on the verification gate
+  type AckPendingPR = { id: string; pr_number: string; project_site: string; project_code: string | null };
+  const [designAckPending, setDesignAckPending] = useState<AckPendingPR[]>([]);
 
   const hideValues = user?.role === "requestor" || user?.role === "site_receiver";
   const lang: 'hi' = 'hi';
@@ -318,6 +322,22 @@ export default function Dashboard() {
           .slice(0, 8);
         setLowStockItems(lowItems);
       }
+
+      // Design Team Head queue: PRs that procurement has reviewed and acknowledged
+      // and SENT to her — i.e. approval_sheet_status = 'procurement_ack'. She can't
+      // see a PR until procurement has finished; once she acknowledges it leaves
+      // the queue (→ 'verified'), and a send-back returns it to procurement.
+      if (isDesignTeam) {
+        const { data: ackData } = await supabase
+          .from("cps_purchase_requisitions")
+          .select("id, pr_number, project_site, project_code")
+          .eq("approval_sheet_status", "procurement_ack")
+          .order("created_at", { ascending: false })
+          .limit(100);
+        const pending = ((ackData ?? []) as any[])
+          .map((p) => ({ id: p.id, pr_number: p.pr_number, project_site: p.project_site, project_code: p.project_code }));
+        setDesignAckPending(pending);
+      }
     } catch {
       toast.error("Failed to load dashboard data");
     }
@@ -389,6 +409,49 @@ export default function Dashboard() {
           ))}
         </div>
       </div>
+
+      {/* Design Team Head — PRs awaiting your acknowledgement */}
+      {isDesignTeam && (
+        <Card className="border-violet-200 bg-violet-50/50">
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-base font-semibold flex items-center gap-2 text-violet-900">
+              <ClipboardList className="h-4 w-4 text-violet-700" />
+              PRs awaiting your design acknowledgement
+            </CardTitle>
+            <Badge variant="outline" className="text-violet-700 border-violet-300 bg-violet-50">
+              {designAckPending.length} {t("pending", "baaki")}
+            </Badge>
+          </CardHeader>
+          <CardContent className="p-0">
+            {loading ? (
+              <div className="p-4"><Skeleton className="h-16 w-full" /></div>
+            ) : designAckPending.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                <CheckCircle2 className="h-8 w-8 text-green-500/60 mx-auto mb-2" />
+                Nothing pending — you're all caught up.
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {designAckPending.slice(0, 8).map((pr) => (
+                  <div
+                    key={pr.id}
+                    className="flex items-center justify-between gap-3 px-4 py-3 cursor-pointer hover:bg-violet-100/40 transition-colors"
+                    onClick={() => navigate(`/pr-review?pr=${pr.id}`)}
+                  >
+                    <div className="min-w-0">
+                      <span className="font-mono text-sm font-semibold text-violet-800">{pr.pr_number}</span>
+                      <p className="text-xs text-muted-foreground truncate">{pr.project_code ?? pr.project_site}</p>
+                    </div>
+                    <Button size="sm" className="bg-violet-600 hover:bg-violet-700 text-white shrink-0">
+                      Acknowledge <ArrowRight className="h-3.5 w-3.5 ml-1" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Employee simplified view */}
       {hideValues && (

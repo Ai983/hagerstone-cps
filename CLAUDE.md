@@ -65,15 +65,16 @@ There is **no test runner configured** — no Vitest/Jest. `CPS_TEST_GUIDE.md` i
 Protected pages render inside `<Protected>` = `<ProtectedRoute><Layout>…</Layout></ProtectedRoute>`. `Layout` provides the desktop `Sidebar`, mobile `BottomNav`, and `TopBar`.
 
 ### Auth & roles
-`useAuth()` (`src/contexts/AuthContext`) is the single source of identity and permissions. It loads the `cps_users` row by `auth_uid`, falls back to email match, and auto-creates a `requestor` profile for new OAuth sign-ins. **9 roles** (`CpsRole`):
+`useAuth()` (`src/contexts/AuthContext`) is the single source of identity and permissions. It loads the `cps_users` row by `auth_uid`, falls back to email match, and auto-creates a `requestor` profile for new OAuth sign-ins. **10 roles** (`CpsRole`):
 
-`requestor`, `procurement_executive`, `procurement_head`, `it_head`, `management`, `finance`, `site_receiver`, `auditor`, `accounts_team`.
+`requestor`, `procurement_executive`, `procurement_head`, `it_head`, `management`, `finance`, `site_receiver`, `auditor`, `accounts_team`, `design_team`.
 
 - `it_head` is effectively super-admin (full access + the only role that sees `/admin/overrides`).
 - `accounts_team` is view-only.
+- `design_team` (the Design Team Head, login `design@hagerstone.com`) is **view-only across all procurement pages** — it mirrors `procurement_head`'s nav allowlist but holds **no write permissions**. Its one write action is the Design acknowledgement on the PR verification gate (see PR → Auto RFQ Flow). `isDesignTeam` on `useAuth()` gates it.
 - `requestor` / `site_receiver` are "employees" — they get a separate, simplified sidebar (`EMPLOYEE_NAV` in `Sidebar.tsx`, Hindi-flavoured labels like "Meri Requests", "Saman List").
 
-**Permission helpers on `useAuth()`:** `canApprove`, `canCreateRFQ`, `canViewAudit`, `canViewPrices`, `canManageSuppliers`, `canViewStock`, `canIssueStock`, `canAdjustStock`, `isProcurementHead`, `isManagement`, `isEmployee`. Never re-derive role logic in pages — use these.
+**Permission helpers on `useAuth()`:** `canApprove`, `canCreateRFQ`, `canViewAudit`, `canViewPrices`, `canManageSuppliers`, `canViewStock`, `canIssueStock`, `canAdjustStock`, `isProcurementHead`, `isManagement`, `isEmployee`, `isDesignTeam`. Never re-derive role logic in pages — use these.
 
 ### Navigation
 `Sidebar.tsx` `NAV` array drives the desktop menu; each entry has a `roles` allowlist (`["all"]` = everyone). Employees bypass `NAV` entirely and see `EMPLOYEE_NAV`.
@@ -138,8 +139,8 @@ useEffect(() => {
 **If you genuinely need to populate form fields from async data** (e.g. AI extraction result), call `form.setValue(...)` inside the async handler, not in a useEffect that watches a prop.
 
 ## Routes
-**Public (no auth):** `/login`, `/vendor/upload-quote?token=xxx`, `/approve-po?token=xxx`
-**Protected:** `/dashboard`, `/kanban`, `/analytics`, `/requisitions`, `/pr-review`, `/rfqs`, `/quotes`, `/comparison`, `/comparison/:rfqId`, `/purchase-orders`, `/work-orders`, `/delivery`, `/boq`, `/stock`, `/stock-overview`, `/site-quotes`, `/suppliers`, `/items`, `/invoices/upload`, `/audit`, `/admin/overrides`
+**Public (no auth):** `/login`, `/vendor/upload-quote?token=xxx`, `/approve-po?token=xxx`, `/approve-release?token=xxx`, `/approve-advance?token=xxx`
+**Protected:** `/dashboard`, `/kanban`, `/analytics`, `/requisitions`, `/pr-review`, `/rfqs`, `/quotes`, `/comparison`, `/comparison/:rfqId`, `/purchase-orders`, `/work-orders`, `/delivery`, `/boq`, `/stock`, `/stock-overview`, `/site-quotes`, `/suppliers`, `/items`, `/invoices/upload`, `/audit`, `/admin/overrides`, `/advances`, `/grn-approvals`, `/reconciliation`
 
 > `VendorRegister.tsx`, `VendorStatus.tsx`, `BulkInvoiceIngestion.tsx`, `DesignTeam.tsx` exist as files but are **not routed** — leftover from dropped/parked features. Don't link to them.
 
@@ -157,16 +158,24 @@ Schema is large; use the Supabase MCP tools (`list_tables`, `execute_sql`) to in
 - **Contractor work orders:** `cps_contractors`, `cps_contractor_work_orders`, `cps_work_orders`, `cps_wo_line_items`, `cps_wo_boq_items`
 - **RA bills (running-account billing):** `cps_ra_bills` + `cps_ra_bill_items`/`_approvals`/`_attachments`/`_deductions`/`_payments`/`_validations`, `cps_retention_ledger`, `cps_advance_ledger`, `cps_debit_notes`
 - **Stock:** `cps_stock`, `cps_stock_movements`, `cps_direct_orders`, `cps_holds`, `cps_dlp_tracker`
-- **Plumbing:** `cps_users`, `cps_audit_log`, `cps_config` (key-value, e.g. n8n webhook URLs), `cps_webhook_events`, `cps_call_logs`, `cps_clarification_requests`, `cps_invoice_observations`, `cps_quote_upload_tokens`, `cps_po_approval_tokens`, `cps_po_payment_schedules`
+- **GRN (updated flow):** `cps_grns` now has `status: pending_approval → confirmed | rejected`, `extracted_data` (AI OCR jsonb), `challan_number`, `variance_approved_by`, `variance_approval_reason`, `rejection_reason`. GRNs go to `GrnApprovals` page for procurement head review before confirming. On approval, `on_delivery_grn` tranches become due and `cps_payment_authorizations` release rows are auto-created.
+- **Escalation guard:** `cps_escalated_suppliers` — suppliers with unreconciled advances (7+ days) are blocked from new advance requests.
+- **Payment lifecycle (SPEC-PAY-01):** `cps_po_payment_schedules` (tranche schedule — extended with `basis`, `trigger_type`, `trigger_offset_days`, `paid_amount`, `authorization_id`), `cps_payment_authorizations` (immutable Gate-1/Gate-2/advance ledger — NEW), `cps_advance_requests` (emergency pre-PO cash advance — NEW)
+- **Plumbing:** `cps_users`, `cps_audit_log`, `cps_config` (key-value, e.g. n8n webhook URLs), `cps_webhook_events`, `cps_call_logs`, `cps_clarification_requests`, `cps_invoice_observations`, `cps_quote_upload_tokens`, `cps_po_approval_tokens` (extended with `scope` col: `po_approval | payment_release | advance`)
 
 ### Legacy tables (READ-ONLY — do not modify)
 `vendors`, `materials`, `invoices`, `invoice_line_items`
 
 ### DB functions
-- `cps_next_pr_number()` → `PR-2026-0001`; `cps_next_rfq_number()` → `RFQ-2026-0001`; `cps_next_po_number('HI')` → `HI-PO-2026-0001`; `cps_next_grn_number()` → `GRN-2026-0001`; `cps_next_wo_number()` → work-order number
+- `cps_next_pr_number()` → `PR-2026-0001`; `cps_next_rfq_number()` → `RFQ-2026-0001`; `cps_next_po_number('HI')` → `HI-PO-2026-0001`; `cps_next_grn_number()` → `GRN-2026-0001`; `cps_next_wo_number()` → work-order number; `cps_next_release_number()` → `REL-2026-0001`; `cps_next_advance_number()` → `ADV-2026-0001`
 - `cps_auto_create_rfq_for_pr(p_pr_id, p_created_by)` → `{success, rfq_number, rfq_id, supplier_count, deadline, test_mode}` — auto-creates RFQ with suppliers (target 5+, but floor is `cps_config.min_suppliers_per_rfq`, currently 2), sets PR status to `rfq_created`
 - `cps_generate_blind_ref()` trigger → `QT-2026-0001` (auto on `cps_quotes` insert)
 - `cps_generate_upload_tokens(...)`, `cps_generate_approval_token(...)` — tokenised vendor/founder links
+- `cps_get_release_details(p_token)`, `cps_finalize_release(p_token, p_decision, p_note)` — Gate-2 payment release token flow
+- `cps_get_advance_details(p_token)`, `cps_finalize_advance(p_token, p_decision, p_note)` — advance approval token flow
+- `cps_validate_receipt_amount(p_advance_id, p_receipt_amount)` → `{variance_detected, variance_percent, expected, received}` — OCR receipt vs advance amount check
+- `cps_validate_grn_amount(p_grn_id)` → `{requires_variance_review, variance_percent, message, po_amount}` — GRN amount vs PO check
+- `cps_should_flip_delivery_tranche(p_grn_id)` → `{should_flip, delivery_percent, reason}` — whether GRN approval should trigger `on_delivery_grn` tranche
 - `cps_normalize_item_text()`, `cps_link_quote_line_to_canonical()`, `cps_link_po_line_to_canonical()` — item-text canonicalisation
 - `cps_current_user_role()` — RLS helper
 
@@ -205,6 +214,13 @@ These are the designed ideals. **In the current `capture` mode several are relax
 4. `cps_auto_create_rfq_for_pr(p_pr_id, p_created_by)` → auto-creates RFQ with suppliers (target 5+, but floor is `cps_config.min_suppliers_per_rfq`, currently 2)
 5. **Fire-and-forget webhook** to n8n: URL from `cps_config` key `webhook_rfq_dispatch`, POST `{event:"rfq_created", rfq_id, rfq_number, supplier_count, deadline, test_mode, suppliers:[{name,whatsapp,upload_url,token}]}` — non-blocking
 
+### PR Verification gate (two-gate, `PRReview.tsx`)
+Before a PR can move to RFQ it must be **verified by two independent sign-offs**, each made by the relevant person in their own login (order-independent):
+- **Procurement (PR Assignee)** — signed by a procurement role (`canSignProcurement`).
+- **Design Team Head** — signed by the `design_team` role (`canSignDesign`). Required **only** on design-scoped projects (`isDesignRequiredSite` → keyword allowlist in `verificationSignatures.ts`: Hero Homes, Dee Development/Bhuj, Vaneet, Koko, Sael); every other project is procurement-only (procurement ack alone → `verified`).
+
+State lives in `cps_purchase_requisitions.approval_sheet_ai_result` (jsonb: `assignee` + `design_head`, each with `user_id` + `agreed_at`); `approval_sheet_status` tracks progress: `null` → `procurement_ack` / `design_ack` (one side done, "waiting for the other" banner shown) → `verified` (both done, RFQ/Approve unlock). `handleConfirmSection(section)` re-reads the row before merging so the two parties never clobber each other. Audit actions: `PR_PROCUREMENT_ACK` / `PR_DESIGN_ACK`. The Design Team Head reaches this via an **Acknowledge** button on `/requisitions` and a "PRs awaiting your design acknowledgement" card on the dashboard.
+
 ## Vendor Quote Submission Flow (`VendorUploadQuote.tsx`)
 1. Vendor opens `/vendor/upload-quote?token=xxx` → token validated against `cps_quote_upload_tokens`
 2. Page shows RFQ line items from `cps_rfq_line_items_for_dispatch`
@@ -234,6 +250,7 @@ Projects live **only** in `cps_projects` — every project dropdown/filter app-w
 ## Reference Docs (markdown set was pruned 2026-06 — only the below remain)
 **Current / trust:**
 - `CLAUDE.md` — this file (authoritative)
+- `CPS_PAYMENT_LIFECYCLE_SPEC.md` — SPEC-PAY-01: two-gate tranche payment lifecycle; every claim tagged VERIFIED/PROPOSED/OPEN (2026-06-03)
 - `CPS_SESSION_HANDOFF.md` — best source for real DB column names/enums/status flows
 - `docs/plans/invoice-led-stock-enrichment.md` — active forward direction (invoices → pending `cps_stock` → human-reviewed approval)
 - `CPS_TEST_GUIDE.md` — manual QA script (no automated tests exist)

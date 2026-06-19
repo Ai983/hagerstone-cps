@@ -40,14 +40,27 @@ export function getProcurementSignature(email?: string | null): SignatureEntry |
 }
 
 /**
- * Sites where ONLY procurement acknowledgement is required — the Design Team
- * Head sign-off is skipped. Matched case-insensitively (whole word) against the
- * PR's project site or project code.
+ * Projects that REQUIRE the Design Team Head sign-off. Every OTHER project is
+ * procurement-only (procurement acknowledgement alone unlocks the RFQ).
+ *
+ * Matched case-insensitively as a substring against the PR's project_code (which
+ * holds the project NAME) and project_site. The in-scope projects are:
+ *   • Hero Homes — "Hero Homes Realty" + "Hero Home's MU - Greater Noida"
+ *   • Bhuj / Dee Development — "Dee Development Engineers LTD - Admin" + "- Canteen"
+ *     (NOT "Dee Foundation", which is a different Faridabad project)
+ *   • Vaneet Infra, Koko Town, Sael Aerocity
  */
-export const PROCUREMENT_ONLY_SITE_KEYWORDS = ["M3M", "MAX"];
+export const DESIGN_REQUIRED_SITE_KEYWORDS = [
+  "Hero Home",        // both Hero Homes projects
+  "Dee Development",  // Dee Development Engineers (Bhuj) — excludes "Dee Foundation"
+  "Bhuj",             // Bhuj / Dee Piping site references
+  "Vaneet",           // Vaneet Infra
+  "Koko",             // Koko Town
+  "Sael",             // Sael Aerocity
+];
 
-/** True when this PR's project only needs procurement acknowledgement (no Design Head). */
-export function isProcurementOnlySite(projectSite?: string | null, projectCode?: string | null): boolean {
-  const hay = `${projectSite ?? ""} ${projectCode ?? ""}`;
-  return PROCUREMENT_ONLY_SITE_KEYWORDS.some((k) => new RegExp(`\\b${k}\\b`, "i").test(hay));
+/** True when this PR's project needs the Design Team Head sign-off (in addition to procurement). */
+export function isDesignRequiredSite(projectSite?: string | null, projectCode?: string | null): boolean {
+  const hay = `${projectSite ?? ""} ${projectCode ?? ""}`.toLowerCase();
+  return DESIGN_REQUIRED_SITE_KEYWORDS.some((k) => hay.includes(k.toLowerCase()));
 }
