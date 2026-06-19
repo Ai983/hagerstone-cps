@@ -100,6 +100,40 @@ const formatCurrency = (n: number | null | undefined) => {
   return `₹${Number(n).toLocaleString("en-IN")}`;
 };
 
+// Canonical totals for a legacy quote — the single source of truth for both the
+// on-screen summary and the values we persist. Everything is derived from the
+// line items + the manually-entered extra charges, NOT from the AI's
+// `total_with_gst` (which is unreliable: sometimes it bakes charges into the
+// grand total, sometimes it doesn't). This keeps "what you see" === "what we save".
+//   - items:  rate is the net per-unit price; each line.total already includes GST.
+//   - charges: base amount, plus 18% GST when `taxable`.
+// Storage contract (matches ComparisonSheet reconciliation):
+//   total_quoted_value  = itemsExclGst        (charges are added separately there)
+//   total_landed_value  = grandTotal          (full landed incl. charges + GST)
+const computeQuoteTotals = (
+  extracted: ExtractedData | null,
+  charges: Array<{ amount: number; taxable: boolean }>,
+) => {
+  const items = extracted?.line_items ?? [];
+  const itemsExclGst = items.reduce((s, i) => s + Number(i.quantity ?? 0) * Number(i.rate ?? 0), 0);
+  const itemsInclGst = items.reduce((s, i) => s + Number(i.total ?? 0), 0);
+  const itemsGst = itemsInclGst - itemsExclGst;
+  const extraBase = charges.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const extraGst = charges.reduce((s, c) => s + (Number(c.amount) || 0) * (c.taxable ? 0.18 : 0), 0);
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    itemsExclGst: round2(itemsExclGst),
+    itemsGst: round2(itemsGst),
+    itemsInclGst: round2(itemsInclGst),
+    extraBase: round2(extraBase),
+    extraGst: round2(extraGst),
+    extraInclGst: round2(extraBase + extraGst),
+    totalExclGst: round2(itemsExclGst + extraBase),
+    gstTotal: round2(itemsGst + extraGst),
+    grandTotal: round2(itemsInclGst + extraBase + extraGst),
+  };
+};
+
 const extractQuoteDetails = async (
   files: File[],
   rfqItems: string[]
@@ -589,6 +623,14 @@ export function LegacyQuoteUploadModal({
           notes: (a.notes || "").trim(),
         }));
 
+      // Canonical totals — exactly what the summary box shows. The landed total
+      // INCLUDES extra charges; the quoted (subtotal) is items-only because the
+      // comparison sheet adds the charge bases itself when it reconciles.
+      const savedTotals = computeQuoteTotals(
+        editedExtracted,
+        cleanCharges.map((c) => ({ amount: c.amount, taxable: c.taxable })),
+      );
+
       const { data: quote, error: qErr } = await supabase
         .from("cps_quotes")
         .insert({
@@ -610,9 +652,15 @@ export function LegacyQuoteUploadModal({
             ? `${editedExtracted.delivery_days} days`
             : null,
           freight_terms: editedExtracted.freight_terms || null,
-          total_quoted_value: editedExtracted.total_value || null,
-          total_landed_value: editedExtracted.total_with_gst || null,
-          ai_parsed_data: { ...editedExtracted, extra_charges: cleanCharges, advance_payments: cleanAdvances },
+          total_quoted_value: savedTotals.itemsExclGst || null,
+          total_landed_value: savedTotals.grandTotal || null,
+          ai_parsed_data: {
+            ...editedExtracted,
+            total_value: savedTotals.itemsExclGst,
+            total_with_gst: savedTotals.grandTotal,
+            extra_charges: cleanCharges,
+            advance_payments: cleanAdvances,
+          },
           ai_extracted_vendor_details: editedExtracted,
           notes: notes || null,
           legacy_vendor_name: selectedSupplier.name,
@@ -682,7 +730,7 @@ export function LegacyQuoteUploadModal({
         entity_type: "quote",
         entity_id: quote.id,
         entity_number: quote.blind_quote_ref,
-        description: `Legacy quote uploaded for ${selectedSupplier.name} on RFQ ${selectedRfq?.rfq_number}. Total: ₹${editedExtracted.total_with_gst?.toLocaleString("en-IN")}. Submitted by ${user.name}.`,
+        description: `Legacy quote uploaded for ${selectedSupplier.name} on RFQ ${selectedRfq?.rfq_number}. Total: ₹${savedTotals.grandTotal.toLocaleString("en-IN")}. Submitted by ${user.name}.`,
         severity: "info",
         logged_at: new Date().toISOString(),
       });
@@ -780,6 +828,15 @@ export function LegacyQuoteUploadModal({
   const selectedRfq = rfqs.find((r) => r.id === selectedRfqId);
 
   const stepTitle = ["Select RFQ", "Select Vendor", "Upload & Review"][step - 1];
+
+  // Live totals for the summary box — line items + extra charges. Mirrors the
+  // submit-time computation so the displayed Grand Total === the saved total.
+  const totals = computeQuoteTotals(
+    editedExtracted,
+    extraCharges
+      .filter((c) => (parseFloat(c.amount) || 0) > 0)
+      .map((c) => ({ amount: parseFloat(c.amount) || 0, taxable: !!c.taxable })),
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1397,21 +1454,27 @@ export function LegacyQuoteUploadModal({
                     ))}
                   </div>
 
-                  {/* Totals */}
+                  {/* Totals — derived from line items + extra charges (single
+                       source of truth; matches the value saved on submit). */}
                   <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Total excl. GST</span>
+                      <span className="text-muted-foreground">Items (excl. GST)</span>
                       <span className="font-medium">
-                        {formatCurrency(editedExtracted.total_value)}
+                        {formatCurrency(totals.itemsExclGst)}
                       </span>
                     </div>
+                    {totals.extraBase > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Extra charges (excl. GST)</span>
+                        <span className="font-medium">
+                          {formatCurrency(totals.extraBase)}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">GST</span>
                       <span className="font-medium">
-                        {formatCurrency(
-                          (editedExtracted.total_with_gst ?? 0) -
-                            (editedExtracted.total_value ?? 0)
-                        )}
+                        {formatCurrency(totals.gstTotal)}
                       </span>
                     </div>
                     <div className="flex justify-between border-t border-border pt-2">
@@ -1419,7 +1482,7 @@ export function LegacyQuoteUploadModal({
                         Grand Total
                       </span>
                       <span className="font-bold text-primary text-base">
-                        {formatCurrency(editedExtracted.total_with_gst)}
+                        {formatCurrency(totals.grandTotal)}
                       </span>
                     </div>
                   </div>
