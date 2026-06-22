@@ -18,7 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   FileText, Send, MessageSquare, BarChart3, CheckCircle2, ShoppingCart,
   Archive, Search, RefreshCw, ArrowRight, Clock, User,
-  Landmark, Wallet, Receipt, XCircle, ExternalLink, Eye, AlertCircle,
+  Landmark, Wallet, Receipt, XCircle, ExternalLink, Eye, AlertCircle, Upload,
 } from "lucide-react";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -61,6 +61,7 @@ type PRCard = {
   po_number?: string;
   po_status?: string;
   po_grand_total?: number | null;
+  supplier_id?: string | null;
   supplier_name?: string;
   has_grn?: boolean;
   age_days: number;
@@ -219,6 +220,95 @@ export default function KanbanBoard() {
     user?.role === "procurement_executive" ||
     user?.role === "it_head" ||
     user?.role === "management";
+
+  // Procurement-direct invoice upload from a "Payment Done" card → uploads the
+  // invoice AND closes the PR in one step, skipping the "Invoice Left for Review"
+  // column (the uploader self-certifies — see audit note in the handler).
+  const [uploadCard, setUploadCard] = useState<PRCard | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+
+  const openUpload = (card: PRCard) => {
+    setUploadCard(card);
+    setUploadFile(null);
+  };
+  const closeUpload = () => {
+    setUploadCard(null);
+    setUploadFile(null);
+    setUploadBusy(false);
+  };
+
+  const uploadInvoiceAndClose = async () => {
+    if (!user || !uploadCard || !uploadCard.po_id || !uploadCard.po_number || !uploadCard.pr_id) return;
+    if (!uploadFile) { toast.error("Attach the invoice file or photo"); return; }
+    if (uploadFile.size > 15 * 1024 * 1024) { toast.error("File too large (max 15 MB)"); return; }
+
+    setUploadBusy(true);
+    try {
+      const now = new Date().toISOString();
+      const poNumber = uploadCard.po_number;
+      // Placeholder number — the AI parser can enrich it later from the file.
+      const autoInvoiceNumber = `PENDING-${poNumber}-${Date.now()}`;
+
+      // 1. Upload file to storage
+      const ext = uploadFile.name.split(".").pop() ?? "pdf";
+      const path = `pr-invoices/${uploadCard.pr_id}/${autoInvoiceNumber.replace(/[^a-z0-9-]/gi, "_")}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from("cps-quotes")
+        .upload(path, uploadFile, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: pubData } = supabase.storage.from("cps-quotes").getPublicUrl(path);
+      const fileUrl = pubData?.publicUrl ?? path;
+
+      // 2. Insert invoice as already-verified (procurement uploaded it directly)
+      const { error: insErr } = await supabase.from("invoices").insert({
+        invoice_number: autoInvoiceNumber,
+        file_path: fileUrl,
+        po_reference: poNumber,
+        supplier_id: uploadCard.supplier_id ?? null,
+        uploaded_by: user.id,
+        document_type: "invoice",
+        status: "verified",
+        needs_review: false,
+        verified_at: now,
+        verified_by: user.id,
+      } as any);
+      if (insErr) throw insErr;
+
+      // 3. Close the PO + PR (mirrors verifyAndClose)
+      const { error: poErr } = await supabase
+        .from("cps_purchase_orders")
+        .update({ status: "closed" })
+        .eq("id", uploadCard.po_id);
+      if (poErr) throw poErr;
+      const { error: prErr } = await supabase
+        .from("cps_purchase_requisitions")
+        .update({ status: "delivered" })
+        .eq("id", uploadCard.pr_id);
+      if (prErr) throw prErr;
+
+      // 4. Audit — record that procurement uploaded AND closed in one action
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+        action_type: "INVOICE_UPLOADED_PR_CLOSED",
+        entity_type: "purchase_order",
+        entity_id: uploadCard.po_id,
+        entity_number: poNumber,
+        description: `Invoice uploaded by procurement (${user.name ?? user.email}) and PR ${uploadCard.pr_number} closed directly — no separate review.`,
+        severity: "info",
+        logged_at: now,
+      });
+
+      toast.success(`Invoice uploaded — PR ${uploadCard.pr_number} closed`);
+      closeUpload();
+      await fetchAll();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to upload invoice");
+      setUploadBusy(false);
+    }
+  };
 
   const openReview = (card: PRCard) => {
     setReviewCard(card);
@@ -495,6 +585,7 @@ export default function KanbanBoard() {
           po_number: po?.po_number,
           po_status: po?.status,
           po_grand_total: po?.grand_total,
+          supplier_id: po?.supplier_id ?? null,
           supplier_name: po?.supplier_id ? supMap[po.supplier_id] : undefined,
           has_grn: hasGrn,
           age_days: daysBetween(pr.created_at),
@@ -947,6 +1038,19 @@ export default function KanbanBoard() {
                             Review Invoice
                           </button>
                         )}
+
+                        {/* Upload Invoice — procurement uploads the invoice directly
+                            from a paid PR and closes it in one step (skips review). */}
+                        {c.stage === "payment_done" && canVerifyAndClose && c.po_id && (
+                          <button
+                            type="button"
+                            className="mt-1 w-full rounded-md bg-sky-600 hover:bg-sky-700 text-white text-xs font-medium py-1.5 px-2 flex items-center justify-center gap-1"
+                            onClick={(e) => { e.stopPropagation(); openUpload(c); }}
+                          >
+                            <Upload className="h-3 w-3" />
+                            Upload Invoice & Close
+                          </button>
+                        )}
                       </button>
                     ))
                   )}
@@ -1046,6 +1150,50 @@ export default function KanbanBoard() {
                 </Button>
               </>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Procurement direct invoice upload — attach file → close PR immediately */}
+      <Dialog open={!!uploadCard} onOpenChange={(open) => { if (!open) closeUpload(); }}>
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Upload Invoice — {uploadCard?.pr_number}</DialogTitle>
+            <DialogDescription>
+              Attach the supplier invoice for PO {uploadCard?.po_number}. This closes
+              the PR straight away — no separate review step.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2">
+            <Input
+              type="file"
+              accept="application/pdf,image/*"
+              onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+            />
+            {uploadFile && (
+              <div className="rounded-md border border-border bg-muted/30 p-3 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">📄 {uploadFile.name}</p>
+                  <p className="text-xs text-muted-foreground">{(uploadFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                </div>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setUploadFile(null)} disabled={uploadBusy}>
+                  Remove
+                </Button>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={closeUpload} disabled={uploadBusy}>Cancel</Button>
+            <Button
+              className="bg-sky-600 hover:bg-sky-700 text-white"
+              onClick={uploadInvoiceAndClose}
+              disabled={uploadBusy || !uploadFile}
+            >
+              <Upload className="h-4 w-4 mr-1.5" />
+              {uploadBusy ? "Uploading…" : "Upload & Close PR"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
