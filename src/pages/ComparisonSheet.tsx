@@ -1403,18 +1403,24 @@ export default function ComparisonSheetPage() {
     ];
     if (!supplierIds.length) return null;
 
-    // Founder-approved + finance-sent POs in the last 30 days, same project, same supplier
+    // Founder-approved + finance-sent POs in the last 30 days, same project, same
+    // supplier. NOTE: we window on created_at (always populated) — NOT on
+    // founder_approved_at, because that approval-timestamp column is historically
+    // NULL on many genuinely-approved POs. Keying the 30-day filter off it would
+    // silently drop valid repeat orders (a NULL fails `>= cutoff`), forcing a
+    // needless override. founder_approval_status = 'approved' is the reliable
+    // approval signal; created_at is the reliable recency signal.
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 30);
     const { data: pos } = await supabase
       .from("cps_purchase_orders")
-      .select("id, po_number, founder_approved_at, supplier_id")
+      .select("id, po_number, founder_approved_at, finance_dispatch_sent_at, created_at, supplier_id")
       .eq("founder_approval_status", "approved")
       .eq("finance_dispatch_status", "sent")
       .eq("project_code", projectCode)
       .in("supplier_id", supplierIds)
-      .gte("founder_approved_at", cutoff.toISOString())
-      .order("founder_approved_at", { ascending: false });
+      .gte("created_at", cutoff.toISOString())
+      .order("created_at", { ascending: false });
     if (!pos?.length) return null;
 
     const prItemsWithId = plis.filter(li => li.item_id);
@@ -1448,7 +1454,9 @@ export default function ComparisonSheetPage() {
         return {
           poNumber: po.po_number as string,
           supplierName: (sup as any)?.name ?? "Unknown Supplier",
-          approvedAt: po.founder_approved_at as string,
+          // founder_approved_at is often NULL on approved POs — fall back to the
+          // dispatch/created date so the banner always shows a real date.
+          approvedAt: (po.founder_approved_at ?? po.finance_dispatch_sent_at ?? po.created_at) as string,
         };
       }
     }
