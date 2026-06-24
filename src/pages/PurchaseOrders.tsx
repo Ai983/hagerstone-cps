@@ -2995,12 +2995,6 @@ export default function PurchaseOrders() {
           <DialogHeader className="px-6 pt-6">
             <div className="flex items-center justify-between">
               <DialogTitle>{editMode ? "Edit Purchase Order" : "Purchase Order"}</DialogTitle>
-              {!viewLoading && viewPo && !editMode && ["draft", "pending_approval"].includes(viewPo.status) && isProcurementHead && (
-                <Button variant="outline" size="sm" onClick={startEditPo}>
-                  <PenLine className="h-3.5 w-3.5 mr-1.5" />
-                  Edit PO
-                </Button>
-              )}
             </div>
           </DialogHeader>
           <div className="px-6 pb-6 pt-2 space-y-6">
