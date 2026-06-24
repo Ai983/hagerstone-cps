@@ -1911,7 +1911,7 @@ export default function PurchaseOrders() {
         // 1. Supersede PO
         const { error: supErr } = await supabase
           .from("cps_purchase_orders")
-          .update({ status: "superseded", revision_reason: trimmedReason })
+          .update({ status: "superseded" })
           .eq("id", viewPo.id);
         if (supErr) throw supErr;
 
