@@ -1905,13 +1905,17 @@ export default function PurchaseOrders() {
         await fetchPoRows();
       } else {
         // REVISE: reset entire chain back to PR Review stage.
-        // Original PO is superseded; RFQ/quotes/comparison are cleared;
-        // PR goes back to pending so procurement restarts from PR Review.
+        // PO is marked cancelled (not superseded) because the unique index
+        // idx_unique_active_po_per_rfq only excludes cancelled/draft/rejected —
+        // superseded is still enforced unique per rfq_id, so a second superseded
+        // PO on the same RFQ would violate the constraint.
+        // The DB trigger skips PR sync when status = cancelled, so our manual
+        // PR reset below is not overwritten.
 
-        // 1. Supersede PO
+        // 1. Cancel PO (archived for revision)
         const { error: supErr } = await supabase
           .from("cps_purchase_orders")
-          .update({ status: "superseded" })
+          .update({ status: "cancelled", cancel_reason: `[REVISED] ${trimmedReason}` })
           .eq("id", viewPo.id);
         if (supErr) throw supErr;
 
