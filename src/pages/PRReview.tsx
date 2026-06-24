@@ -1233,7 +1233,7 @@ export default function PRReview() {
                                       <span className="inline-block text-[10px] font-semibold px-1.5 py-0.5 rounded bg-orange-100 text-orange-800">⚠ Out of Scope</span>
                                     )}
                                     <Input
-                                      className="h-8 text-sm min-w-[160px]"
+                                      className="h-8 text-sm min-w-[240px]"
                                       value={li.description}
                                       onChange={(e) => isEditable && updateItem(idx, { description: e.target.value })}
                                       readOnly={!isEditable}
