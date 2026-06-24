@@ -1922,11 +1922,18 @@ export default function PurchaseOrders() {
         // 2. Cancel RFQ + quotes + comparison sheet
         await teardownChain();
 
-        // 3. Reset PR to pending so it re-enters PR Review
+        // 3. Reset PR to pending and clear all verification state so it
+        //    re-enters PR Review as a fresh PR with no prior sign-offs.
         if (viewPo.pr_id) {
           await supabase
             .from("cps_purchase_requisitions")
-            .update({ status: "pending" })
+            .update({
+              status: "pending",
+              approval_sheet_status: null,
+              approval_sheet_ai_result: null,
+              approval_sheet_signed_off_by: null,
+              approval_sheet_uploaded_at: null,
+            })
             .eq("id", viewPo.pr_id);
         }
 
