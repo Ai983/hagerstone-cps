@@ -1848,19 +1848,43 @@ export default function PurchaseOrders() {
     try {
       const now = new Date().toISOString();
 
+      // Shared teardown: cancel RFQ, soft-delete its quotes, delete comparison sheet.
+      const teardownChain = async () => {
+        if (viewPo.rfq_id) {
+          await supabase
+            .from("cps_rfqs")
+            .update({ status: "cancelled" })
+            .eq("id", viewPo.rfq_id);
+          await supabase
+            .from("cps_quotes")
+            .update({ superseded_at: now, superseded_by: user.id })
+            .eq("rfq_id", viewPo.rfq_id)
+            .is("superseded_at", null);
+        }
+        if (viewPo.comparison_sheet_id) {
+          await supabase
+            .from("cps_comparison_sheets")
+            .delete()
+            .eq("id", viewPo.comparison_sheet_id);
+        }
+      };
+
       if (reviseCancelAction === "cancel") {
-        // Mark PO as cancelled
+        // 1. Cancel PO
         const { error: cancelErr } = await supabase
           .from("cps_purchase_orders")
           .update({ status: "cancelled", cancel_reason: trimmedReason })
           .eq("id", viewPo.id);
         if (cancelErr) throw cancelErr;
 
-        // Revert linked PR to validated so procurement can re-issue
+        // 2. Cancel RFQ + quotes + comparison sheet
+        await teardownChain();
+
+        // 3. Cancel PR
         if (viewPo.pr_id) {
           await supabase
             .from("cps_purchase_requisitions")
-            .update({ status: "validated" })
+            .update({ status: "cancelled" })
             .eq("id", viewPo.pr_id);
         }
 
@@ -1870,117 +1894,57 @@ export default function PurchaseOrders() {
           entity_id: viewPo.id,
           user_id: user.id,
           user_name: user.name ?? user.email ?? "",
-          description: `PO ${viewPo.po_number} cancelled. Reason: ${trimmedReason}`,
+          description: `PO ${viewPo.po_number} cancelled — RFQ, quotes, comparison sheet, and PR all cancelled. Reason: ${trimmedReason}`,
           logged_at: now,
         }]);
 
-        toast.success("PO cancelled — linked PR reverted to Validated");
+        toast.success("PO cancelled — entire procurement chain (RFQ, quotes, PR) cancelled");
         setReviseCancelOpen(false);
         setReviseCancelReason("");
+        setViewPo(null);
         await fetchPoRows();
-        await openView(viewPo.id);
       } else {
-        // Revise: supersede original, clone as new version
-        const newVersion = (viewPo.version ?? 1) + 1;
-        const newPoNumber = viewPo.po_number + `-R${newVersion - 1}`; // e.g. HI-PO-2026-0035-R1
+        // REVISE: reset entire chain back to PR Review stage.
+        // Original PO is superseded; RFQ/quotes/comparison are cleared;
+        // PR goes back to pending so procurement restarts from PR Review.
 
-        // Mark original as superseded
+        // 1. Supersede PO
         const { error: supErr } = await supabase
           .from("cps_purchase_orders")
-          .update({ status: "superseded" })
+          .update({ status: "superseded", revision_reason: trimmedReason })
           .eq("id", viewPo.id);
         if (supErr) throw supErr;
 
-        // Clone PO header — start in pending_approval so the founder workflow kicks in
-        const { data: newPoData, error: cloneErr } = await supabase
-          .from("cps_purchase_orders")
-          .insert([{
-            po_number: newPoNumber,
-            rfq_id: viewPo.rfq_id,
-            pr_id: viewPo.pr_id,
-            supplier_id: viewPo.supplier_id,
-            comparison_sheet_id: viewPo.comparison_sheet_id,
-            status: "draft",
-            version: newVersion,
-            project_code: viewPo.project_code,
-            ship_to_address: viewPo.ship_to_address,
-            bill_to_address: viewPo.bill_to_address,
-            payment_terms: viewPo.payment_terms,
-            delivery_terms: viewPo.delivery_terms,
-            delivery_date: viewPo.delivery_date,
-            penalty_clause: viewPo.penalty_clause,
-            total_value: viewPo.total_value,
-            gst_amount: viewPo.gst_amount,
-            grand_total: viewPo.grand_total,
-            bank_account_holder_name: viewPo.bank_account_holder_name,
-            bank_name: viewPo.bank_name,
-            bank_ifsc: viewPo.bank_ifsc,
-            bank_account_number: viewPo.bank_account_number,
-            advance_payments: Array.isArray((viewPo as any).advance_payments) ? (viewPo as any).advance_payments : [],
-            advance_paid_total: Number((viewPo as any).advance_paid_total ?? 0),
-            supplier_name_text: viewPo.supplier_name_text,
-            site_supervisor_id: viewPo.site_supervisor_id,
-            source: viewPo.source ?? "workflow",
-            hagerstone_gstin: viewPo.hagerstone_gstin ?? "09AAECH3768B1ZM",
-            created_by: user.id,
-            parent_po_id: viewPo.id,
-            revision_reason: trimmedReason,
-          }])
-          .select("id")
-          .single();
-        if (cloneErr) throw cloneErr;
+        // 2. Cancel RFQ + quotes + comparison sheet
+        await teardownChain();
 
-        const newPoId = (newPoData as any).id as string;
-
-        // Clone line items — fetch fresh from DB instead of trusting React state.
-        // (Previously read viewPoLineItems, which is empty during the brief window
-        // between PO header render and line items Promise resolving. A user clicking
-        // "Revise PO" in that window produced an empty revision — confirmed in prod.)
-        const { data: freshLineItems, error: liFetchErr } = await supabase
-          .from("cps_po_line_items")
-          .select("description, brand, quantity, unit, rate, gst_percent, gst_amount, total_value, hsn_code, sort_order, is_charge")
-          .eq("po_id", viewPo.id)
-          .order("sort_order", { ascending: true });
-        if (liFetchErr) throw liFetchErr;
-
-        const clonedItems = (freshLineItems ?? []).map((li: any) => ({
-          po_id: newPoId,
-          description: li.description,
-          brand: li.brand,
-          quantity: li.quantity,
-          unit: li.unit,
-          rate: li.rate,
-          gst_percent: li.gst_percent,
-          gst_amount: li.gst_amount,
-          total_value: li.total_value,
-          hsn_code: li.hsn_code,
-          sort_order: li.sort_order,
-          is_charge: li.is_charge ?? false,
-        }));
-        if (clonedItems.length > 0) {
-          const { error: lineErr } = await supabase.from("cps_po_line_items").insert(clonedItems);
-          if (lineErr) throw lineErr;
+        // 3. Reset PR to pending so it re-enters PR Review
+        if (viewPo.pr_id) {
+          await supabase
+            .from("cps_purchase_requisitions")
+            .update({ status: "pending" })
+            .eq("id", viewPo.pr_id);
         }
 
         await supabase.from("cps_audit_log").insert([{
-          action_type: "PO_REVISED",
+          action_type: "PO_REVISED_TO_PR",
           entity_type: "cps_purchase_orders",
-          entity_id: newPoId,
+          entity_id: viewPo.id,
           user_id: user.id,
           user_name: user.name ?? user.email ?? "",
-          description: `PO ${viewPo.po_number} revised to v${newVersion}. Reason: ${trimmedReason}. Original PO ID: ${viewPo.id}`,
+          description: `PO ${viewPo.po_number} revised — RFQ, quotes, and comparison sheet cleared. PR reverted to pending for re-review. Reason: ${trimmedReason}`,
           logged_at: now,
         }]);
 
-        toast.success(`PO revised — v${newVersion} created as draft. Edit the PO then send to founders for approval.`);
+        toast.success("PO revised — PR sent back to PR Review. Redirecting…");
         setReviseCancelOpen(false);
         setReviseCancelReason("");
+        setViewPo(null);
         await fetchPoRows();
-        // Open the new revision PO
-        await openView(newPoId);
+        navigate("/pr-review");
       }
     } catch (e: any) {
-      toast.error(e?.message || "Failed to process revision");
+      toast.error(e?.message || "Failed to process action");
     } finally {
       setReviseCancelSaving(false);
     }
@@ -4141,7 +4105,7 @@ export default function PurchaseOrders() {
                   }`}
                 >
                   <div className="text-sm font-semibold">📋 Revise PO</div>
-                  <div className="text-xs text-muted-foreground">Create a new version with updated line items. Original is archived.</div>
+                  <div className="text-xs text-muted-foreground">Restart from PR Review — edit items, get fresh quotes, raise new PO.</div>
                 </button>
                 <button
                   type="button"
@@ -4153,7 +4117,7 @@ export default function PurchaseOrders() {
                   }`}
                 >
                   <div className="text-sm font-semibold">❌ Cancel PO</div>
-                  <div className="text-xs text-muted-foreground">Permanently cancel. Linked PR reverts to Validated so a new PO can be raised.</div>
+                  <div className="text-xs text-muted-foreground">Permanently cancel everything — PO, RFQ, quotes, and PR all cancelled.</div>
                 </button>
               </div>
             </div>
@@ -4181,10 +4145,11 @@ export default function PurchaseOrders() {
               <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 space-y-1">
                 <div className="font-semibold">What happens on Revise:</div>
                 <ul className="list-disc pl-4 space-y-0.5">
-                  <li>Original PO is archived (no data lost)</li>
-                  <li>A new Draft v{(viewPo?.version ?? 1) + 1} PO is created with same supplier</li>
-                  <li>You can edit line items on the new PO</li>
-                  <li>New PO must go through founder approval again</li>
+                  <li>This PO is archived (superseded — no data lost)</li>
+                  <li>RFQ, all quotes, and comparison sheet are cleared</li>
+                  <li>PR goes back to <strong>PR Review</strong> (pending) — edit line items there</li>
+                  <li>Procurement reviews PR → creates new RFQ → collects fresh quotes → raises new PO → founder approval</li>
+                  <li>You will be redirected to PR Review automatically</li>
                 </ul>
               </div>
             )}
@@ -4193,8 +4158,10 @@ export default function PurchaseOrders() {
                 <div className="font-semibold">What happens on Cancel:</div>
                 <ul className="list-disc pl-4 space-y-0.5">
                   <li>PO is permanently cancelled</li>
-                  <li>Linked PR reverts to Validated status</li>
-                  <li>Procurement can create a new PO from scratch</li>
+                  <li>Linked RFQ is cancelled</li>
+                  <li>All quotes under the RFQ are removed</li>
+                  <li>Comparison sheet is deleted</li>
+                  <li>Linked PR is cancelled — a fresh PR must be raised to restart</li>
                 </ul>
               </div>
             )}
