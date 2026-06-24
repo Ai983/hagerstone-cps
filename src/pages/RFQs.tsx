@@ -1412,11 +1412,11 @@ export default function RFQs() {
                             <div className="space-y-1">
                               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">Line Items</p>
                               {expandedItems.map((item, idx) => (
-                                <div key={idx} className="flex items-center gap-4 text-xs py-1 border-b border-border/30 last:border-0">
+                                <div key={idx} className="flex flex-wrap items-start gap-x-4 gap-y-0.5 text-xs py-1 border-b border-border/30 last:border-0">
                                   <span className="text-muted-foreground w-5 shrink-0">{idx + 1}.</span>
-                                  <span className="flex-1 font-medium">{item.item_description}</span>
+                                  <span className="font-medium">{item.item_description}</span>
                                   <span className="text-muted-foreground shrink-0">{item.quantity ?? "—"} {item.unit ?? ""}</span>
-                                  {item.specs && <span className="text-muted-foreground/70 truncate max-w-[200px]" title={item.specs}>{item.specs}</span>}
+                                  {item.specs && <span className="text-muted-foreground/70 w-full pl-9">{item.specs}</span>}
                                 </div>
                               ))}
                             </div>
