@@ -4051,7 +4051,19 @@ export default function PurchaseOrders() {
                           setReviseCancelOpen(true);
                         }}
                       >
-                        Revise / Cancel PO
+                        Revise PO
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-red-300 text-red-700 hover:bg-red-50 text-xs"
+                        onClick={() => {
+                          setReviseCancelAction("cancel");
+                          setReviseCancelReason("");
+                          setReviseCancelOpen(true);
+                        }}
+                      >
+                        Cancel PO
                       </Button>
                     </div>
                   )}
@@ -4086,41 +4098,38 @@ export default function PurchaseOrders() {
       <Dialog open={reviseCancelOpen} onOpenChange={(o) => { if (!reviseCancelSaving) { setReviseCancelOpen(o); setReviseCancelReason(""); } }}>
         <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
           <DialogHeader>
-            <DialogTitle>Revise or Cancel PO</DialogTitle>
+            <DialogTitle>
+              {reviseCancelAction === "revise" ? "📋 Revise PO" : "❌ Cancel PO"}
+            </DialogTitle>
             <DialogDescription>
               {viewPo ? `PO ${viewPo.po_number}${(viewPo.version ?? 1) > 1 ? ` (v${viewPo.version})` : ""}` : ""}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label className="text-sm font-semibold">Action</Label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setReviseCancelAction("revise")}
-                  className={`rounded-lg border-2 p-3 text-left space-y-1 transition-colors ${
-                    reviseCancelAction === "revise"
-                      ? "border-blue-500 bg-blue-50"
-                      : "border-border hover:border-blue-300"
-                  }`}
-                >
-                  <div className="text-sm font-semibold">📋 Revise PO</div>
-                  <div className="text-xs text-muted-foreground">Restart from PR Review — edit items, get fresh quotes, raise new PO.</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setReviseCancelAction("cancel")}
-                  className={`rounded-lg border-2 p-3 text-left space-y-1 transition-colors ${
-                    reviseCancelAction === "cancel"
-                      ? "border-red-500 bg-red-50"
-                      : "border-border hover:border-red-300"
-                  }`}
-                >
-                  <div className="text-sm font-semibold">❌ Cancel PO</div>
-                  <div className="text-xs text-muted-foreground">Permanently cancel everything — PO, RFQ, quotes, and PR all cancelled.</div>
-                </button>
+            {/* Explanation — shown first so user understands before confirming */}
+            {reviseCancelAction === "revise" ? (
+              <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 space-y-1">
+                <div className="font-semibold">What will happen:</div>
+                <ul className="list-disc pl-4 space-y-0.5">
+                  <li>This PO will be archived (superseded — no data lost)</li>
+                  <li>The linked RFQ, all quotes, and comparison sheet will be cleared</li>
+                  <li>The PR will go back to <strong>PR Review</strong> so you can edit line items</li>
+                  <li>You restart the full flow: PR Review → new RFQ → fresh quotes → new PO → founder approval</li>
+                  <li>You will be redirected to PR Review automatically</li>
+                </ul>
               </div>
-            </div>
+            ) : (
+              <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-800 space-y-1">
+                <div className="font-semibold">What will happen:</div>
+                <ul className="list-disc pl-4 space-y-0.5">
+                  <li>This PO will be permanently cancelled</li>
+                  <li>The linked RFQ will be cancelled</li>
+                  <li>All quotes under the RFQ will be removed</li>
+                  <li>The comparison sheet will be deleted</li>
+                  <li>The linked PR will be cancelled — a fresh PR must be raised to restart</li>
+                </ul>
+              </div>
+            )}
             <div className="space-y-1">
               <Label className="text-sm font-semibold">
                 Reason <span className="text-red-500">*</span>
@@ -4141,41 +4150,17 @@ export default function PurchaseOrders() {
                 {reviseCancelReason.trim().length}/20 min
               </div>
             </div>
-            {reviseCancelAction === "revise" && (
-              <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 space-y-1">
-                <div className="font-semibold">What happens on Revise:</div>
-                <ul className="list-disc pl-4 space-y-0.5">
-                  <li>This PO is archived (superseded — no data lost)</li>
-                  <li>RFQ, all quotes, and comparison sheet are cleared</li>
-                  <li>PR goes back to <strong>PR Review</strong> (pending) — edit line items there</li>
-                  <li>Procurement reviews PR → creates new RFQ → collects fresh quotes → raises new PO → founder approval</li>
-                  <li>You will be redirected to PR Review automatically</li>
-                </ul>
-              </div>
-            )}
-            {reviseCancelAction === "cancel" && (
-              <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-800 space-y-1">
-                <div className="font-semibold">What happens on Cancel:</div>
-                <ul className="list-disc pl-4 space-y-0.5">
-                  <li>PO is permanently cancelled</li>
-                  <li>Linked RFQ is cancelled</li>
-                  <li>All quotes under the RFQ are removed</li>
-                  <li>Comparison sheet is deleted</li>
-                  <li>Linked PR is cancelled — a fresh PR must be raised to restart</li>
-                </ul>
-              </div>
-            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setReviseCancelOpen(false); setReviseCancelReason(""); }} disabled={reviseCancelSaving}>
-              Back
+              Go Back
             </Button>
             <Button
               onClick={commitReviseCancel}
               disabled={reviseCancelSaving || reviseCancelReason.trim().length < 20}
               className={reviseCancelAction === "cancel" ? "bg-red-600 hover:bg-red-700 text-white" : "bg-blue-600 hover:bg-blue-700 text-white"}
             >
-              {reviseCancelSaving ? "Processing…" : reviseCancelAction === "revise" ? "Revise PO" : "Cancel PO"}
+              {reviseCancelSaving ? "Processing…" : reviseCancelAction === "revise" ? "Yes, Revise PO" : "Yes, Cancel PO"}
             </Button>
           </DialogFooter>
         </DialogContent>
