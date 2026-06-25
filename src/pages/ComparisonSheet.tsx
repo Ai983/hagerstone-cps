@@ -482,6 +482,30 @@ export default function ComparisonSheetPage() {
         });
       });
 
+      // Flat post-GST discount the vendor gave on the whole quote (captured at
+      // upload as ai_parsed_data.overall_discount). The header total_landed_value
+      // is ALREADY net of it, so emit a matching negative line first; the gap-fill
+      // below then reconciles to zero. Split 1.18 to keep subtotal/GST consistent.
+      {
+        const overallDiscount = Number((quoteFull as any)?.ai_parsed_data?.overall_discount) || 0;
+        if (overallDiscount > 1) {
+          const baseDisc = Math.round((overallDiscount / 1.18) * 100) / 100;
+          const gstDisc = Math.round((overallDiscount - baseDisc) * 100) / 100;
+          calcLineItems.push({
+            description: "Less: Discount on total",
+            quantity: 1,
+            unit: "lot",
+            rate: -baseDisc,
+            gst_percent: 18,
+            gst_amount: -gstDisc,
+            total_value: -baseDisc,
+            hsn_code: null,
+            brand: null,
+            is_charge: true,
+          });
+        }
+      }
+
       // Reconcile to the vendor's authoritative quoted total (see createPO) so the
       // founder preview matches the comparison sheet and the PO that gets created.
       {
@@ -3192,6 +3216,34 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           is_charge:         true,
         });
       });
+
+      // Flat post-GST discount the vendor gave on the whole quote. The header
+      // total_landed_value is already net of it, so add a matching negative line
+      // to the PO; the gap-fill below then reconciles to the header exactly.
+      {
+        const overallDiscount = Number((quoteFull as any)?.ai_parsed_data?.overall_discount) || 0;
+        if (overallDiscount > 1) {
+          const baseDisc = Math.round((overallDiscount / 1.18) * 100) / 100;
+          const gstDisc = Math.round((overallDiscount - baseDisc) * 100) / 100;
+          poLineItemsToInsert.push({
+            pr_line_item_id:   null,
+            item_id:           null,
+            description:       "Less: Discount on total",
+            brand:             null,
+            quantity:          1,
+            unit:              "lot",
+            rate:              -baseDisc,
+            gst_percent:       18,
+            freight:           0,
+            packing:           0,
+            total_landed_rate: -(baseDisc + gstDisc),
+            hsn_code:          null,
+            total_value:       -baseDisc,
+            gst_amount:        -gstDisc,
+            is_charge:         true,
+          });
+        }
+      }
 
       // Reconcile to the vendor's authoritative quoted total. Legacy quotes can
       // carry footer charges baked into the header total_landed_value that were

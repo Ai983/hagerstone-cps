@@ -116,6 +116,7 @@ const formatCurrency = (n: number | null | undefined) => {
 const computeQuoteTotals = (
   extracted: ExtractedData | null,
   charges: Array<{ amount: number; taxable: boolean }>,
+  overallDiscount = 0,
 ) => {
   const items = extracted?.line_items ?? [];
   const itemsExclGst = items.reduce((s, i) => s + Number(i.quantity ?? 0) * Number(i.rate ?? 0), 0);
@@ -124,6 +125,10 @@ const computeQuoteTotals = (
   const extraBase = charges.reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const extraGst = charges.reduce((s, c) => s + (Number(c.amount) || 0) * (c.taxable ? 0.18 : 0), 0);
   const round2 = (n: number) => Math.round(n * 100) / 100;
+  // Flat discount on the final grand total (post-GST). Clamp to [0, grand] so a
+  // typo can never push the landed total negative.
+  const grandBeforeDiscount = itemsInclGst + extraBase + extraGst;
+  const discount = Math.min(Math.max(0, Number(overallDiscount) || 0), grandBeforeDiscount);
   return {
     itemsExclGst: round2(itemsExclGst),
     itemsGst: round2(itemsGst),
@@ -133,7 +138,8 @@ const computeQuoteTotals = (
     extraInclGst: round2(extraBase + extraGst),
     totalExclGst: round2(itemsExclGst + extraBase),
     gstTotal: round2(itemsGst + extraGst),
-    grandTotal: round2(itemsInclGst + extraBase + extraGst),
+    overallDiscount: round2(discount),
+    grandTotal: round2(grandBeforeDiscount - discount),
   };
 };
 
@@ -318,6 +324,9 @@ export function LegacyQuoteUploadModal({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [extraCharges, setExtraCharges] = useState<Array<{ id: string; name: string; amount: string; taxable: boolean }>>([]);
+  // Flat lump-sum discount the vendor gives on the FINAL grand total (post-GST),
+  // not per item. Subtracts straight off the landed grand total. "" = none.
+  const [overallDiscount, setOverallDiscount] = useState("");
   const [advancePayments, setAdvancePayments] = useState<Array<{ id: string; amount: string; method: string; date: string; paid_to_name: string; reference_number: string; notes: string }>>([]);
 
   // ── Reset on close ──────────────────────────────────────────────────────────
@@ -338,6 +347,7 @@ export function LegacyQuoteUploadModal({
       setEditedExtracted(null);
       setNotes("");
       setExtraCharges([]);
+      setOverallDiscount("");
       setAdvancePayments([]);
     }
   }, [open, preselectedRfqId]);
@@ -654,9 +664,11 @@ export function LegacyQuoteUploadModal({
       // Canonical totals — exactly what the summary box shows. The landed total
       // INCLUDES extra charges; the quoted (subtotal) is items-only because the
       // comparison sheet adds the charge bases itself when it reconciles.
+      const overallDiscountValue = parseFloat(overallDiscount) || 0;
       const savedTotals = computeQuoteTotals(
         editedExtracted,
         cleanCharges.map((c) => ({ amount: c.amount, taxable: c.taxable })),
+        overallDiscountValue,
       );
 
       const { data: quote, error: qErr } = await supabase
@@ -687,6 +699,9 @@ export function LegacyQuoteUploadModal({
             total_value: savedTotals.itemsExclGst,
             total_with_gst: savedTotals.grandTotal,
             extra_charges: cleanCharges,
+            // Flat post-GST discount on the whole quote. Comparison sheet + PO
+            // build read this and emit a matching "Less: Discount on total" line.
+            overall_discount: savedTotals.overallDiscount || 0,
             advance_payments: cleanAdvances,
           },
           ai_extracted_vendor_details: editedExtracted,
@@ -864,6 +879,7 @@ export function LegacyQuoteUploadModal({
     extraCharges
       .filter((c) => (parseFloat(c.amount) || 0) > 0)
       .map((c) => ({ amount: parseFloat(c.amount) || 0, taxable: !!c.taxable })),
+    parseFloat(overallDiscount) || 0,
   );
 
   return (
@@ -1509,6 +1525,14 @@ export function LegacyQuoteUploadModal({
                         {formatCurrency(totals.gstTotal)}
                       </span>
                     </div>
+                    {totals.overallDiscount > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Discount on total</span>
+                        <span className="font-medium text-green-700">
+                          − {formatCurrency(totals.overallDiscount)}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between border-t border-border pt-2">
                       <span className="font-semibold text-foreground">
                         Grand Total
@@ -1517,6 +1541,24 @@ export function LegacyQuoteUploadModal({
                         {formatCurrency(totals.grandTotal)}
                       </span>
                     </div>
+                  </div>
+
+                  {/* Overall Discount — a flat lump-sum the vendor gives on the
+                       whole quote (post-GST), NOT a per-item discount. Subtracts
+                       straight off the Grand Total above. */}
+                  <div className="flex items-center justify-between gap-3 border border-border/60 rounded-lg p-3">
+                    <div>
+                      <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Overall Discount (₹)</div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">Flat discount on the whole quote total (after GST). Leave blank if the discount is already per item.</div>
+                    </div>
+                    <Input
+                      className="h-8 w-36 text-sm text-right"
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      value={overallDiscount}
+                      onChange={(e) => setOverallDiscount(e.target.value)}
+                    />
                   </div>
 
                   {/* Extra Charges (manual entry — flows into PO line items) */}
