@@ -317,6 +317,8 @@ export default function Quotes() {
   const [aiResult, setAiResult] = useState<any>(null);
   const [editedItems, setEditedItems] = useState<any[]>([]);
   const [extraCharges, setExtraCharges] = useState<Array<{ id: string; name: string; amount: string; taxable: boolean }>>([]);
+  // Flat lump-sum discount on the FINAL grand total (post-GST), not per item.
+  const [overallDiscount, setOverallDiscount] = useState("");
   const [advancePayments, setAdvancePayments] = useState<Array<{ id: string; amount: string; method: string; date: string; paid_to_name: string; reference_number: string; notes: string }>>([]);
   const [editedPaymentTerms, setEditedPaymentTerms] = useState("");
   const [editedDeliveryTerms, setEditedDeliveryTerms] = useState("");
@@ -575,6 +577,7 @@ export default function Quotes() {
     setAiResult(null);
     setEditedItems([]);
     setExtraCharges([]);
+    setOverallDiscount("");
     setAdvancePayments([]);
     setEditedPaymentTerms("");
     setEditedDeliveryTerms("");
@@ -659,6 +662,9 @@ export default function Quotes() {
           taxable: !!c.taxable,
         })));
       }
+      // Restore overall discount if previously saved (flat post-GST discount on total)
+      const prevDiscount = Number((qRow.ai_parsed_data as any)?.overall_discount) || 0;
+      if (prevDiscount > 0) setOverallDiscount(String(prevDiscount));
       // Restore advance payments if previously saved
       const prevAdvances = (qRow.ai_parsed_data as any)?.advance_payments;
       if (Array.isArray(prevAdvances)) {
@@ -921,9 +927,24 @@ export default function Quotes() {
       .from("cps_quote_line_items")
       .select("quantity, rate, gst_percent, freight, packing, is_charge")
       .eq("quote_id", quoteId);
-    const { total_quoted_value, total_landed_value } = headerTotalsFromLines(
-      (rows ?? []) as Parameters<typeof headerTotalsFromLines>[0],
-    );
+    const lines = (rows ?? []) as Parameters<typeof headerTotalsFromLines>[0];
+    const { total_quoted_value } = headerTotalsFromLines(lines);
+    let { total_landed_value } = headerTotalsFromLines(lines);
+    // Legacy quotes keep extra charges + a flat overall discount on the header
+    // (ai_parsed_data), NOT as is_charge line items. Fold them in so a single
+    // inline line-item edit never silently drops them from the landed total.
+    const { data: q } = await supabase
+      .from("cps_quotes").select("ai_parsed_data").eq("id", quoteId).maybeSingle();
+    const apd = (q as any)?.ai_parsed_data || {};
+    const hasChargeLines = (lines as any[]).some((l) => l.is_charge);
+    if (!hasChargeLines && Array.isArray(apd.extra_charges)) {
+      total_landed_value += apd.extra_charges.reduce((s: number, c: any) => {
+        const amt = Number(c?.amount) || 0;
+        return amt > 0 ? s + amt * (c?.taxable ? 1.18 : 1) : s;
+      }, 0);
+    }
+    const disc = Math.min(Math.max(0, Number(apd.overall_discount) || 0), total_landed_value);
+    total_landed_value -= disc;
     await supabase
       .from("cps_quotes")
       .update({ total_quoted_value, total_landed_value })
@@ -1199,7 +1220,11 @@ Rules:
         .filter((c) => c.name.trim() && parseFloat(c.amount) > 0)
         .map((c) => ({ name: c.name.trim(), amount: parseFloat(c.amount) || 0, taxable: !!c.taxable }));
       const extraTotal = cleanCharges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
-      const totalLanded = itemsLanded + extraTotal;
+      // Flat post-GST discount on the whole quote. Clamp to [0, grand] so it can
+      // never push the landed total negative.
+      const grandBeforeDiscount = itemsLanded + extraTotal;
+      const discountValue = Math.min(Math.max(0, parseFloat(overallDiscount) || 0), grandBeforeDiscount);
+      const totalLanded = grandBeforeDiscount - discountValue;
 
       // Clean advance payments — keep only entries with a positive amount
       const cleanAdvances = advancePayments
@@ -1220,7 +1245,7 @@ Rules:
       const complianceStatus = hasRates && hasPaymentTerms && hasDeliveryTerms && hasGST ? "compliant" : "pending";
 
       const { error: quoteErr } = await supabase.from("cps_quotes").update({
-        ai_parsed_data: { ...aiResult, extra_charges: cleanCharges, advance_payments: cleanAdvances },
+        ai_parsed_data: { ...aiResult, extra_charges: cleanCharges, overall_discount: discountValue, advance_payments: cleanAdvances },
         missing_fields: aiResult.missing_fields || [],
         ai_parse_confidence: aiResult.confidence,
         ai_summary: aiResult.notes,
@@ -1378,7 +1403,13 @@ Rules:
       const totalQuoted = reviewItems.length > 0
         ? reviewItems.reduce((s, li) => s + (Number(li.rate) || 0) * (Number(li.quantity) || 0), 0)
         : headerQuoted;
-      const totalLanded = reviewItems.length > 0
+      // Preserve extra charges + overall discount captured at upload/review so a
+      // plain "Approve" never silently drops them from the landed total.
+      const cleanCharges = extraCharges
+        .filter((c) => c.name.trim() && parseFloat(c.amount) > 0)
+        .map((c) => ({ amount: parseFloat(c.amount) || 0, taxable: !!c.taxable }));
+      const extraTotal = cleanCharges.reduce((s, c) => s + c.amount * (c.taxable ? 1.18 : 1), 0);
+      const itemsLanded = reviewItems.length > 0
         ? reviewItems.reduce((s, li) => {
             const r = Number(li.rate) || 0;
             const q = Number(li.quantity) || 0;
@@ -1388,6 +1419,9 @@ Rules:
             return s + q * (r * (1 + g / 100) + f + p);
           }, 0)
         : (headerLanded || headerQuoted);
+      const grandBeforeDiscount = itemsLanded + extraTotal;
+      const discountValue = Math.min(Math.max(0, parseFloat(overallDiscount) || 0), grandBeforeDiscount);
+      const totalLanded = grandBeforeDiscount - discountValue;
 
       const hasRates = reviewItems.length > 0
         ? reviewItems.some((li) => Number(li.rate) > 0)
@@ -2749,7 +2783,9 @@ Rules:
                         const extraGst = extraCharges.reduce((s, c) => s + (parseFloat(c.amount) || 0) * (c.taxable ? 0.18 : 0), 0);
                         const subtotalExclGst = subtotalMaterials + extraPreGst;
                         const gstAll = gstMaterials + extraGst;
-                        const autoGrand = subtotalExclGst + gstAll + freightPacking;
+                        const grandBeforeDiscount = subtotalExclGst + gstAll + freightPacking;
+                        const discountVal = Math.min(Math.max(0, parseFloat(overallDiscount) || 0), grandBeforeDiscount);
+                        const autoGrand = grandBeforeDiscount - discountVal;
                         return (
                           <div className="space-y-2 border-t border-border/60 pt-3">
                             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Quotation Total</div>
@@ -2758,6 +2794,7 @@ Rules:
                               {extraPreGst > 0 && <div className="flex justify-between text-[11px]"><span className="text-muted-foreground pl-2">of which extra charges</span><span className="text-muted-foreground">₹{fmt(extraPreGst)}</span></div>}
                               <div className="flex justify-between"><span className="text-muted-foreground">GST</span><span className="font-medium text-amber-700">₹{fmt(gstAll)}</span></div>
                               {freightPacking > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Freight + Packing</span><span className="font-medium">₹{fmt(freightPacking)}</span></div>}
+                              {discountVal > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Discount on total</span><span className="font-medium text-green-700">− ₹{fmt(discountVal)}</span></div>}
                               <div className="flex justify-between items-center border-t border-border pt-2 mt-1">
                                 <span className="font-semibold">Grand Total (landed)</span>
                                 <span className="text-base font-bold text-primary">₹{fmt(autoGrand)}</span>
@@ -2769,6 +2806,23 @@ Rules:
                           </div>
                         );
                       })()}
+
+                      {/* Overall Discount — flat lump-sum on the whole quote total
+                          (post-GST), NOT per item. Subtracts off the Grand Total. */}
+                      <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3">
+                        <div>
+                          <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Overall Discount (₹)</div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5">Flat discount on the whole quote total (after GST). Leave blank if the discount is already per item.</div>
+                        </div>
+                        <Input
+                          className="h-8 w-36 text-sm text-right"
+                          type="number"
+                          min="0"
+                          placeholder="0"
+                          value={overallDiscount}
+                          onChange={(e) => setOverallDiscount(e.target.value)}
+                        />
+                      </div>
 
                       {/* Advance Paid (cash / bank advances given to vendor before PO) */}
                       <div className="space-y-3 border-t border-border/60 pt-3">
