@@ -294,7 +294,7 @@ function RecordCashDialog({ advance, onClose, onDone }: { advance: Advance; onCl
       });
       const prompt = `This is a cash payment voucher for an advance. Extract JSON only: {"amount": number|null, "paid_to": string|null, "date": "YYYY-MM-DD"|null, "matches_request": boolean, "confidence": 0-100, "note": string}. The advance request is for ₹${advance.amount} to "${advance.supplier?.name ?? ""}". Set matches_request true only if the voucher amount and payee plausibly match.`;
       const resp = await callClaude({
-        model: "claude-sonnet-4-5", max_tokens: 400,
+        model: "claude-haiku-4-5-20251001", max_tokens: 400,
         messages: [{ role: "user", content: [
           { type: "text", text: prompt },
           { type: "image", source: { type: "base64", media_type: f.type || "image/jpeg", data: b64 } },

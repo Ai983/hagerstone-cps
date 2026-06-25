@@ -55,7 +55,7 @@ type Stage = "upload" | "parsing" | "review";
 
 const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/jpg"];
 const MAX_BYTES = 10 * 1024 * 1024;
-const CLAUDE_MODEL = "claude-sonnet-4-5";
+const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 
 // ---------------------------------------------------------------------------
 // Utility

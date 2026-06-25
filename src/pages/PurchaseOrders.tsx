@@ -2047,7 +2047,7 @@ export default function PurchaseOrders() {
       // 2. Call claude-proxy edge function
       const { data, error: fnErr } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-sonnet-4-5",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 1500,
           messages: [{
             role: "user",

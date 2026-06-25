@@ -175,7 +175,7 @@ export default function LegacyPOUploadModal({ open, onClose, onSuccess }: Legacy
 
       const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-sonnet-4-5",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 1024,
           messages: [
             {
@@ -267,7 +267,7 @@ Rules:
 
       const { data, error: fnErr } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-sonnet-4-5",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 300,
           messages: [{
             role: "user",

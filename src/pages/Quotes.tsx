@@ -1126,7 +1126,7 @@ Rules:
       // Step 5: Call Claude API via Edge Function (server-side key)
       const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-sonnet-4-5",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 6000,
           messages: [{ role: "user", content }],
         },
@@ -1523,7 +1523,7 @@ Rules:
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-5",
+          model: "claude-haiku-4-5-20251001",
           max_tokens: 512,
           messages: [{
             role: "user",
