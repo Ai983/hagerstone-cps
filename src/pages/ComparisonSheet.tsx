@@ -2984,7 +2984,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
 
       const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-4-5",
           max_tokens: 8000,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],
