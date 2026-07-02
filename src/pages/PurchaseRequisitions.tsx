@@ -648,6 +648,15 @@ function UploadInvoiceDialog({
       });
       if (insErr) throw insErr;
 
+      // Stop the invoice-deadline clock: mark this PO's delivery schedule as fulfilled so
+      // the daily cron no longer sends reminders or auto-blocks for it. The user-level PR
+      // block (cps_users.pr_blocked) is separate and stays manual — only the procurement
+      // head can unblock an already-blocked engineer from the dashboard.
+      await supabase
+        .from("cps_invoice_delivery_schedules")
+        .update({ status: "invoice_uploaded", updated_at: new Date().toISOString() })
+        .eq("po_id", poId);
+
       // Audit log — procurement team will verify and close
       await supabase.from("cps_audit_log").insert({
         user_id: user.id, user_name: user.name, user_role: user.role,
@@ -741,7 +750,7 @@ function UploadInvoiceDialog({
 }
 
 export default function PurchaseRequisitions() {
-  const { user, canViewPrices } = useAuth();
+  const { user, canViewPrices, isPrBlocked } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
@@ -1082,6 +1091,16 @@ export default function PurchaseRequisitions() {
   const paginatedFiltered = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const openWizard = () => {
+    // Block gate — an engineer who missed an invoice-upload deadline cannot raise new PRs
+    // until the procurement head unblocks them. Login + invoice upload stay allowed.
+    if (isPrBlocked) {
+      toast.error(
+        user?.pr_blocked_reason
+          ? `Aap block hain: ${user.pr_blocked_reason}. Pehle pending invoice upload karo, phir procurement head unblock karega.`
+          : "Aap block hain — pending invoice upload karo, phir procurement head unblock karega. Tab tak nayi PR nahi bana sakte.",
+      );
+      return;
+    }
     setWizardStep(1);
     setWizProjectId("");
     setWizProjectName("");
@@ -1106,6 +1125,24 @@ export default function PurchaseRequisitions() {
     if (searchParams.get("new") === "1" && !wizardOpen) {
       openWizard();
       // Clean up the URL so refresh doesn't reopen it
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // Deep-link from the Dashboard invoice nudge → auto-open the invoice upload for a
+  // specific PR: /requisitions?upload_pr=<prId>&upload_po_id=<poId>&upload_po_no=<poNumber>
+  useEffect(() => {
+    const uploadPr = searchParams.get("upload_pr");
+    const uploadPoId = searchParams.get("upload_po_id");
+    const uploadPoNo = searchParams.get("upload_po_no");
+    if (uploadPr && uploadPoId && uploadPoNo && !invoiceUploadOpen) {
+      void (async () => {
+        const { data: po } = await supabase
+          .from("cps_purchase_orders").select("supplier_id").eq("id", uploadPoId).maybeSingle();
+        setInvoiceUploadCtx({ poId: uploadPoId, poNumber: uploadPoNo, supplierId: (po as any)?.supplier_id ?? null, prId: uploadPr });
+        setInvoiceUploadOpen(true);
+      })();
       setSearchParams({}, { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1743,12 +1780,30 @@ export default function PurchaseRequisitions() {
           <p className="text-muted-foreground text-xs lg:text-sm mt-1">{t("Step 1 of procurement — raise a material request")}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={() => openWizard()} className="h-11 sm:h-9">
+          <Button onClick={() => openWizard()} disabled={isPrBlocked} className="h-11 sm:h-9">
             <Plus className="h-4 w-4 mr-2" />
             {t("New PR")}
           </Button>
         </div>
       </div>
+
+      {/* Blocked banner — engineer missed an invoice-upload deadline */}
+      {isPrBlocked && (
+        <Card className="border-red-300 bg-red-50">
+          <CardContent className="py-3 flex items-start gap-2">
+            <AlertTriangle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+            <div className="text-sm text-red-900">
+              <p className="font-semibold">Aap block hain — nayi PR nahi bana sakte</p>
+              <p className="text-[13px] text-red-800/90 mt-0.5">
+                {user?.pr_blocked_reason
+                  ? user.pr_blocked_reason
+                  : "Aapne delivery ke baad time par invoice upload nahi kiya."}{" "}
+                Pending invoice upload karein aur procurement head se unblock karwayein — tab tak nayi PR raise nahi hogi.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Pending Item Requests (requestor only) — shows status of new items user asked to add */}
       {isRequestor && pendingItemReqs.length > 0 && (

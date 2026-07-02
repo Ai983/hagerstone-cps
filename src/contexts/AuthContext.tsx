@@ -6,6 +6,8 @@ export type CpsRole = "requestor" | "procurement_executive" | "procurement_head"
 export interface CpsUser {
   id: string; email: string; name: string; role: CpsRole;
   department?: string; phone?: string; auth_uid: string;
+  /** True = blocked from raising new PRs (missed an invoice-upload deadline). Cleared only by a procurement head. */
+  pr_blocked?: boolean; pr_blocked_reason?: string | null;
 }
 
 interface AuthContextType {
@@ -23,6 +25,8 @@ interface AuthContextType {
    * permissions (cannot approve, create RFQ, manage suppliers, adjust stock).
    */
   isDesignTeam: boolean;
+  /** True = current user is blocked from raising new PRs (missed an invoice-upload deadline). */
+  isPrBlocked: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -139,6 +143,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       isManagement: role === "management",
       isEmployee: role === "requestor" || role === "site_receiver",
       isDesignTeam: role === "design_team",
+      isPrBlocked: user?.pr_blocked === true,
     }}>
       {children}
     </AuthContext.Provider>

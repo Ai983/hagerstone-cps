@@ -32,7 +32,8 @@ type StageKey =
   | "review"
   | "approval"       // awaiting founder approval
   | "finance"        // sent to finance, awaiting payment
-  | "payment_done"   // payments complete, awaiting invoice
+  | "payment_done"   // payments complete, awaiting delivery date
+  | "delivery_scheduled" // delivery date set, site engineer must upload invoice within deadline
   | "invoice_added"  // invoice uploaded by site team
   | "closed"         // PR fully closed
   | "cancelled";
@@ -78,6 +79,12 @@ type PRCard = {
   invoice_status?: string | null;
   invoice_rejection_reason?: string | null;
   is_cancelled?: boolean;
+  // Delivery scheduling / invoice deadline
+  requested_by_id?: string | null;
+  requested_by_email?: string | null;
+  delivery_date?: string | null;
+  invoice_deadline?: string | null;
+  schedule_status?: string | null;
 };
 
 const priorityCardStyle: Record<Priority, string> = {
@@ -113,7 +120,8 @@ const STAGES: Array<{
   { key: "review",        label: "4. Comparison Review", icon: BarChart3,     color: "text-amber-700",   bg: "bg-amber-50",   border: "border-amber-200",   desc: "Procurement reviewing" },
   { key: "approval",      label: "5. Pending Approval",  icon: CheckCircle2,  color: "text-orange-700",  bg: "bg-orange-50",  border: "border-orange-200",  desc: "Awaiting founder" },
   { key: "finance",       label: "6. Sent to Finance",   icon: Landmark,      color: "text-teal-700",    bg: "bg-teal-50",    border: "border-teal-200",    desc: "Awaiting payment" },
-  { key: "payment_done",  label: "7. Payment Done",      icon: Wallet,        color: "text-sky-700",     bg: "bg-sky-50",     border: "border-sky-200",     desc: "All payments complete" },
+  { key: "payment_done",  label: "7. Payment Done",      icon: Wallet,        color: "text-sky-700",     bg: "bg-sky-50",     border: "border-sky-200",     desc: "Set delivery date" },
+  { key: "delivery_scheduled", label: "7b. Delivery Scheduled", icon: Clock,    color: "text-cyan-700",    bg: "bg-cyan-50",    border: "border-cyan-200",    desc: "Awaiting site invoice upload" },
   { key: "invoice_added", label: "8. Invoice Left for Review", icon: Receipt,       color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", desc: "Verify invoice & close" },
   { key: "closed",        label: "9. Closed",            icon: Archive,       color: "text-slate-700",   bg: "bg-slate-50",   border: "border-slate-200",   desc: "PR fully closed" },
   { key: "cancelled",     label: "Cancelled",            icon: XCircle,       color: "text-red-700",     bg: "bg-red-50",     border: "border-red-200",     desc: "Request cancelled" },
@@ -156,6 +164,9 @@ const deriveStage = (
     has_invoice: boolean;
     finance_paid_at: string | null;
   } | null,
+  // Delivery-schedule row for this PO (set by procurement after payment). When it
+  // exists and there is no invoice yet, the card sits in the Delivery Scheduled column.
+  schedule: { exists: boolean } | null = null,
 ): StageKey => {
   if (prStatus === "cancelled") return "cancelled";
   if (po) {
@@ -167,7 +178,12 @@ const deriveStage = (
     if (po.has_invoice) return "invoice_added";
 
     // Payment complete — finance backend confirmed payment OR all schedules paid
-    if (po.finance_paid_at || (po.has_payment_schedules && po.all_paid)) return "payment_done";
+    if (po.finance_paid_at || (po.has_payment_schedules && po.all_paid)) {
+      // Once procurement records the delivery date, the card advances to the
+      // Delivery Scheduled column where the site engineer must upload the invoice.
+      if (schedule?.exists) return "delivery_scheduled";
+      return "payment_done";
+    }
 
     // Sent to finance (payment terms set, awaiting finance to pay)
     if (po.finance_dispatch_sent_at || po.sent_at || po.status === "sent") return "finance";
@@ -307,6 +323,88 @@ export default function KanbanBoard() {
     } catch (e: any) {
       toast.error(e?.message || "Failed to upload invoice");
       setUploadBusy(false);
+    }
+  };
+
+  // Delivery-date scheduling — procurement records the delivery date on a paid PR.
+  // This starts the site engineer's invoice-upload deadline clock and fires the
+  // Hinglish WhatsApp via n8n (webhook_delivery_dispatch).
+  const [schedCard, setSchedCard] = useState<PRCard | null>(null);
+  const [schedDate, setSchedDate] = useState("");
+  const [schedBusy, setSchedBusy] = useState(false);
+  const openSchedule = (card: PRCard) => { setSchedCard(card); setSchedDate(""); };
+  const closeSchedule = () => { setSchedCard(null); setSchedDate(""); setSchedBusy(false); };
+
+  const saveSchedule = async () => {
+    if (!user || !schedCard || !schedCard.po_id) return;
+    if (!schedDate) { toast.error("Delivery date chuno"); return; }
+    setSchedBusy(true);
+    try {
+      const now = new Date().toISOString();
+      // Deadline window from config (default 3 days).
+      const { data: cfg } = await supabase.from("cps_config").select("value").eq("key", "invoice_upload_deadline_days").maybeSingle();
+      const days = Number(cfg?.value) > 0 ? Number(cfg?.value) : 3;
+      const deadline = new Date(schedDate + "T00:00:00");
+      deadline.setDate(deadline.getDate() + days);
+      const deadlineISO = deadline.toISOString().slice(0, 10);
+
+      // 1. Upsert the schedule row (unique per po_id — re-setting overwrites)
+      const { error: insErr } = await supabase.from("cps_invoice_delivery_schedules").upsert({
+        pr_id: schedCard.pr_id,
+        pr_number: schedCard.pr_number,
+        po_id: schedCard.po_id,
+        po_number: schedCard.po_number ?? null,
+        site_engineer_id: schedCard.requested_by_id ?? null,
+        site_engineer_email: schedCard.requested_by_email ?? null,
+        delivery_date: schedDate,
+        invoice_deadline: deadlineISO,
+        status: "scheduled",
+        notified_at: now,
+        created_by: user.id,
+        updated_at: now,
+      } as any, { onConflict: "po_id" });
+      if (insErr) throw insErr;
+
+      // 2. Audit
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+        action_type: "DELIVERY_SCHEDULED",
+        entity_type: "purchase_order",
+        entity_id: schedCard.po_id,
+        entity_number: schedCard.po_number ?? null,
+        description: `Delivery date ${schedDate} set for PR ${schedCard.pr_number}; site engineer ${schedCard.requested_by_name} must upload the invoice by ${deadlineISO}.`,
+        severity: "info",
+        logged_at: now,
+      });
+
+      // 3. Fire-and-forget WhatsApp dispatch (n8n resolves phone via finance.employees)
+      const { data: hook } = await supabase.from("cps_config").select("value").eq("key", "webhook_delivery_dispatch").maybeSingle();
+      const webhookUrl = (hook?.value as string | undefined)?.trim();
+      if (webhookUrl) {
+        fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "delivery_scheduled",
+            pr_number: schedCard.pr_number,
+            po_number: schedCard.po_number,
+            delivery_date: schedDate,
+            invoice_deadline: deadlineISO,
+            engineer_id: schedCard.requested_by_id,
+            engineer_email: schedCard.requested_by_email,
+            engineer_name: schedCard.requested_by_name,
+          }),
+        }).catch(() => toast.warning("Delivery WhatsApp dispatch may have failed"));
+      }
+
+      toast.success(`Delivery date set — ${schedCard.requested_by_name} ko WhatsApp bhej diya`);
+      closeSchedule();
+      await fetchAll();
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to set delivery date");
+      setSchedBusy(false);
     }
   };
 
@@ -450,7 +548,7 @@ export default function KanbanBoard() {
       prRows.forEach((p) => { if (p.requested_by) userIdsToFetch.add(p.requested_by); });
       ((rfqsData ?? []) as any[]).forEach((r) => { if (r.created_by) userIdsToFetch.add(r.created_by); });
       const { data: usersData } = userIdsToFetch.size > 0
-        ? await supabase.from("cps_users").select("id, name").in("id", Array.from(userIdsToFetch))
+        ? await supabase.from("cps_users").select("id, name, email").in("id", Array.from(userIdsToFetch))
         : { data: [] };
 
       // Fetch payment schedules + invoices per PO
@@ -459,9 +557,11 @@ export default function KanbanBoard() {
       const [
         { data: paymentSchedulesData },
         { data: invoicesData },
+        { data: deliverySchedulesData },
       ] = await Promise.all([
         poIdList.length ? supabase.from("cps_po_payment_schedules").select("po_id, status, amount").in("po_id", poIdList) : Promise.resolve({ data: [] }),
         poNumberList.length ? supabase.from("invoices").select("id, invoice_number, invoice_date, total_amount, file_path, po_reference, created_at, status, rejection_reason").in("po_reference", poNumberList).order("created_at", { ascending: false }) : Promise.resolve({ data: [] }),
+        poIdList.length ? supabase.from("cps_invoice_delivery_schedules").select("po_id, delivery_date, invoice_deadline, status").in("po_id", poIdList) : Promise.resolve({ data: [] }),
       ]);
 
       // Build maps
@@ -469,7 +569,8 @@ export default function KanbanBoard() {
       (lineItems ?? []).forEach((li: any) => { itemCountByPr[li.pr_id] = (itemCountByPr[li.pr_id] ?? 0) + 1; });
 
       const userMap: Record<string, string> = {};
-      (usersData ?? []).forEach((u: any) => { userMap[u.id] = u.name; });
+      const userEmailMap: Record<string, string> = {};
+      (usersData ?? []).forEach((u: any) => { userMap[u.id] = u.name; if (u.email) userEmailMap[u.id] = u.email; });
 
       const rfqByPr: Record<string, any> = {};
       (rfqsData ?? []).forEach((r: any) => { rfqByPr[r.pr_id] = r; });
@@ -517,6 +618,14 @@ export default function KanbanBoard() {
         status: string | null;
         rejection_reason: string | null;
       }> = {};
+      // Delivery-schedule lookup by po_id (one row per PO)
+      const deliveryByPo: Record<string, { delivery_date: string | null; invoice_deadline: string | null; status: string | null }> = {};
+      ((deliverySchedulesData ?? []) as any[]).forEach((d) => {
+        if (d.po_id && !deliveryByPo[d.po_id]) {
+          deliveryByPo[d.po_id] = { delivery_date: d.delivery_date ?? null, invoice_deadline: d.invoice_deadline ?? null, status: d.status ?? null };
+        }
+      });
+
       ((invoicesData ?? []) as any[]).forEach((inv) => {
         if (inv.po_reference && !invoiceByPoNumber[inv.po_reference]) {
           invoiceByPoNumber[inv.po_reference] = {
@@ -548,6 +657,8 @@ export default function KanbanBoard() {
         // invoice means site needs to re-upload — stage should not show Invoice Added.
         const hasActiveInvoice = !!invoice && invoice.status !== "rejected";
 
+        const delivery = po ? deliveryByPo[po.id] : undefined;
+
         const stage = deriveStage(
           pr.status,
           rfq ? { status: rfq.status, quotes_count: qCount, has_approved_quote: qApproved > 0, comparison_status: compStatus } : null,
@@ -561,6 +672,7 @@ export default function KanbanBoard() {
             has_invoice: hasActiveInvoice,
             finance_paid_at: (po as any).finance_paid_at ?? null,
           } : null,
+          delivery ? { exists: true } : null,
         );
 
         return {
@@ -569,6 +681,8 @@ export default function KanbanBoard() {
           project_code: pr.project_code,
           project_site: pr.project_site,
           requested_by_name: userMap[pr.requested_by] ?? "—",
+          requested_by_id: pr.requested_by ?? null,
+          requested_by_email: pr.requested_by ? (userEmailMap[pr.requested_by] ?? null) : null,
           required_by: pr.required_by,
           created_at: pr.created_at,
           items_count: itemCountByPr[pr.id] ?? 0,
@@ -601,6 +715,9 @@ export default function KanbanBoard() {
           invoice_status: invoice?.status ?? null,
           invoice_rejection_reason: invoice?.rejection_reason ?? null,
           is_cancelled: pr.status === "cancelled",
+          delivery_date: delivery?.delivery_date ?? null,
+          invoice_deadline: delivery?.invoice_deadline ?? null,
+          schedule_status: delivery?.status ?? null,
         } as PRCard;
       });
 
@@ -648,7 +765,7 @@ export default function KanbanBoard() {
   const grouped = useMemo(() => {
     const g: Record<StageKey, PRCard[]> = {
       pr_raised: [], rfq_sent: [], quotes_in: [], review: [], approval: [],
-      finance: [], payment_done: [], invoice_added: [], closed: [], cancelled: [],
+      finance: [], payment_done: [], delivery_scheduled: [], invoice_added: [], closed: [], cancelled: [],
     };
     const rank: Record<Priority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
     filtered.forEach((c) => {
@@ -998,6 +1115,16 @@ export default function KanbanBoard() {
                                 <span>{c.all_paid ? "Paid" : `${c.payments_paid}/${c.payments_total} paid`}</span>
                               </div>
                             ) : null}
+                            {/* Delivery schedule — date set + invoice deadline for site team */}
+                            {c.delivery_date && (
+                              <div className={`flex items-center gap-1 ${c.schedule_status === "overdue_blocked" ? "text-red-700" : "text-cyan-700"}`}>
+                                <Clock className="h-2.5 w-2.5 shrink-0" />
+                                <span className="truncate">
+                                  Delivery {fmtDate(c.delivery_date)} · Invoice by {fmtDate(c.invoice_deadline)}
+                                  {c.schedule_status === "overdue_blocked" && " · OVERDUE"}
+                                </span>
+                              </div>
+                            )}
                             {/* Invoice link — procurement can click to view */}
                             {c.invoice_number && (
                               <div className="flex items-center gap-1 text-emerald-700">
@@ -1039,9 +1166,24 @@ export default function KanbanBoard() {
                           </button>
                         )}
 
-                        {/* Upload Invoice — procurement uploads the invoice directly
-                            from a paid PR and closes it in one step (skips review). */}
+                        {/* Set Delivery Date — procurement records the delivery date on a
+                            paid PR; this WhatsApps the site engineer + starts the invoice
+                            upload deadline. Primary action on the Payment Done column. */}
                         {c.stage === "payment_done" && canVerifyAndClose && c.po_id && (
+                          <button
+                            type="button"
+                            className="mt-1 w-full rounded-md bg-cyan-600 hover:bg-cyan-700 text-white text-xs font-medium py-1.5 px-2 flex items-center justify-center gap-1"
+                            onClick={(e) => { e.stopPropagation(); openSchedule(c); }}
+                          >
+                            <Clock className="h-3 w-3" />
+                            Set Delivery Date
+                          </button>
+                        )}
+
+                        {/* Upload Invoice — procurement fallback: upload the invoice directly
+                            and close in one step (skips site upload + review). Available on
+                            paid PRs whether or not a delivery date has been set. */}
+                        {(c.stage === "payment_done" || c.stage === "delivery_scheduled") && canVerifyAndClose && c.po_id && (
                           <button
                             type="button"
                             className="mt-1 w-full rounded-md bg-sky-600 hover:bg-sky-700 text-white text-xs font-medium py-1.5 px-2 flex items-center justify-center gap-1"
@@ -1198,6 +1340,49 @@ export default function KanbanBoard() {
         </DialogContent>
       </Dialog>
 
+      {/* Set Delivery Date dialog — starts the site engineer's invoice-upload deadline */}
+      <Dialog open={!!schedCard} onOpenChange={(open) => { if (!open) closeSchedule(); }}>
+        <DialogContent className="w-[calc(100vw-1rem)] max-w-md">
+          <DialogHeader>
+            <DialogTitle>Set Delivery Date — {schedCard?.pr_number}</DialogTitle>
+            <DialogDescription>
+              PO {schedCard?.po_number} · Site engineer <span className="font-medium">{schedCard?.requested_by_name}</span>.
+              On saving, {schedCard?.requested_by_name} gets a WhatsApp to upload the invoice
+              within the deadline, or they'll be blocked from raising new PRs.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="sched-date">Delivery Date</Label>
+              <Input
+                id="sched-date"
+                type="date"
+                value={schedDate}
+                onChange={(e) => setSchedDate(e.target.value)}
+              />
+            </div>
+            {!schedCard?.requested_by_email && (
+              <p className="text-xs text-amber-600">
+                ⚠ Is engineer ka email record mein nahi hai — WhatsApp nahi ja payega (block phir bhi lagega).
+              </p>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={closeSchedule} disabled={schedBusy}>Cancel</Button>
+            <Button
+              className="bg-cyan-600 hover:bg-cyan-700 text-white"
+              onClick={saveSchedule}
+              disabled={schedBusy || !schedDate}
+            >
+              <Clock className="h-4 w-4 mr-1.5" />
+              {schedBusy ? "Saving…" : "Set & Notify"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* PR Detail Dialog — opens on Kanban card click. Shows full PR journey + who's responsible */}
       <Dialog open={!!detailCard} onOpenChange={(open) => { if (!open) closeDetailDialog(); }}>
         <DialogContent className="w-[calc(100vw-1rem)] max-w-3xl max-h-[90vh] overflow-y-auto p-0 [&>button]:right-6 [&>button]:top-5 [&>button]:z-20 [&>button]:bg-background/80 [&>button]:rounded-full [&>button]:p-1">
@@ -1248,7 +1433,12 @@ export default function KanbanBoard() {
                 stuckSince = c.finance_dispatch_sent_at ?? null;
                 break;
               case "payment_done":
-                currentlyWith = "Site Engineer (invoice upload pending)";
+                currentlyWith = "Procurement (delivery date set karna hai)";
+                break;
+              case "delivery_scheduled":
+                currentlyWith = c.schedule_status === "overdue_blocked"
+                  ? `Site Engineer (invoice OVERDUE — deadline ${fmtDate(c.invoice_deadline)} nikal gayi)`
+                  : `Site Engineer (invoice upload pending — deadline ${fmtDate(c.invoice_deadline)})`;
                 break;
               case "invoice_added":
                 currentlyWith = "Procurement Executive (invoice verify karke close karna hai)";

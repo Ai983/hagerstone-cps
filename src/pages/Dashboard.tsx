@@ -7,11 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import {
   FileText, Send, MessageSquare, ShoppingCart, Truck, Users,
   IndianRupee, TrendingDown, BarChart3, ClipboardList, CheckCircle2,
-  Eye, Plus, ArrowRight, Bell,
+  Eye, Plus, ArrowRight, Bell, Unlock, ShieldAlert, AlertTriangle, Upload, Clock, Camera,
 } from "lucide-react";
 
 interface AuditRow {
@@ -40,7 +41,7 @@ interface NotifItem {
 }
 
 export default function Dashboard() {
-  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead, isEmployee, isDesignTeam } = useAuth();
+  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead, isEmployee, isDesignTeam, isPrBlocked } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
@@ -73,6 +74,17 @@ export default function Dashboard() {
   // Design Team Head — PRs awaiting her design acknowledgement on the verification gate
   type AckPendingPR = { id: string; pr_number: string; project_site: string; project_code: string | null };
   const [designAckPending, setDesignAckPending] = useState<AckPendingPR[]>([]);
+
+  // Procurement Head — site engineers blocked from raising PRs (missed invoice deadline)
+  type BlockedEngineer = { id: string; name: string; email: string | null; reason: string | null; blocked_at: string | null };
+  const [blockedEngineers, setBlockedEngineers] = useState<BlockedEngineer[]>([]);
+  const [unblockingId, setUnblockingId] = useState<string | null>(null);
+
+  // Site engineer — PRs where a delivery date is set and the invoice is still pending.
+  // Mirrors the WhatsApp reminder so a missed/failed message is still surfaced in-app.
+  type PendingInvoice = { schedule_id: string; pr_id: string; pr_number: string; po_id: string; po_number: string; delivery_date: string; invoice_deadline: string; overdue: boolean };
+  const [pendingInvoices, setPendingInvoices] = useState<PendingInvoice[]>([]);
+  const [invoiceNudgeOpen, setInvoiceNudgeOpen] = useState(false);
 
   const hideValues = user?.role === "requestor" || user?.role === "site_receiver";
   const lang: 'hi' = 'hi';
@@ -338,10 +350,98 @@ export default function Dashboard() {
           .map((p) => ({ id: p.id, pr_number: p.pr_number, project_site: p.project_site, project_code: p.project_code }));
         setDesignAckPending(pending);
       }
+
+      // Procurement Head — site engineers auto-blocked for missing an invoice deadline
+      if (isProcurementHead) {
+        const { data: blockedData } = await supabase
+          .from("cps_users")
+          .select("id, name, email, pr_blocked_reason, pr_blocked_at")
+          .eq("pr_blocked", true)
+          .order("pr_blocked_at", { ascending: false });
+        setBlockedEngineers(((blockedData ?? []) as any[]).map((u) => ({
+          id: u.id,
+          name: u.name,
+          email: u.email ?? null,
+          reason: u.pr_blocked_reason ?? null,
+          blocked_at: u.pr_blocked_at ?? null,
+        })));
+      }
+
+      // Site engineer — invoices still pending upload (delivery date set, not yet uploaded).
+      // Includes overdue_blocked rows so a blocked engineer can still find & upload them.
+      if (isEmployee && user?.id) {
+        const { data: schedData } = await supabase
+          .from("cps_invoice_delivery_schedules")
+          .select("id, pr_id, pr_number, po_id, po_number, delivery_date, invoice_deadline, status")
+          .eq("site_engineer_id", user.id)
+          .in("status", ["scheduled", "overdue_blocked"])
+          .order("invoice_deadline", { ascending: true });
+        const todayISO = new Date().toISOString().slice(0, 10);
+        const pending = ((schedData ?? []) as any[]).map((s) => ({
+          schedule_id: s.id,
+          pr_id: s.pr_id,
+          pr_number: s.pr_number,
+          po_id: s.po_id,
+          po_number: s.po_number,
+          delivery_date: s.delivery_date,
+          invoice_deadline: s.invoice_deadline,
+          overdue: s.status === "overdue_blocked" || (s.invoice_deadline && s.invoice_deadline < todayISO),
+        }));
+        setPendingInvoices(pending);
+        // Auto-popup every visit while an invoice is pending or the engineer is blocked
+        if (pending.length > 0 || isPrBlocked) setInvoiceNudgeOpen(true);
+      }
     } catch {
       toast.error("Failed to load dashboard data");
     }
     setLoading(false);
+  };
+
+  // Procurement head clears a site engineer's PR block. Also closes any leftover
+  // overdue schedules for them and WhatsApps the engineer that they're unblocked.
+  const unblockEngineer = async (eng: BlockedEngineer) => {
+    if (!user) return;
+    setUnblockingId(eng.id);
+    try {
+      const now = new Date().toISOString();
+      const { error: upErr } = await supabase
+        .from("cps_users")
+        .update({ pr_blocked: false, pr_unblocked_by: user.id, pr_unblocked_at: now })
+        .eq("id", eng.id);
+      if (upErr) throw upErr;
+
+      // Close any still-open overdue schedules for this engineer
+      await supabase
+        .from("cps_invoice_delivery_schedules")
+        .update({ status: "closed", updated_at: now })
+        .eq("site_engineer_id", eng.id)
+        .eq("status", "overdue_blocked");
+
+      await supabase.from("cps_audit_log").insert({
+        user_id: user.id, user_name: user.name, user_role: user.role,
+        action_type: "PR_UNBLOCK",
+        entity_type: "cps_users", entity_id: eng.id, entity_number: eng.name,
+        description: `${user.name ?? user.email} unblocked ${eng.name} — can raise PRs again.`,
+        severity: "info", logged_at: now,
+      });
+
+      // Fire-and-forget WhatsApp to the engineer (n8n resolves phone via finance.employees)
+      const { data: hook } = await supabase.from("cps_config").select("value").eq("key", "webhook_delivery_dispatch").maybeSingle();
+      const webhookUrl = (hook?.value as string | undefined)?.trim();
+      if (webhookUrl) {
+        fetch(webhookUrl, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ event: "engineer_unblocked", engineer_id: eng.id, engineer_email: eng.email, engineer_name: eng.name }),
+        }).catch(() => { /* non-blocking */ });
+      }
+
+      setBlockedEngineers((prev) => prev.filter((e) => e.id !== eng.id));
+      toast.success(`${eng.name} unblock ho gaya`);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to unblock");
+    } finally {
+      setUnblockingId(null);
+    }
   };
 
   const h = new Date().getHours();
@@ -353,6 +453,57 @@ export default function Dashboard() {
     if (hideValues) return "***";
     return "\u20B9" + n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
   };
+
+  // \u2500\u2500 Site-engineer invoice nudge helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  const fmtShortDate = (d: string | null) => {
+    if (!d) return "";
+    const dt = new Date(d + "T00:00:00");
+    if (Number.isNaN(dt.getTime())) return String(d);
+    return dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+  };
+  const daysLeft = (deadline: string) =>
+    Math.ceil((new Date(deadline + "T00:00:00").getTime() - new Date(new Date().toISOString().slice(0, 10) + "T00:00:00").getTime()) / 86400000);
+  const goUploadInvoice = (p: PendingInvoice) => {
+    setInvoiceNudgeOpen(false);
+    navigate(`/requisitions?upload_pr=${p.pr_id}&upload_po_id=${p.po_id}&upload_po_no=${encodeURIComponent(p.po_number)}`);
+  };
+
+  // Simple Hinglish "how to upload" steps \u2014 shown in the nudge dialog + card
+  const howToUploadJsx = (
+    <div className="rounded-md bg-muted/60 p-3 text-[13px] leading-relaxed">
+      <p className="font-semibold mb-1 flex items-center gap-1"><Camera className="h-3.5 w-3.5" /> Invoice kaise upload karein:</p>
+      <p>1\uFE0F\u20E3 Neeche PR ke <span className="font-medium">"\uD83D\uDCC4 Invoice Upload Karein"</span> button dabayein</p>
+      <p>2\uFE0F\u20E3 Bill / invoice ki saaf photo kheenchein (ya file chunein)</p>
+      <p>3\uFE0F\u20E3 <span className="font-medium">"Upload Karo"</span> dabayein \u2014 bas ho gaya! \u2705</p>
+      <p className="text-muted-foreground mt-1">Procurement team check karke aapki PR band kar degi.</p>
+    </div>
+  );
+
+  // The list of pending invoices with a direct upload button per PR
+  const pendingInvoiceListJsx = (
+    <div className="space-y-2">
+      {pendingInvoices.map((p) => {
+        const dl = daysLeft(p.invoice_deadline);
+        const late = dl < 0;
+        return (
+          <div key={p.schedule_id} className={`rounded-md border p-3 space-y-2 ${late ? "border-red-300 bg-red-50/60" : "border-amber-300 bg-amber-50/60"}`}>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="font-mono text-sm font-semibold">{p.pr_number}</span>
+              <Badge variant="outline" className={late ? "text-red-700 border-red-300" : "text-amber-700 border-amber-300"}>
+                {late ? `${Math.abs(dl)} din late` : dl === 0 ? "Aaj last din!" : `${dl} din baaki`}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Delivery: {fmtShortDate(p.delivery_date)} \u00B7 Invoice deadline: <span className="font-medium text-foreground">{fmtShortDate(p.invoice_deadline)}</span>
+            </p>
+            <Button className="w-full h-11 text-sm bg-primary" onClick={() => goUploadInvoice(p)}>
+              <Upload className="h-4 w-4 mr-1.5" /> Invoice Upload Karein
+            </Button>
+          </div>
+        );
+      })}
+    </div>
+  );
 
   const kpis = useMemo(() => {
     const base = [
@@ -453,9 +604,89 @@ export default function Dashboard() {
         </Card>
       )}
 
+      {/* Procurement Head — site engineers blocked for missing an invoice deadline */}
+      {isProcurementHead && blockedEngineers.length > 0 && (
+        <Card className="border-red-200 bg-red-50/50">
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-base font-semibold flex items-center gap-2 text-red-900">
+              <ShieldAlert className="h-4 w-4 text-red-700" />
+              Blocked Site Engineers
+            </CardTitle>
+            <Badge variant="outline" className="text-red-700 border-red-300 bg-red-50">
+              {blockedEngineers.length} blocked
+            </Badge>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="divide-y divide-border">
+              {blockedEngineers.map((eng) => (
+                <div key={eng.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="min-w-0">
+                    <span className="text-sm font-semibold text-red-800">{eng.name}</span>
+                    {eng.email && <span className="text-xs text-muted-foreground ml-2">{eng.email}</span>}
+                    <p className="text-xs text-muted-foreground truncate">
+                      {eng.reason ?? "Invoice deadline miss ki"}
+                      {eng.blocked_at && ` · ${new Date(eng.blocked_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}`}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="bg-green-600 hover:bg-green-700 text-white shrink-0"
+                    disabled={unblockingId === eng.id}
+                    onClick={() => unblockEngineer(eng)}
+                  >
+                    <Unlock className="h-3.5 w-3.5 mr-1" />
+                    {unblockingId === eng.id ? "…" : "Unblock"}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Employee simplified view */}
       {hideValues && (
         <div className="space-y-4">
+          {/* Blocked banner — engineer missed an invoice deadline */}
+          {isPrBlocked && (
+            <Card className="border-red-300 bg-red-50">
+              <CardContent className="p-4 space-y-2">
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-red-900">🚫 Aap block ho gaye hain</p>
+                    <p className="text-[13px] text-red-800/90 mt-0.5">
+                      Time par invoice upload na karne ki wajah se aap <span className="font-semibold">nayi PR nahi bana sakte</span>.
+                      Neeche di gayi pending invoice upload karein, phir procurement head aapko unblock karega.
+                    </p>
+                  </div>
+                </div>
+                <Button variant="outline" className="w-full h-10 border-red-300 text-red-800" onClick={() => setInvoiceNudgeOpen(true)}>
+                  Kya karna hai? Dekhein
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Pending-invoice reminder card (persistent, always visible while pending) */}
+          {!isPrBlocked && pendingInvoices.length > 0 && (
+            <Card className="border-amber-300 bg-amber-50/70">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-semibold text-amber-900 flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-amber-700" /> Invoice upload karna baaki hai
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-[13px] text-amber-800/90">
+                  Delivery ke baad <span className="font-semibold">3 din ke andar</span> invoice upload karein.
+                  Time par na kiya to aap nayi PR nahi bana payenge.
+                </p>
+                {pendingInvoiceListJsx}
+                {howToUploadJsx}
+              </CardContent>
+            </Card>
+          )}
+
           <div className="grid grid-cols-3 gap-2 sm:gap-3">
             <Card className="shadow-sm bg-blue-50">
               <CardContent className="p-3 sm:p-4">
@@ -476,12 +707,55 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           </div>
-          <Button className="w-full h-12 text-base" onClick={() => navigate('/requisitions?new=1')}>
+          <Button
+            className="w-full h-12 text-base"
+            onClick={() => { if (isPrBlocked) { setInvoiceNudgeOpen(true); } else { navigate('/requisitions?new=1'); } }}
+          >
             <Plus className="h-5 w-5 mr-2" /> Naya Saman Mangwao
           </Button>
+          {isPrBlocked && (
+            <p className="text-center text-xs text-red-600 -mt-2">
+              Aap abhi block hain — pehle pending invoice upload karein.
+            </p>
+          )}
 
         </div>
       )}
+
+      {/* Auto-popup invoice nudge — mirrors the WhatsApp so a missed/failed message is
+          still surfaced in-app. Shows on every dashboard visit while pending/blocked. */}
+      <Dialog open={invoiceNudgeOpen} onOpenChange={setInvoiceNudgeOpen}>
+        <DialogContent className="w-[calc(100vw-1.5rem)] max-w-md max-h-[88vh] overflow-y-auto rounded-lg">
+          <DialogHeader>
+            <DialogTitle className={isPrBlocked ? "text-red-700 flex items-center gap-2" : "text-amber-700 flex items-center gap-2"}>
+              {isPrBlocked ? <><ShieldAlert className="h-5 w-5" /> Aap block ho gaye hain</> : <><AlertTriangle className="h-5 w-5" /> Invoice upload karna baaki hai</>}
+            </DialogTitle>
+            <DialogDescription className="text-[13px] leading-relaxed pt-1">
+              {isPrBlocked
+                ? "Time par invoice upload na karne ki wajah se aap nayi PR nahi bana sakte. Neeche di gayi invoice upload karein — phir procurement head aapko unblock karega."
+                : "Delivery ke baad 3 din ke andar invoice upload karna zaroori hai. Time par na kiya to aap nayi PR nahi bana payenge aur aapko block kar diya jayega."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            {pendingInvoices.length > 0 ? (
+              <>
+                {pendingInvoiceListJsx}
+                {howToUploadJsx}
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {isPrBlocked
+                  ? "Procurement head se sampark karein taaki wo aapko unblock kar sakein."
+                  : "Abhi koi invoice pending nahi hai."}
+              </p>
+            )}
+            <Button variant="ghost" className="w-full h-10" onClick={() => setInvoiceNudgeOpen(false)}>
+              Theek hai, samajh gaya
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* KPI Cards — admin only */}
       {!hideValues && (
