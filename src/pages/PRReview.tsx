@@ -236,6 +236,9 @@ export default function PRReview() {
   const [verifyRecord, setVerifyRecord] = useState<any | null>(null);
   const [assigneeEmail, setAssigneeEmail] = useState<string | null>(null);
   const [returnReason, setReturnReason] = useState("");
+  // Optional free-text note procurement writes when sending the PR to the Design
+  // Team Head — shown to her in the Design section (and once verified).
+  const [procurementNote, setProcurementNote] = useState("");
 
   // ── Sequential two-gate acknowledgement (derived from the persisted record) ──
   // STRICT ORDER: procurement reviews & fills brand/make → acknowledges (this
@@ -364,6 +367,7 @@ export default function PRReview() {
     setVerifyAssigneeOk(false);
     setVerifyDesignOk(false);
     setReturnReason("");
+    setProcurementNote((pr.approval_sheet_ai_result as any)?.procurement_note ?? "");
     setPrVerifyStatus(pr.approval_sheet_status ?? null);
     setVerifyRecord(pr.approval_sheet_ai_result ?? null);
     setAssigneeEmail(null);
@@ -662,6 +666,7 @@ export default function PRReview() {
         assignee: prev.assignee ?? null,
         design_head: prev.design_head ?? null,
         design_skipped_reason: null,
+        procurement_note: prev.procurement_note ?? null,
         last_return: prev.last_return ?? null,
         confirmed_by: prev.confirmed_by ?? null,
         confirmed_by_name: prev.confirmed_by_name ?? null,
@@ -675,6 +680,8 @@ export default function PRReview() {
           user_id: user.id,
           agreed_at: nowIso,
         };
+        // Optional note procurement leaves for the Design Team Head.
+        record.procurement_note = procurementNote.trim() || null;
         // (Re)submitting to design — clear any prior/stale design sign-off.
         record.design_head = null;
       } else {
@@ -1504,6 +1511,17 @@ export default function PRReview() {
                           </div>
                         )}
 
+                        {/* Procurement's note to the Design Team Head — visible once
+                            procurement has acknowledged (while with design & after verified). */}
+                        {designRequired && procurementAgreed && verifyRecord?.procurement_note && (
+                          <div className="rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-[11px] text-blue-900 flex items-start gap-2">
+                            <FileText className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                            <span>
+                              <strong>Note from {verifyRecord?.assignee?.name ?? "Procurement"} for the Design Team Head:</strong> “{verifyRecord.procurement_note}”
+                            </span>
+                          </div>
+                        )}
+
                         {!verifyDocOpen && !verificationDone && !procurementAgreed && !sentBack && (
                           <>
                             <p className="text-xs text-amber-900/80">
@@ -1544,6 +1562,20 @@ export default function PRReview() {
                                 onConfirm: () => handleConfirmSection("procurement"),
                                 confirmLabel: designRequired ? "Acknowledge & send to Design" : "Acknowledge",
                                 pendingHint: "Awaiting the procurement team — they review and acknowledge this first.",
+                                footer: designRequired && canSignProcurement && !procurementAgreed ? (
+                                  <div className="mt-2 space-y-1.5">
+                                    <div className="text-[10px] font-semibold text-muted-foreground">
+                                      Note for the Design Team Head <span className="font-normal">(optional)</span>
+                                    </div>
+                                    <Textarea
+                                      rows={2}
+                                      className="text-xs resize-none bg-white"
+                                      placeholder="Anything the Design Team Head should know while reviewing this PR…"
+                                      value={procurementNote}
+                                      onChange={(e) => setProcurementNote(e.target.value)}
+                                    />
+                                  </div>
+                                ) : null,
                               })}
                               {designRequired && renderRoleSection({
                                 heading: "Design Team Head",
