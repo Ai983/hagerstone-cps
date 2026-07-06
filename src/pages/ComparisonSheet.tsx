@@ -438,7 +438,20 @@ export default function ComparisonSheetPage() {
       ]);
       if (qliErr) throw qliErr;
 
-      const calcLineItems = (quoteLineItems ?? []).map((li: any) => {
+      // Same defensive de-dup createPO uses, so the founder preview shows exactly
+      // the lines the PO will carry. Keyed on quantity+unit too, so legitimately
+      // distinct rows (same item/rate, different qty) are NOT collapsed.
+      const seenPreviewKeys = new Set<string>();
+      const previewLineItems = (quoteLineItems ?? []).filter((li: any) => {
+        const key = li.pr_line_item_id
+          ? `pr:${li.pr_line_item_id}`
+          : `d:${String(li.original_description ?? "").trim().toLowerCase()}|${String(li.brand ?? "").trim().toLowerCase()}|r:${Number(li.rate ?? 0)}|q:${Number(li.quantity ?? 0)}|u:${String(li.unit ?? "").trim().toLowerCase()}`;
+        if (seenPreviewKeys.has(key)) return false;
+        seenPreviewKeys.add(key);
+        return true;
+      });
+
+      const calcLineItems = previewLineItems.map((li: any) => {
         const qty = Number(li.quantity ?? 0);
         const rate = Number(li.rate ?? 0);
         const gstPct = Number(li.gst_percent ?? 0);
@@ -3141,13 +3154,21 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
       // re-review that failed to clear the old rows). The comparison sheet hides
       // this because it keys cells by PR-line × supplier, but the PO is built
       // 1:1 from these rows — so duplicates would double every line on the PO.
-      // Collapse rows that share the same PR line item (or the same
-      // description+brand+rate when unlinked) before building the PO.
+      // Collapse rows that share the same PR line item (or, when unlinked, are
+      // identical across description+brand+rate AND quantity+unit).
+      //
+      // Quantity + unit are part of the unlinked key ON PURPOSE: a legacy quote
+      // legitimately lists the same item at the same rate in two rows with
+      // different quantities (e.g. two areas of the same panel). Keying only on
+      // description+brand+rate wrongly dropped the second row as a "duplicate";
+      // the gap-fill below then re-surfaced its value as a bogus "Charges as per
+      // quotation" line. Including quantity+unit keeps genuinely distinct rows
+      // while still collapsing true exact-duplicate rows.
       const seenLiKeys = new Set<string>();
       const dedupedQuoteLineItems = (quoteLineItems ?? []).filter((li: any) => {
         const key = li.pr_line_item_id
           ? `pr:${li.pr_line_item_id}`
-          : `d:${String(li.original_description ?? "").trim().toLowerCase()}|${String(li.brand ?? "").trim().toLowerCase()}|${Number(li.rate ?? 0)}`;
+          : `d:${String(li.original_description ?? "").trim().toLowerCase()}|${String(li.brand ?? "").trim().toLowerCase()}|r:${Number(li.rate ?? 0)}|q:${Number(li.quantity ?? 0)}|u:${String(li.unit ?? "").trim().toLowerCase()}`;
         if (seenLiKeys.has(key)) return false;
         seenLiKeys.add(key);
         return true;
