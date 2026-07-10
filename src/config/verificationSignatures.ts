@@ -45,13 +45,14 @@ export function getProcurementSignature(email?: string | null): SignatureEntry |
  *
  * Matched case-insensitively as a substring against the PR's project_code (which
  * holds the project NAME) and project_site. The in-scope projects are:
- *   • Hero Homes — "Hero Homes Realty" + "Hero Home's MU - Greater Noida"
+ *   • Hero Homes — "Hero Home's MU - Greater Noida" only
+ *     (NOT "Hero Homes Realty" — procurement-only)
  *   • Bhuj / Dee Development — "Dee Development Engineers LTD - Admin" + "- Canteen"
  *     (NOT "Dee Foundation", which is a different Faridabad project)
  *   • Vaneet Infra, Koko Town, Sael Aerocity
  */
 export const DESIGN_REQUIRED_SITE_KEYWORDS = [
-  "Hero Home",        // both Hero Homes projects
+  "Hero Home",        // Hero Home's MU — see exclusions below for Hero Homes Realty
   "Dee Development",  // Dee Development Engineers (Bhuj) — excludes "Dee Foundation"
   "Bhuj",             // Bhuj / Dee Piping site references
   "Vaneet",           // Vaneet Infra
@@ -59,8 +60,14 @@ export const DESIGN_REQUIRED_SITE_KEYWORDS = [
   "Sael",             // Sael Aerocity
 ];
 
+/** Projects that match a keyword above but are explicitly procurement-only. Checked first. */
+export const DESIGN_EXCLUDED_SITE_KEYWORDS = [
+  "Hero Homes Realty",
+];
+
 /** True when this PR's project needs the Design Team Head sign-off (in addition to procurement). */
 export function isDesignRequiredSite(projectSite?: string | null, projectCode?: string | null): boolean {
   const hay = `${projectSite ?? ""} ${projectCode ?? ""}`.toLowerCase();
+  if (DESIGN_EXCLUDED_SITE_KEYWORDS.some((k) => hay.includes(k.toLowerCase()))) return false;
   return DESIGN_REQUIRED_SITE_KEYWORDS.some((k) => hay.includes(k.toLowerCase()));
 }
