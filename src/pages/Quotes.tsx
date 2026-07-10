@@ -1551,12 +1551,11 @@ Rules:
         reader.onerror = rej;
         reader.readAsDataURL(newVendorFile);
       });
-      const { data: urlData } = await supabase.from("cps_config").select("value").eq("key", "supabase_url").maybeSingle();
-      const proxyUrl = `${import.meta.env.VITE_SUPABASE_URL ?? "https://tpfvnerrjhqwipyonngf.supabase.co"}/functions/v1/claude-proxy`;
-      const resp = await fetch(proxyUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      // invoke() rather than a bare fetch: it attaches the caller's Authorization
+      // header, which claude-proxy requires now that verify_jwt is on. A raw fetch
+      // sends no bearer and is rejected at the gateway before it reaches the function.
+      const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
+        body: {
           model: "claude-haiku-4-5-20251001",
           max_tokens: 512,
           messages: [{
@@ -1566,9 +1565,9 @@ Rules:
               { type: "text", text: `Extract vendor/supplier details from this document. Return ONLY a JSON object with these fields (omit any you cannot clearly read): {"name":"company name","phone":"phone number","email":"email address","city":"city name","gstin":"GST number"}` }
             ]
           }]
-        })
+        }
       });
-      const result = await resp.json();
+      if (fnError) throw fnError;
       const text = result?.content?.[0]?.text ?? "";
       const match = text.match(/\{[\s\S]*\}/);
       if (match) {
