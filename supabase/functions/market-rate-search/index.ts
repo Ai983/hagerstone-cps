@@ -6,12 +6,14 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// A priced answer is stable for a week. A "no data" answer is cached too, but only
+// A priced answer is stable for a month. A "no data" answer is cached too, but only
 // briefly: previously it was not cached at all, so every repeat of an item Claude
 // can't price re-ran the model AND its billed web searches, forever, on every click.
-// A short TTL stops the loop without poisoning the cache for a week — the original
+// A short TTL stops the loop without poisoning the cache for a month — the original
 // concern that kept these out of the cache in the first place.
-const CACHE_TTL_DAYS = 7;
+// Priced TTL raised 7 -> 30 days (2026-07-16 cost reduction): construction/interior
+// material rates don't move week-to-week, and each cache miss re-bills web searches.
+const CACHE_TTL_DAYS = 30;
 const PRICED_TTL_MS = CACHE_TTL_DAYS * 24 * 60 * 60 * 1000;
 const NO_DATA_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -88,7 +90,7 @@ serve(async (req) => {
     }
     const supabase = createClient(supabaseUrl, supabaseKey, { db: { schema: "cps" } });
 
-    // Cache lookup. TTL depends on what is stored: a real price keeps for a week, a
+    // Cache lookup. TTL depends on what is stored: a real price keeps for a month, a
     // "no data" verdict only for a day, so an item Claude can't price today gets
     // retried tomorrow rather than on every single click.
     if (!force_refresh) {
@@ -176,7 +178,7 @@ serve(async (req) => {
 
     // Cache the verdict either way. Claude answered; "no price exists for this item"
     // is a real answer worth remembering for a day. The read path above expires it
-    // 7x sooner than a priced one.
+    // 30x sooner than a priced one.
     //
     // But never let an unpriced result overwrite a priced one. force_refresh skips the
     // read above, so a refresh that happens to come back empty would otherwise destroy
