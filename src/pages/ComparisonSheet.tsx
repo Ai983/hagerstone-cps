@@ -41,6 +41,72 @@ async function resolveToSignedUrl(storedValue: string): Promise<string | null> {
   return data?.signedUrl ?? null;
 }
 
+// --- Fuzzy item-text matching (used by the repeat-order exemption) ------------
+// PR/PO line descriptions are free text typed by different people, so the same
+// material shows up with minor spelling/wording drift ("Tiger lorex safety
+// shoes" vs "safety shoes", "PVC pipe 110mm" vs "110 mm pvc pipe"). Exact text
+// equality was rejecting genuine repeats, so we match tolerantly instead.
+const normalizeItemText = (s: string): string =>
+  (s ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ") // drop punctuation
+    .replace(/(\d)([a-z])/g, "$1 $2") // split digit↔unit ("110mm" → "110 mm")
+    .replace(/([a-z])(\d)/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const tokenizeItemText = (s: string): string[] =>
+  normalizeItemText(s)
+    .split(" ")
+    .filter((t) => t.length > 1); // ignore single-char noise ("x", "-")
+
+// Levenshtein distance → similarity ratio in [0,1]. Catches spelling typos on
+// short strings ("cemnet" vs "cement").
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  let curr = new Array<number>(n + 1);
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
+// True if two line descriptions plausibly refer to the same material.
+// Combines three signals and takes the most generous:
+//  - Levenshtein ratio of the full normalized strings (spelling drift)
+//  - token Jaccard (word-order / extra-word drift)
+//  - token containment (one description is a subset of the other, e.g. a short
+//    PR line "safety shoes" inside a longer PO line "tiger lorex safety shoes")
+// Same-vendor + same-project + 30-day + founder-approved still gate the
+// exemption around this, so erring tolerant here is intentional and safe.
+const ITEM_MATCH_THRESHOLD = 0.8;
+function itemDescriptionsMatch(a: string, b: string): boolean {
+  const na = normalizeItemText(a);
+  const nb = normalizeItemText(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+
+  const levRatio = 1 - levenshtein(na, nb) / Math.max(na.length, nb.length);
+
+  const ta = new Set(tokenizeItemText(a));
+  const tb = new Set(tokenizeItemText(b));
+  let intersection = 0;
+  for (const t of ta) if (tb.has(t)) intersection++;
+  const union = ta.size + tb.size - intersection;
+  const jaccard = union ? intersection / union : 0;
+  const containment = intersection / Math.max(1, Math.min(ta.size, tb.size));
+
+  return Math.max(levRatio, jaccard, containment) >= ITEM_MATCH_THRESHOLD;
+}
+
 type ManualReviewStatus = "pending" | "in_review" | "reviewed" | "sent_for_approval";
 
 type ComparisonSheetRow = {
@@ -1420,8 +1486,8 @@ export default function ComparisonSheetPage() {
     return false;
   }, [sheet, canApprove, canCreateRFQ]);
 
-  // Repeat-order exemption: waives the 3-quote minimum if a founder-approved,
-  // finance-sent PO exists within 30 days for the same project + vendor + ALL materials.
+  // Repeat-order exemption: waives the 3-quote minimum if a founder-approved
+  // PO exists within 30 days for the same project + vendor + ALL materials.
   const checkRepeatOrderExemption = async (
     plis: PrLineItem[],
     currentRfqId: string,
@@ -1440,20 +1506,22 @@ export default function ComparisonSheetPage() {
     ];
     if (!supplierIds.length) return null;
 
-    // Founder-approved + finance-sent POs in the last 30 days, same project, same
-    // supplier. NOTE: we window on created_at (always populated) — NOT on
+    // Founder-approved POs in the last 30 days, same project, same supplier.
+    // NOTE: we window on created_at (always populated) — NOT on
     // founder_approved_at, because that approval-timestamp column is historically
     // NULL on many genuinely-approved POs. Keying the 30-day filter off it would
     // silently drop valid repeat orders (a NULL fails `>= cutoff`), forcing a
     // needless override. founder_approval_status = 'approved' is the reliable
     // approval signal; created_at is the reliable recency signal.
+    // We deliberately do NOT require finance_dispatch_status = 'sent': the
+    // founder's approval is what authorises the repeat, and dispatch often lags
+    // (or is completed out-of-band), which was false-failing genuine repeats.
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 30);
     const { data: pos } = await supabase
       .from("cps_purchase_orders")
       .select("id, po_number, founder_approved_at, finance_dispatch_sent_at, created_at, supplier_id")
       .eq("founder_approval_status", "approved")
-      .eq("finance_dispatch_status", "sent")
       .eq("project_code", projectCode)
       .in("supplier_id", supplierIds)
       .gte("created_at", cutoff.toISOString())
@@ -1471,15 +1539,14 @@ export default function ComparisonSheetPage() {
       if (!poLines?.length) continue;
 
       const poItemIds = new Set(poLines.map((l: any) => l.item_id as string).filter(Boolean));
-      const poDescs   = new Set(
-        poLines.map((l: any) =>
-          ((l.description ?? "") as string).toLowerCase().trim()
-        )
-      );
+      const poDescs   = poLines.map((l: any) => (l.description ?? "") as string);
 
       const idOk   = prItemsWithId.every(li => poItemIds.has(li.item_id!));
+      // Free-text lines: tolerant fuzzy match against any PO line (see
+      // itemDescriptionsMatch) so minor spelling/wording drift on the same
+      // material doesn't force an override.
       const descOk = prItemsNoId.every(li =>
-        poDescs.has((li.description ?? "").toLowerCase().trim())
+        poDescs.some(pd => itemDescriptionsMatch(li.description ?? "", pd))
       );
 
       if (idOk && descOk) {
