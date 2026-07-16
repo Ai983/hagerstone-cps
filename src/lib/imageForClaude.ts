@@ -51,6 +51,10 @@ export const downscaleImageToJpegBase64 = (
         reject(new Error("Canvas not supported in this browser"));
         return;
       }
+      // JPEG has no alpha — without this, transparent PNG regions render BLACK
+      // and the document becomes unreadable. Paint white first, like paper.
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
       // 0.85 quality keeps printed/handwritten text crisp while staying well
       // under the 5 MB limit for a 1568 px JPEG.
