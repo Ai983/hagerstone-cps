@@ -2,6 +2,7 @@ import React, { useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { callClaude } from "@/lib/claudeProxy";
+import { fileToClaudeBlock } from "@/lib/imageForClaude";
 import {
   Dialog,
   DialogContent,
@@ -65,12 +66,8 @@ export default function GrnUploadDialog({
     setExtracting(true);
     setError(null);
     try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve((reader.result as string).split(",")[1] || "");
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      // Downscaled to ≤1568px JPEG — GRN photos from site phones are multi-MB.
+      const imageBlock = await fileToClaudeBlock(file);
 
       // Call Claude proxy to extract GRN details
       const result = await callClaude({
@@ -80,10 +77,7 @@ export default function GrnUploadDialog({
           {
             role: "user",
             content: [
-              {
-                type: "image",
-                source: { type: "base64", media_type: file.type as "image/png" | "image/jpeg", data: base64 },
-              },
+              imageBlock,
               {
                 type: "text",
                 text: `Extract GRN (Goods Receipt Note) details from this document. Return JSON with:

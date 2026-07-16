@@ -7,6 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
 import { CPS_UNITS, normalizeUnit, isCanonicalUnit } from "@/lib/units";
+import { fileToClaudeBlock } from "@/lib/imageForClaude";
 import logoUrl from "@/assets/optimisedlogo.png";
 
 import { Badge } from "@/components/ui/badge";
@@ -2028,19 +2029,9 @@ export default function PurchaseOrders() {
     if (!revisedQuoteFile || !viewPo) return;
     setRevisedQuoteParsing(true);
     try {
-      // 1. Convert file to base64
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve((reader.result as string).split(",")[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(revisedQuoteFile);
-      });
-
-      const mediaType = revisedQuoteFile.type as string;
-      const isPdf = mediaType === "application/pdf";
-      const contentBlock = isPdf
-        ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
-        : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
+      // 1. Encode — PDFs pass through, images are downscaled to ≤1568px JPEG
+      // (Anthropic-safe, sharper OCR, far fewer input tokens).
+      const contentBlock = await fileToClaudeBlock(revisedQuoteFile);
 
       const itemDescriptions = editLineItems.map((li, i) => `${i + 1}. ${li.description ?? ""}`).join("\n");
 

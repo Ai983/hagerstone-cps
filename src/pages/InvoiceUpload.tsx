@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { fileToClaudeBlock } from "@/lib/imageForClaude";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,18 +61,6 @@ const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
 // ---------------------------------------------------------------------------
 // Utility
 // ---------------------------------------------------------------------------
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
 
 function emptyInvoice(): ParsedInvoice {
   return {
@@ -159,31 +148,14 @@ export default function InvoiceUpload() {
       if (uploadError || !uploadData) throw new Error(uploadError?.message || "Upload failed");
       setUploadedPath(uploadData.path);
 
-      // 2. Download as blob and convert to base64
-      const { data: blob, error: dlError } = await supabase.storage
-        .from("cps-quotes")
-        .download(uploadData.path);
+      // 2. Encode straight from the selected file — PDFs pass through,
+      // images are downscaled to ≤1568px JPEG (sharper OCR, ~80% fewer tokens).
+      const contentBlock = await fileToClaudeBlock(selectedFile);
 
-      if (dlError || !blob) throw new Error("Failed to read uploaded file");
-      const base64 = await blobToBase64(blob);
-
-      // 3. Call Claude API
-      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
-      if (!apiKey) throw new Error("VITE_ANTHROPIC_API_KEY is not set");
-
-      const contentBlock = selectedFile.type === "application/pdf"
-        ? { type: "document", source: { type: "base64", media_type: selectedFile.type, data: base64 } }
-        : { type: "image", source: { type: "base64", media_type: selectedFile.type, data: base64 } };
-
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "anthropic-dangerous-direct-browser-access": "true",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      // 3. Call Claude via the claude-proxy edge function — the API key stays
+      // server-side (the old direct-browser call shipped it in the JS bundle).
+      const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
+        body: {
           model: CLAUDE_MODEL,
           max_tokens: 4000,
           messages: [{
@@ -229,16 +201,12 @@ export default function InvoiceUpload() {
               },
             ],
           }],
-        }),
+        },
       });
 
-      if (!response.ok) {
-        const errBody = await response.text();
-        throw new Error(`Claude API error ${response.status}: ${errBody}`);
-      }
+      if (fnError) throw new Error(`Claude proxy error: ${fnError.message}`);
 
-      const result = await response.json();
-      const rawText = result.content?.[0]?.text ?? "";
+      const rawText = result?.content?.[0]?.text ?? "";
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error("Claude did not return valid JSON");
 

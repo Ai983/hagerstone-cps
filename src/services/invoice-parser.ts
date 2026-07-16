@@ -108,12 +108,18 @@ export async function parseInvoiceWithClaude(
       },
     });
   } else if (isImage) {
+    // Downscale to ≤1568px JPEG before sending — callers hand us raw base64
+    // (e.g. Google Drive downloads), which for scans/photos is multi-MB.
+    // Claude discards pixels beyond 1568px anyway; we'd just pay for them.
+    const { downscaleImageToJpegBase64 } = await import("@/lib/imageForClaude");
+    const blob = await (await fetch(`data:${mimeType};base64,${base64Data}`)).blob();
+    const { data: jpegData, mediaType } = await downscaleImageToJpegBase64(blob);
     content.push({
       type: "image",
       source: {
         type: "base64",
-        media_type: mimeType,
-        data: base64Data,
+        media_type: mediaType,
+        data: jpegData,
       },
     });
   } else {

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { fileToClaudeBlock } from "@/lib/imageForClaude";
 import { useAuth } from "@/contexts/AuthContext";
 import { useDebounce } from "@/hooks/useDebounce";
 
@@ -118,13 +119,8 @@ export default function SupplierMaster() {
 
     setCardUploading(true);
     try {
-      // Convert to base64
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve((r.result as string).split(",")[1]);
-        r.onerror = reject;
-        r.readAsDataURL(file);
-      });
+      // Downscaled to ≤1568px JPEG — card photos are multi-MB; full size just burns tokens.
+      const imageBlock = await fileToClaudeBlock(file);
 
       const { data, error } = await supabase.functions.invoke("claude-proxy", {
         body: {
@@ -133,7 +129,7 @@ export default function SupplierMaster() {
           messages: [{
             role: "user",
             content: [
-              { type: "image", source: { type: "base64", media_type: file.type, data: base64 } },
+              imageBlock,
               {
                 type: "text",
                 text: `Extract business details from this visiting card / business card image. Return ONLY valid JSON (no markdown fences):

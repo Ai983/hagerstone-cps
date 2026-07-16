@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { fileToClaudeBlock } from "@/lib/imageForClaude";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -86,60 +87,8 @@ type ExtractedData = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const fileToBase64 = (file: File): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
-// Anthropic's vision API rejects an image (HTTP 400) when it is larger than 5 MB
-// or has a side longer than 8000 px, and internally downsamples anything whose
-// long edge exceeds ~1568 px regardless. Phone-camera photos of paper bills
-// routinely blow past those limits (3–8 MB, 4000 px+), which is what made the
-// proxy return a 400 and surface as "AI extraction failed". Downscale every
-// image to a safe long edge and re-encode as JPEG before sending: the raw photo
-// then always goes through, OCR is sharper, and token cost drops. PDFs and
-// already-small images are handled by the caller / left effectively untouched.
-const MAX_IMAGE_EDGE = 1568;
-
-const downscaleImageToJpegBase64 = (
-  file: File
-): Promise<{ data: string; mediaType: "image/jpeg" }> =>
-  new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const longEdge = Math.max(img.width, img.height);
-      const scale = longEdge > MAX_IMAGE_EDGE ? MAX_IMAGE_EDGE / longEdge : 1;
-      const w = Math.max(1, Math.round(img.width * scale));
-      const h = Math.max(1, Math.round(img.height * scale));
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        reject(new Error("Canvas not supported in this browser"));
-        return;
-      }
-      ctx.drawImage(img, 0, 0, w, h);
-      // 0.85 quality keeps printed/handwritten text crisp while staying well
-      // under the 5 MB limit for a 1568 px JPEG.
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-      resolve({ data: dataUrl.split(",")[1], mediaType: "image/jpeg" });
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Could not read image — try a JPEG/PNG screenshot"));
-    };
-    img.src = url;
-  });
+// File→Claude-block encoding (incl. the image downscaler born in this modal)
+// now lives in the shared @/lib/imageForClaude, used by all parse flows.
 
 const formatCurrency = (n: number | null | undefined) => {
   if (n == null) return "—";
@@ -192,22 +141,9 @@ const extractQuoteDetails = async (
 ): Promise<ExtractedData> => {
   const contentBlocks: any[] = [];
   for (const file of files) {
-    if (file.type === "application/pdf") {
-      const base64 = await fileToBase64(file);
-      contentBlocks.push({
-        type: "document",
-        source: { type: "base64", media_type: "application/pdf", data: base64 },
-      });
-    } else {
-      // Images (incl. large phone photos) are downscaled + re-encoded to JPEG so
-      // they never exceed Anthropic's 5 MB / 8000 px limits, and odd source
-      // formats are normalised to a media type the API accepts.
-      const { data, mediaType } = await downscaleImageToJpegBase64(file);
-      contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: mediaType, data },
-      });
-    }
+    // PDFs pass through as documents; images are downscaled + re-encoded to
+    // JPEG so they never exceed Anthropic's 5 MB / 8000 px limits.
+    contentBlocks.push(await fileToClaudeBlock(file));
   }
 
   const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {

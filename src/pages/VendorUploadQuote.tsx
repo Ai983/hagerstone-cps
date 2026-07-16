@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { fileToClaudeBlock } from "@/lib/imageForClaude";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -80,19 +81,9 @@ const parseWarrantyMonths = (s: string): number | null => {
 // ---------- AI extraction ----------
 
 const extractQuoteWithAI = async (files: File[], rfqItems: LineItem[]) => {
-  const fileBlocks = await Promise.all(files.map(async (file) => {
-    const base64 = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve((reader.result as string).split(",")[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    const mediaType = file.type as any;
-    const isPdf = mediaType === "application/pdf";
-    return isPdf
-      ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } }
-      : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
-  }));
+  // PDFs pass through; images are downscaled to ≤1568px JPEG (Anthropic-safe,
+  // sharper OCR, far fewer input tokens on multi-MB vendor phone photos).
+  const fileBlocks = await Promise.all(files.map((file) => fileToClaudeBlock(file)));
 
   const { supabase } = await import("@/integrations/supabase/client");
   const { data, error } = await supabase.functions.invoke("claude-proxy", {

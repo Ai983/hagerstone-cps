@@ -4,6 +4,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { headerTotalsFromLines, extraChargeToLineRow } from "@/lib/quoteTotals";
+import { downscaleImageToJpegBase64, fileToBase64, fileToClaudeBlock } from "@/lib/imageForClaude";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1048,18 +1049,7 @@ export default function Quotes() {
       if (!fileResponse.ok) throw new Error(`Failed to download file: ${fileResponse.status}`);
       const blob = await fileResponse.blob();
 
-      // Step 2: Convert to base64
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const result = reader.result as string;
-          resolve(result.split(",")[1]); // Remove "data:...;base64," prefix
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-
-      // Step 3: Determine media type from URL
+      // Step 2: Determine media type from URL
       const fileExt = url.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
       let mediaType = "application/pdf";
       if (["jpg", "jpeg"].includes(fileExt)) mediaType = "image/jpeg";
@@ -1071,16 +1061,19 @@ export default function Quotes() {
         return null;
       }
 
-      // Step 4: Build content array
+      // Step 3: Build content array — images are downscaled to ≤1568px JPEG
+      // before sending (sharper OCR, far fewer input tokens); PDFs pass through.
       const content: any[] = [];
       const isImage = ["image/jpeg", "image/png", "image/webp"].includes(mediaType);
 
       if (isImage) {
+        const { data, mediaType: jpegType } = await downscaleImageToJpegBase64(blob);
         content.push({
           type: "image",
-          source: { type: "base64", media_type: mediaType, data: base64 },
+          source: { type: "base64", media_type: jpegType, data },
         });
       } else {
+        const base64 = await fileToBase64(blob);
         content.push({
           type: "document",
           source: { type: "base64", media_type: "application/pdf", data: base64 },
@@ -1545,12 +1538,9 @@ Rules:
     }
     setNewVendorParsing(true);
     try {
-      const reader = new FileReader();
-      const base64 = await new Promise<string>((res, rej) => {
-        reader.onload = () => res((reader.result as string).split(",")[1]);
-        reader.onerror = rej;
-        reader.readAsDataURL(newVendorFile);
-      });
+      // Downscaled to ≤1568px JPEG — vendor cards photographed on phones are
+      // multi-MB; full size just burns tokens.
+      const imageBlock = await fileToClaudeBlock(newVendorFile);
       // invoke() rather than a bare fetch: it attaches the caller's Authorization
       // header, which claude-proxy requires now that verify_jwt is on. A raw fetch
       // sends no bearer and is rejected at the gateway before it reaches the function.
@@ -1561,7 +1551,7 @@ Rules:
           messages: [{
             role: "user",
             content: [
-              { type: "image", source: { type: "base64", media_type: newVendorFile.type, data: base64 } },
+              imageBlock,
               { type: "text", text: `Extract vendor/supplier details from this document. Return ONLY a JSON object with these fields (omit any you cannot clearly read): {"name":"company name","phone":"phone number","email":"email address","city":"city name","gstin":"GST number"}` }
             ]
           }]

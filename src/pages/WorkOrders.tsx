@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { fileToBase64, fileToClaudeBlock } from "@/lib/imageForClaude";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -498,18 +499,6 @@ export default function WorkOrders() {
     setSupplierKindAttn(""); setSupplierContact(""); setSupplierEmail(""); setSupplierAddress("");
   };
 
-  // Read a File into a base64 string (without the data: prefix) for sending to claude-proxy.
-  const fileToBase64 = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        resolve(result.split(",")[1] ?? result);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
   // Convert an uploaded Excel file (.xlsx / .xls) into a plain-text CSV-like dump
   // of every sheet. This is what we send to Claude when the rate list is a spreadsheet
   // (Anthropic doesn't accept Excel directly as a document/image content block).
@@ -562,8 +551,8 @@ export default function WorkOrders() {
         const base64 = await fileToBase64(file);
         contentBlock = { type: "document", source: { type: "base64", media_type: mediaType, data: base64 } };
       } else if (/^image\/(jpeg|png|webp)$/.test(mediaType)) {
-        const base64 = await fileToBase64(file);
-        contentBlock = { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
+        // Downscaled to ≤1568px JPEG — rate-list photos are often multi-MB.
+        contentBlock = await fileToClaudeBlock(file);
       } else {
         toast.error("Supported types: PDF, JPG, PNG, WebP, Excel (xlsx/xls), CSV");
         setParsingRateList(false);

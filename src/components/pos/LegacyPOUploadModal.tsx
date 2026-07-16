@@ -4,6 +4,7 @@ import { CheckCircle2, FileText, Loader2, Upload } from "lucide-react";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { fileToBase64, fileToClaudeBlock } from "@/lib/imageForClaude";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -156,22 +157,8 @@ export default function LegacyPOUploadModal({ open, onClose, onSuccess }: Legacy
 
   const parsePOWithAI = async (file: File) => {
     try {
-      const base64Data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result as string;
-          resolve(result.split(",")[1]);
-        };
-        reader.onerror = () => reject(new Error("File read failed"));
-        reader.readAsDataURL(file);
-      });
-
-      const isPdf = file.type === "application/pdf";
-      const mediaType = isPdf ? "application/pdf" : file.type === "image/png" ? "image/png" : "image/jpeg";
-
-      const contentBlock = isPdf
-        ? { type: "document", source: { type: "base64", media_type: mediaType, data: base64Data } }
-        : { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } };
+      // PDFs pass through; images are downscaled to ≤1568px JPEG (fewer tokens).
+      const contentBlock = await fileToClaudeBlock(file);
 
       const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
@@ -258,12 +245,7 @@ Rules:
 
   const validateHagerstoneFormat = async (file: File): Promise<{ isValid: boolean; poNumber?: string; rejectionReason?: string }> => {
     try {
-      const base64Data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve((reader.result as string).split(",")[1]);
-        reader.onerror = () => reject(new Error("Read failed"));
-        reader.readAsDataURL(file);
-      });
+      const base64Data = await fileToBase64(file);
 
       const { data, error: fnErr } = await supabase.functions.invoke("claude-proxy", {
         body: {
