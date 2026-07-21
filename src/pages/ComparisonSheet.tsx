@@ -365,7 +365,7 @@ export default function ComparisonSheetPage() {
   const [prLineItems, setPrLineItems] = useState<PrLineItem[]>([]);
   const [lastPurchases, setLastPurchases] = useState<Record<string, LastPurchase>>({});
   const [projectSite, setProjectSite] = useState<string | null>(null);
-  const [repeatOrderExemption, setRepeatOrderExemption] = useState<{ poNumber: string; supplierName: string; approvedAt: string } | null>(null);
+  const [repeatOrderExemption, setRepeatOrderExemption] = useState<{ poNumber: string; supplierName: string; approvedAt: string; poCount: number } | null>(null);
   const [marketBenchmarks, setMarketBenchmarks] = useState<Record<string, MarketBenchmark>>({});
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketProgress, setMarketProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
@@ -1083,7 +1083,7 @@ export default function ComparisonSheetPage() {
           .eq("id", prId)
           .maybeSingle();
         setProjectSite((prRow as any)?.project_site ?? null);
-        // Fire-and-forget: check if a repeat-order exemption applies (same vendor + site + materials, founder-approved PO within 30 days)
+        // Fire-and-forget: check if a repeat-order exemption applies (same vendor + site + all materials, across any founder-approved PO(s))
         const pCode = (prRow as any)?.project_code as string | null;
         if (pCode && rfqId) {
           checkRepeatOrderExemption(localPrLineItems, rfqId, pCode)
@@ -1487,12 +1487,14 @@ export default function ComparisonSheetPage() {
   }, [sheet, canApprove, canCreateRFQ]);
 
   // Repeat-order exemption: waives the 3-quote minimum if a founder-approved
-  // PO exists within 30 days for the same project + vendor + ALL materials.
+  // PO (or set of POs) exists for the same project + same vendor covering ALL
+  // materials. The winning supplier must cover every PR line themselves, but
+  // the materials may be spread across several of their POs on the same site.
   const checkRepeatOrderExemption = async (
     plis: PrLineItem[],
     currentRfqId: string,
     projectCode: string
-  ): Promise<{ poNumber: string; supplierName: string; approvedAt: string } | null> => {
+  ): Promise<{ poNumber: string; supplierName: string; approvedAt: string; poCount: number } | null> => {
     if (!plis.length || !projectCode) return null;
 
     // Suppliers who have an approved quote on this RFQ
@@ -1506,61 +1508,79 @@ export default function ComparisonSheetPage() {
     ];
     if (!supplierIds.length) return null;
 
-    // Founder-approved POs in the last 30 days, same project, same supplier.
-    // NOTE: we window on created_at (always populated) — NOT on
-    // founder_approved_at, because that approval-timestamp column is historically
-    // NULL on many genuinely-approved POs. Keying the 30-day filter off it would
-    // silently drop valid repeat orders (a NULL fails `>= cutoff`), forcing a
-    // needless override. founder_approval_status = 'approved' is the reliable
-    // approval signal; created_at is the reliable recency signal.
-    // We deliberately do NOT require finance_dispatch_status = 'sent': the
-    // founder's approval is what authorises the repeat, and dispatch often lags
-    // (or is completed out-of-band), which was false-failing genuine repeats.
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 30);
+    // Founder-approved POs for the same project + same supplier — no age window.
+    // NOTE: founder_approval_status = 'approved' is the reliable approval signal;
+    // founder_approved_at is historically NULL on many approved POs, so we never
+    // key off it. We deliberately do NOT require finance_dispatch_status = 'sent'
+    // (dispatch often lags or is completed out-of-band, which was false-failing
+    // genuine repeats). Ordered newest-first so the banner reports the latest PO.
     const { data: pos } = await supabase
       .from("cps_purchase_orders")
       .select("id, po_number, founder_approved_at, finance_dispatch_sent_at, created_at, supplier_id")
       .eq("founder_approval_status", "approved")
       .eq("project_code", projectCode)
       .in("supplier_id", supplierIds)
-      .gte("created_at", cutoff.toISOString())
       .order("created_at", { ascending: false });
     if (!pos?.length) return null;
 
     const prItemsWithId = plis.filter(li => li.item_id);
     const prItemsNoId   = plis.filter(li => !li.item_id);
 
+    // Group POs by supplier: coverage must be satisfied by a SINGLE vendor
+    // (across any number of their POs), never by pooling different vendors'
+    // lines together — that would exempt materials no one vendor actually sold.
+    const posBySupplier = new Map<string, typeof pos>();
     for (const po of pos) {
-      const { data: poLines } = await supabase
-        .from("cps_po_line_items")
-        .select("item_id, description")
-        .eq("po_id", po.id);
-      if (!poLines?.length) continue;
+      const arr = posBySupplier.get(po.supplier_id as string) ?? [];
+      arr.push(po);
+      posBySupplier.set(po.supplier_id as string, arr);
+    }
 
-      const poItemIds = new Set(poLines.map((l: any) => l.item_id as string).filter(Boolean));
-      const poDescs   = poLines.map((l: any) => (l.description ?? "") as string);
+    for (const [supplierId, supplierPos] of posBySupplier) {
+      // Pool every line across this vendor's POs on the site.
+      const pooled: { po: (typeof pos)[number]; itemId: string | null; desc: string }[] = [];
+      for (const po of supplierPos) {
+        const { data: poLines } = await supabase
+          .from("cps_po_line_items")
+          .select("item_id, description")
+          .eq("po_id", po.id);
+        for (const l of poLines ?? []) {
+          pooled.push({ po, itemId: (l as any).item_id ?? null, desc: ((l as any).description ?? "") as string });
+        }
+      }
+      if (!pooled.length) continue;
 
-      const idOk   = prItemsWithId.every(li => poItemIds.has(li.item_id!));
-      // Free-text lines: tolerant fuzzy match against any PO line (see
-      // itemDescriptionsMatch) so minor spelling/wording drift on the same
-      // material doesn't force an override.
-      const descOk = prItemsNoId.every(li =>
-        poDescs.some(pd => itemDescriptionsMatch(li.description ?? "", pd))
-      );
+      // Every PR line must be covered by SOME pooled line; track which POs
+      // actually contributed so the banner can report an accurate PO count.
+      const contributing = new Set<string>();
+      const idOk = prItemsWithId.every(li => {
+        const hit = pooled.find(p => p.itemId && p.itemId === li.item_id);
+        if (hit) contributing.add(hit.po.id as string);
+        return !!hit;
+      });
+      // Free-text lines: tolerant fuzzy match (see itemDescriptionsMatch) so
+      // minor spelling/wording drift on the same material doesn't force an override.
+      const descOk = idOk && prItemsNoId.every(li => {
+        const hit = pooled.find(p => itemDescriptionsMatch(li.description ?? "", p.desc));
+        if (hit) contributing.add(hit.po.id as string);
+        return !!hit;
+      });
 
       if (idOk && descOk) {
+        // supplierPos is newest-first; report the most recent contributing PO.
+        const repPo = supplierPos.find(p => contributing.has(p.id as string)) ?? supplierPos[0];
         const { data: sup } = await supabase
           .from("cps_suppliers")
           .select("name")
-          .eq("id", po.supplier_id)
+          .eq("id", supplierId)
           .maybeSingle();
         return {
-          poNumber: po.po_number as string,
+          poNumber: repPo.po_number as string,
           supplierName: (sup as any)?.name ?? "Unknown Supplier",
           // founder_approved_at is often NULL on approved POs — fall back to the
           // dispatch/created date so the banner always shows a real date.
-          approvedAt: (po.founder_approved_at ?? po.finance_dispatch_sent_at ?? po.created_at) as string,
+          approvedAt: (repPo.founder_approved_at ?? repPo.finance_dispatch_sent_at ?? repPo.created_at) as string,
+          poCount: contributing.size,
         };
       }
     }
@@ -1611,7 +1631,7 @@ export default function ComparisonSheetPage() {
           entity_type: "cps_rfqs",
           entity_id: rfqId,
           entity_number: rfq?.rfq_number,
-          description: `Repeat-order exemption applied for ${rfq?.rfq_number}. Vendor: ${repeatOrderExemption.supplierName}, PO: ${repeatOrderExemption.poNumber} (founder approved ${new Date(repeatOrderExemption.approvedAt).toLocaleDateString("en-IN")}). Sheet created with ${currentApproved} quote(s).`,
+          description: `Repeat-order exemption applied for ${rfq?.rfq_number}. Vendor: ${repeatOrderExemption.supplierName}, PO: ${repeatOrderExemption.poNumber}${repeatOrderExemption.poCount > 1 ? ` (+${repeatOrderExemption.poCount - 1} more PO)` : ""} (founder approved, latest ${new Date(repeatOrderExemption.approvedAt).toLocaleDateString("en-IN")}). Sheet created with ${currentApproved} quote(s).`,
           severity: "info",
           logged_at: new Date().toISOString(),
         });
@@ -3793,7 +3813,9 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 <div className="font-semibold mb-0.5">✓ Repeat Order Exemption</div>
                 <div>
                   <strong>{repeatOrderExemption.supplierName}</strong> ka PO{" "}
-                  <strong>{repeatOrderExemption.poNumber}</strong> (founder approved{" "}
+                  <strong>{repeatOrderExemption.poNumber}</strong>
+                  {repeatOrderExemption.poCount > 1 ? ` (+${repeatOrderExemption.poCount - 1} aur PO)` : ""}
+                  {" "}(founder approved{" "}
                   {new Date(repeatOrderExemption.approvedAt).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })})
                   {" "}same site + same materials ke liye tha — IT override ki zaroorat nahi.
                 </div>
