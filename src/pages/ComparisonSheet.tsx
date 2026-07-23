@@ -3125,7 +3125,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           throw new Error("AI proxy auth error — check Supabase Edge Function JWT settings.");
         }
         if (httpStatus === 500) {
-          throw new Error("AI proxy returned 500 — ANTHROPIC_API_KEY may be missing from Edge Function secrets.");
+          throw new Error("AI proxy returned 500 — OPENAI_API_KEY may be missing from Edge Function secrets.");
         }
         throw new Error(`Claude proxy error (HTTP ${httpStatus ?? "?"}): ${fnError.message}`);
       }
