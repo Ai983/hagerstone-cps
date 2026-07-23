@@ -17,6 +17,16 @@ const CACHE_TTL_DAYS = 30;
 const PRICED_TTL_MS = CACHE_TTL_DAYS * 24 * 60 * 60 * 1000;
 const NO_DATA_TTL_MS = 24 * 60 * 60 * 1000;
 
+// Ported from Anthropic (2026-07-23): the Anthropic account ran out of credit and the
+// rest of the app moved to OpenAI, which left this function silently returning
+// "no_data" on every call. This is the one place that needs a *web-search-capable*
+// model, so it cannot go through claude-proxy — that proxy is plain Chat Completions.
+//
+// NOTE: Chat Completions web search does NOT support response_format json_object, so
+// the model can wrap its JSON in prose or fences. That is fine — extractJson() below
+// already tolerates both, which is why the prompt contract is unchanged.
+const OPENAI_SEARCH_MODEL = Deno.env.get("OPENAI_SEARCH_MODEL") || "gpt-5-search-api";
+
 const SYSTEM_PROMPT = `Return ONLY this JSON, no prose:
 {
   "item": "",
@@ -84,14 +94,14 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+    const apiKey = Deno.env.get("OPENAI_API_KEY");
     if (!apiKey) {
-      return new Response(JSON.stringify({ error: "Anthropic API key not configured" }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ error: "OpenAI API key not configured" }), { status: 500, headers: { ...CORS, "Content-Type": "application/json" } });
     }
     const supabase = createClient(supabaseUrl, supabaseKey, { db: { schema: "cps" } });
 
     // Cache lookup. TTL depends on what is stored: a real price keeps for a month, a
-    // "no data" verdict only for a day, so an item Claude can't price today gets
+    // "no data" verdict only for a day, so an item the model can't price today gets
     // retried tomorrow rather than on every single click.
     if (!force_refresh) {
       const { data: cached } = await supabase
@@ -113,20 +123,28 @@ serve(async (req) => {
       }
     }
 
-    // Fresh Claude call with web_search — try the original query, and if no usable
-    // price comes back, retry once with a generic "<item> price India". Web search is
-    // billed per search on top of tokens, so both the max_uses and the retry are real
-    // money; `searches` below records how many were actually billed.
+    // Fresh model call with web search — try the original query, and if no usable
+    // price comes back, retry once with a generic "<item> price India". Search-enabled
+    // calls are billed above plain tokens, so the retry is real money; `searches`
+    // records how many search-backed calls were actually made.
     let searches = 0;
-    async function callClaude(query: string) {
+    async function callSearchModel(query: string) {
       const userPrompt = `Find market suppliers for this item near "${city}":\n${query}\n\nReturn the JSON object exactly as specified, with up to 8 suppliers, lowest_rate (numeric, in the chosen unit), and a 1-line verdict. JSON only.`;
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-beta": "web-search-2025-03-05" },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2000, system: SYSTEM_PROMPT, tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }], messages: [{ role: "user", content: userPrompt }] }),
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: OPENAI_SEARCH_MODEL,
+          web_search_options: {},
+          max_completion_tokens: 2000,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: userPrompt },
+          ],
+        }),
       });
       const data = await res.json();
-      searches += Number(data?.usage?.server_tool_use?.web_search_requests ?? 0);
+      if (res.ok && !data?.error) searches += 1;
       return { res, data };
     }
 
@@ -134,19 +152,19 @@ serve(async (req) => {
       return new Response(JSON.stringify({ item, city, lowest_rate: 0, lowest_rate_unit: "", verdict: reason, suppliers: [], source: "no_data" }), { status: 200, headers: { ...CORS, "Content-Type": "application/json" } });
     }
 
-    let { res: claudeRes, data: claudeData } = await callClaude(item);
-    if (!claudeRes.ok || claudeData?.error) {
-      const msg = claudeData?.error?.message ?? `Claude HTTP ${claudeRes.status}`;
-      console.error("market-rate-search anthropic error (attempt 1):", msg);
+    let { res: searchRes, data: searchData } = await callSearchModel(item);
+    if (!searchRes.ok || searchData?.error) {
+      const msg = searchData?.error?.message ?? `OpenAI HTTP ${searchRes.status}`;
+      console.error("market-rate-search openai error (attempt 1):", msg);
       return softFail(`Live market lookup unavailable (${msg.slice(0, 120)})`);
     }
 
-    function parseSuppliers(claudeData: any): any | null {
-      const text = (claudeData.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
+    function parseSuppliers(payload: any): any | null {
+      const text = payload?.choices?.[0]?.message?.content ?? "";
       try { return extractJson(text); } catch { return null; }
     }
 
-    let parsed = parseSuppliers(claudeData);
+    let parsed = parseSuppliers(searchData);
     let attempt = 1;
     const hasUsablePrice = (p: any) => {
       if (!p) return false;
@@ -156,7 +174,7 @@ serve(async (req) => {
     if (!hasUsablePrice(parsed)) {
       const fallbackQuery = `${item} price India`;
       console.log(`market-rate-search retry with fallback query: "${fallbackQuery}"`);
-      const retry = await callClaude(fallbackQuery);
+      const retry = await callSearchModel(fallbackQuery);
       if (retry.res.ok && !retry.data?.error) {
         const retryParsed = parseSuppliers(retry.data);
         if (hasUsablePrice(retryParsed)) { parsed = retryParsed; attempt = 2; }
@@ -164,7 +182,7 @@ serve(async (req) => {
     }
 
     // Unparseable output is a transport-level failure, not a verdict about the item.
-    // Do NOT cache it — an Anthropic hiccup would otherwise suppress retries for a day.
+    // Do NOT cache it — a provider hiccup would otherwise suppress retries for a day.
     if (!parsed) return softFail("AI returned no parseable market data — treat as no live data");
 
     const suppliers = Array.isArray(parsed.suppliers) ? parsed.suppliers : [];
@@ -176,7 +194,7 @@ serve(async (req) => {
 
     const result = { item: parsed.item || item, city: parsed.city || city, lowest_rate: Number(parsed.lowest_rate ?? 0) || 0, lowest_rate_unit: String(parsed.lowest_rate_unit ?? ""), verdict: String(parsed.verdict ?? "") + (attempt === 2 ? " (fallback search)" : ""), suppliers: cleanSuppliers };
 
-    // Cache the verdict either way. Claude answered; "no price exists for this item"
+    // Cache the verdict either way. The model answered; "no price exists for this item"
     // is a real answer worth remembering for a day. The read path above expires it
     // 30x sooner than a priced one.
     //
