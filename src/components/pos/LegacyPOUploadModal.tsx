@@ -326,7 +326,7 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
       setUploadProgress(35);
 
       const { data: uploadData, error: storageErr } = await supabase.storage
-        .from("cps-pos")
+        .from("cps-po-documents")
         .upload(path, file, { cacheControl: "3600", upsert: false });
 
       if (storageErr || !uploadData) throw new Error(storageErr?.message || "Upload failed");
@@ -334,7 +334,7 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
       setUploadProgress(80);
 
       const { data: signedData } = await supabase.storage
-        .from("cps-pos")
+        .from("cps-po-documents")
         .createSignedUrl(uploadData.path, 365 * 24 * 3600);
 
       setUploadProgress(100);
@@ -346,7 +346,7 @@ Respond ONLY with a valid JSON object (no markdown, no explanation):
 
       if (!validation.isValid) {
         // Cleanup uploaded file
-        await supabase.storage.from("cps-pos").remove([uploadData.path]);
+        await supabase.storage.from("cps-po-documents").remove([uploadData.path]);
         setUploadStatus("idle");
         setUploadError(
           validation.rejectionReason

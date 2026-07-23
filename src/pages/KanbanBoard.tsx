@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { openSignedFile, resolveToSignedUrl } from "@/lib/storageUrl";
 
 import {
   FileText, Send, MessageSquare, BarChart3, CheckCircle2, ShoppingCart,
@@ -216,6 +217,8 @@ export default function KanbanBoard() {
   const [search, setSearch] = useState("");
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [reviewCard, setReviewCard] = useState<PRCard | null>(null);
+  // Signed URL for the invoice being reviewed — null until resolved (or if signing fails).
+  const [reviewFileUrl, setReviewFileUrl] = useState<string | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [rejectMode, setRejectMode] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
@@ -412,10 +415,19 @@ export default function KanbanBoard() {
     setReviewCard(card);
     setRejectMode(false);
     setRejectReason("");
+    // cps-quotes is private, so the stored /object/public/ link 404s ("Bucket not
+    // found"). Mint a signed URL for the preview. Resolved here on open rather than
+    // during the board query — signing every card's invoice up front would be a
+    // request per card for files nobody has asked to see yet.
+    setReviewFileUrl(null);
+    if (card.invoice_file_url) {
+      resolveToSignedUrl(card.invoice_file_url).then(setReviewFileUrl);
+    }
   };
 
   const closeReview = () => {
     setReviewCard(null);
+    setReviewFileUrl(null);
     setRejectMode(false);
     setRejectReason("");
     setReviewBusy(false);
@@ -1131,16 +1143,17 @@ export default function KanbanBoard() {
                                 <Receipt className="h-2.5 w-2.5 shrink-0" />
                                 <span className="font-mono truncate">{c.invoice_number}</span>
                                 {c.invoice_file_url && (
-                                  <a
-                                    href={c.invoice_file_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    onClick={(e) => e.stopPropagation()}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openSignedFile(c.invoice_file_url, { onError: toast.error });
+                                    }}
                                     className="ml-auto text-[10px] hover:underline flex items-center gap-0.5"
                                     title="View invoice"
                                   >
                                     View <ExternalLink className="h-2.5 w-2.5" />
-                                  </a>
+                                  </button>
                                 )}
                               </div>
                             )}
@@ -1215,8 +1228,13 @@ export default function KanbanBoard() {
           </DialogHeader>
 
           {/* Invoice preview */}
-          {reviewCard?.invoice_file_url ? (() => {
-            const url = reviewCard.invoice_file_url!;
+          {reviewCard?.invoice_file_url && !reviewFileUrl ? (
+            <div className="rounded-md border bg-muted/20 flex items-center justify-center" style={{ height: "60vh" }}>
+              <span className="text-sm text-muted-foreground">Loading invoice…</span>
+            </div>
+          ) : reviewFileUrl ? (() => {
+            const url = reviewFileUrl;
+            // Signed URLs carry a query string, so extension sniffing must ignore it.
             const cleanUrl = url.split("?")[0].toLowerCase();
             const isPdf = cleanUrl.endsWith(".pdf");
             const isImg = cleanUrl.endsWith(".jpg") || cleanUrl.endsWith(".jpeg") || cleanUrl.endsWith(".png") || cleanUrl.endsWith(".webp");
@@ -1675,11 +1693,15 @@ export default function KanbanBoard() {
                           <div className="text-xs text-red-700">Rejected: {c.invoice_rejection_reason}</div>
                         )}
                         {c.invoice_file_url && (
-                          <a href={c.invoice_file_url} target="_blank" rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openSignedFile(c.invoice_file_url, { onError: toast.error });
+                            }}
                             className="text-xs text-primary hover:underline inline-flex items-center gap-1">
                             View invoice file <ExternalLink className="h-3 w-3" />
-                          </a>
+                          </button>
                         )}
                       </div>
                     </div>

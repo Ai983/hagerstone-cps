@@ -158,7 +158,7 @@ export default function GrnUploadDialog({
 
       // Upload file to storage
       const filePath = `grn-uploads/${po.id}/${Date.now()}-${file.name}`;
-      const { error: uploadErr } = await supabase.storage.from("cps-documents").upload(filePath, file);
+      const { error: uploadErr } = await supabase.storage.from("cps-invoice-uploads").upload(filePath, file);
       if (uploadErr) throw uploadErr;
 
       // Create GRN with status='pending_approval'

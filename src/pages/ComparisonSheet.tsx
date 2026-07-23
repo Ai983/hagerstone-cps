@@ -31,15 +31,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { TranchePlanEditor, computeAmounts, type Tranche } from "@/components/procurement/TranchePlanEditor";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { resolveToSignedUrl } from "@/lib/storageUrl";
 
-// cps-quotes is a private bucket — resolve stored path or legacy public URL to a signed URL
-async function resolveToSignedUrl(storedValue: string): Promise<string | null> {
-  const marker = '/object/public/cps-quotes/';
-  const idx = storedValue.indexOf(marker);
-  const path = idx !== -1 ? storedValue.slice(idx + marker.length) : storedValue;
-  const { data } = await supabase.storage.from('cps-quotes').createSignedUrl(path, 3600);
-  return data?.signedUrl ?? null;
-}
+// cps-quotes is a private bucket — resolve stored path or legacy public URL to a
+// signed URL. Moved to @/lib/storageUrl so KanbanBoard's invoice viewer, which hit
+// the same "Bucket not found" failure, shares one implementation.
 
 // --- Fuzzy item-text matching (used by the repeat-order exemption) ------------
 // PR/PO line descriptions are free text typed by different people, so the same
