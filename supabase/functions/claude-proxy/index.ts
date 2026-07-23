@@ -98,12 +98,26 @@ function toOpenAiPart(block: any): any | null {
   }
 }
 
-function toOpenAiMessages(anthropicMessages: any[], system?: string): { messages: any[]; mentionsJson: boolean } {
+// OpenAI's json_object mode can only return a top-level OBJECT — a prompt that asks
+// for a bare `[...]` array (ProjectBOQ's BOM mapping does) would be forced into an
+// object and its bracket-balanced array extractor would fail with "JSON array nahi
+// mila". Detect that intent and leave those calls in free-form mode.
+const ARRAY_INTENT = /json array|array only|return (?:a|one) json array|respond with (?:one )?json array/i;
+
+function toOpenAiMessages(anthropicMessages: any[], system?: string): { messages: any[]; mentionsJson: boolean; wantsArray: boolean } {
   const out: any[] = [];
   let mentionsJson = false;
+  let wantsArray = false;
 
   const noteJson = (s: string) => {
-    if (typeof s === "string" && /json/i.test(s)) mentionsJson = true;
+    if (typeof s !== "string") return;
+    if (/json/i.test(s)) mentionsJson = true;
+    // Either an explicit "JSON array" instruction, or a compact schema example on
+    // its own line (`[{"boq_item":…`). The `[{` must be adjacent — pretty-printed
+    // input data embedded in a prompt (JSON.stringify(x, null, 2)) puts a newline
+    // between them, and treating that as "wants an array" would needlessly drop
+    // JSON mode for ComparisonSheet, whose prompt embeds exactly that.
+    if (ARRAY_INTENT.test(s) || /^\s*\[\{/m.test(s)) wantsArray = true;
   };
 
   if (system && String(system).trim()) {
@@ -125,7 +139,7 @@ function toOpenAiMessages(anthropicMessages: any[], system?: string): { messages
     out.push({ role, content: parts });
   }
 
-  return { messages: out, mentionsJson };
+  return { messages: out, mentionsJson, wantsArray };
 }
 
 serve(async (req) => {
@@ -157,7 +171,7 @@ serve(async (req) => {
       OPENAI_MAX_OUTPUT,
     );
 
-    const { messages, mentionsJson } = toOpenAiMessages(body.messages, body.system);
+    const { messages, mentionsJson, wantsArray } = toOpenAiMessages(body.messages, body.system);
 
     const outBody: Record<string, unknown> = {
       model: OPENAI_MODEL,
@@ -166,10 +180,11 @@ serve(async (req) => {
     };
     // Callers pass a temperature for BOQ parsing; forward it when present.
     if (body.temperature != null) outBody.temperature = body.temperature;
-    // Every caller here expects strict JSON back. When the prompt mentions JSON
-    // (all of them do), force OpenAI's JSON mode — this is what actually kills the
-    // "I'm sorry, …" free-text replies that were blowing up JSON.parse on the client.
-    if (mentionsJson) outBody.response_format = { type: "json_object" };
+    // Every caller here expects strict JSON back. When the prompt mentions JSON,
+    // force OpenAI's JSON mode — this is what actually kills the "I'm sorry, …"
+    // free-text replies that were blowing up JSON.parse on the client. Skipped for
+    // array-shaped prompts, which json_object cannot satisfy (see ARRAY_INTENT).
+    if (mentionsJson && !wantsArray) outBody.response_format = { type: "json_object" };
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -199,6 +214,7 @@ serve(async (req) => {
         model: OPENAI_MODEL,
         input_tokens: data.usage.prompt_tokens,
         output_tokens: data.usage.completion_tokens,
+        json_mode: Boolean(outBody.response_format),
       }));
     }
 
