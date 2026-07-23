@@ -20,12 +20,31 @@ const NO_DATA_TTL_MS = 24 * 60 * 60 * 1000;
 // Ported from Anthropic (2026-07-23): the Anthropic account ran out of credit and the
 // rest of the app moved to OpenAI, which left this function silently returning
 // "no_data" on every call. This is the one place that needs a *web-search-capable*
-// model, so it cannot go through claude-proxy — that proxy is plain Chat Completions.
+// model, so it cannot go through claude-proxy — that proxy has no search tool.
 //
-// NOTE: Chat Completions web search does NOT support response_format json_object, so
-// the model can wrap its JSON in prose or fences. That is fine — extractJson() below
-// already tolerates both, which is why the prompt contract is unchanged.
-const OPENAI_SEARCH_MODEL = Deno.env.get("OPENAI_SEARCH_MODEL") || "gpt-5-search-api";
+// Model chosen by benchmark (3 items × 5 configs, 2026-07-23), not by guesswork:
+//
+//   model / search context      $/call   url-cited suppliers   reliability
+//   gpt-5-search-api / high     0.0535          4.0            2 of 9 calls OK
+//   gpt-5-search-api / medium   0.0541          0.0            2 of 9 calls OK
+//   gpt-5.6-luna     / medium   0.0429          6.0            6 of 6 calls OK  <- chosen
+//   gpt-5.6-luna     / low      0.0435          5.7            6 of 6 calls OK
+//
+// gpt-5-search-api (the only Chat Completions search model) was rate-limited hard on
+// this org — most calls returned "Rate limit reached" — so it is not viable in
+// production regardless of price. gpt-5.6-luna is ~20% cheaper AND returns more
+// URL-cited suppliers, which is what makes a rate auditable rather than asserted.
+// Rejected on quality: gpt-4.1 and gpt-4o returned suppliers with NO source URLs;
+// gpt-5.5 burned its whole output budget reasoning and returned nothing parseable.
+//
+// Cost is dominated by web-search *input* tokens (~21k/call), not output, so the
+// 30-day cache below matters far more to the bill than the model does.
+const OPENAI_SEARCH_MODEL = Deno.env.get("OPENAI_SEARCH_MODEL") || "gpt-5.6-luna";
+const SEARCH_CONTEXT_SIZE = Deno.env.get("OPENAI_SEARCH_CONTEXT") || "medium";
+// Observed output was 1267–1778 tokens, uncomfortably close to a 2000 cap. A truncated
+// reply is unparseable JSON, which wastes the entire (already-billed) call, so leave
+// headroom — the model is billed on tokens used, not on the cap.
+const MAX_OUTPUT_TOKENS = 3000;
 
 const SYSTEM_PROMPT = `Return ONLY this JSON, no prose:
 {
@@ -128,23 +147,29 @@ serve(async (req) => {
     // calls are billed above plain tokens, so the retry is real money; `searches`
     // records how many search-backed calls were actually made.
     let searches = 0;
+    let inTokens = 0;
+    let outTokens = 0;
     async function callSearchModel(query: string) {
       const userPrompt = `Find market suppliers for this item near "${city}":\n${query}\n\nReturn the JSON object exactly as specified, with up to 8 suppliers, lowest_rate (numeric, in the chosen unit), and a 1-line verdict. JSON only.`;
-      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      const res = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
         body: JSON.stringify({
           model: OPENAI_SEARCH_MODEL,
-          web_search_options: {},
-          max_completion_tokens: 2000,
-          messages: [
+          tools: [{ type: "web_search", search_context_size: SEARCH_CONTEXT_SIZE }],
+          max_output_tokens: MAX_OUTPUT_TOKENS,
+          input: [
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: userPrompt },
           ],
         }),
       });
       const data = await res.json();
-      if (res.ok && !data?.error) searches += 1;
+      if (res.ok && !data?.error) {
+        searches += 1;
+        inTokens += Number(data?.usage?.input_tokens ?? 0);
+        outTokens += Number(data?.usage?.output_tokens ?? 0);
+      }
       return { res, data };
     }
 
@@ -159,8 +184,16 @@ serve(async (req) => {
       return softFail(`Live market lookup unavailable (${msg.slice(0, 120)})`);
     }
 
+    // Responses API returns an `output` array mixing web_search_call items with the
+    // assistant message; only the message carries the answer text. There is no
+    // json_object mode on a search call, so the model may fence or pad its JSON —
+    // extractJson() tolerates both, which is why the prompt contract is unchanged.
     function parseSuppliers(payload: any): any | null {
-      const text = payload?.choices?.[0]?.message?.content ?? "";
+      let text = "";
+      for (const item of payload?.output ?? []) {
+        if (item?.type !== "message") continue;
+        for (const c of item?.content ?? []) if (c?.type === "output_text") text += c.text ?? "";
+      }
       try { return extractJson(text); } catch { return null; }
     }
 
@@ -217,7 +250,9 @@ serve(async (req) => {
       );
     }
 
-    console.log(JSON.stringify({ mrs: "fresh", priced: result.lowest_rate > 0, attempts: attempt, web_searches_billed: searches, cached: mayWrite }));
+    // Token counts make the per-lookup spend attributable later; web search input
+    // tokens are the dominant cost, so they are the number worth watching.
+    console.log(JSON.stringify({ mrs: "fresh", model: OPENAI_SEARCH_MODEL, priced: result.lowest_rate > 0, attempts: attempt, searches, input_tokens: inTokens, output_tokens: outTokens, cached: mayWrite }));
 
     return new Response(JSON.stringify({ ...result, source: result.lowest_rate > 0 ? "fresh" : "no_data" }), { status: 200, headers: { ...CORS, "Content-Type": "application/json" } });
   } catch (err: any) {
