@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy, ShieldCheck, Briefcase, Wallet, CheckSquare, FileCheck } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy, ShieldCheck, Briefcase, Wallet, CheckSquare, FileCheck, Radar } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +23,8 @@ const NAV = [
   { title: "Budget List", url: "/budget-list", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team","design_team"] },
   { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","design_team","accounts_team"] },
   { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor","design_team"] },
+  // Narrower than Suppliers on purpose — a fresh search spends Apify credit.
+  { title: "Vendor Scout", url: "/vendor-scout", icon: Radar, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Items", url: "/items", icon: Package, roles: ["procurement_executive","procurement_head","it_head","design_team"] },
   { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor","procurement_head","it_head","management","design_team"] },
   { title: "Override Requests", url: "/admin/overrides", icon: ShieldCheck, roles: ["it_head"] },

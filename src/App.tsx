@@ -52,6 +52,7 @@ const Login = lazyWithRetry(() => import("@/pages/Login"));
 const Dashboard = lazyWithRetry(() => import("@/pages/Dashboard"));
 const PurchaseRequisitions = lazyWithRetry(() => import("@/pages/PurchaseRequisitions"));
 const SupplierMaster = lazyWithRetry(() => import("@/pages/SupplierMaster"));
+const VendorScout = lazyWithRetry(() => import("@/pages/VendorScout"));
 const ItemMaster = lazyWithRetry(() => import("@/pages/ItemMaster"));
 const RFQs = lazyWithRetry(() => import("@/pages/RFQs"));
 const Quotes = lazyWithRetry(() => import("@/pages/Quotes"));
@@ -107,6 +108,7 @@ const App = () => (
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
               <Route path="/suppliers" element={<Protected><SupplierMaster /></Protected>} />
+              <Route path="/vendor-scout" element={<Protected><VendorScout /></Protected>} />
               <Route path="/items" element={<Protected><ItemMaster /></Protected>} />
               <Route path="/requisitions" element={<Protected><PurchaseRequisitions /></Protected>} />
               <Route path="/rfqs" element={<Protected><RFQs /></Protected>} />

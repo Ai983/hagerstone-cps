@@ -553,6 +553,9 @@ For any field not found on the card, use empty string. For phone, if the card sh
                           {s.added_via === "rfq_manual" && (
                             <span className="text-[10px] font-semibold bg-purple-100 text-purple-800 border border-purple-300 rounded px-1.5 py-0.5 leading-none w-fit">✋ Added via RFQ</span>
                           )}
+                          {s.added_via === "vendor_scout" && (
+                            <span className="text-[10px] font-semibold bg-sky-100 text-sky-800 border border-sky-300 rounded px-1.5 py-0.5 leading-none w-fit">🛰 Added via Scout</span>
+                          )}
                         </div>
                       </TableCell>
                       {canManageSuppliers && (

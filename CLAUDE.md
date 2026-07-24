@@ -140,7 +140,7 @@ useEffect(() => {
 
 ## Routes
 **Public (no auth):** `/login`, `/vendor/upload-quote?token=xxx`, `/approve-po?token=xxx`, `/approve-release?token=xxx`, `/approve-advance?token=xxx`
-**Protected:** `/dashboard`, `/kanban`, `/analytics`, `/requisitions`, `/pr-review`, `/rfqs`, `/quotes`, `/comparison`, `/comparison/:rfqId`, `/purchase-orders`, `/work-orders`, `/delivery`, `/boq`, `/stock`, `/stock-overview`, `/site-quotes`, `/suppliers`, `/items`, `/invoices/upload`, `/audit`, `/admin/overrides`, `/advances`, `/grn-approvals`, `/reconciliation`
+**Protected:** `/dashboard`, `/kanban`, `/analytics`, `/requisitions`, `/pr-review`, `/rfqs`, `/quotes`, `/comparison`, `/comparison/:rfqId`, `/purchase-orders`, `/work-orders`, `/delivery`, `/boq`, `/stock`, `/stock-overview`, `/site-quotes`, `/suppliers`, `/vendor-scout`, `/items`, `/invoices/upload`, `/audit`, `/admin/overrides`, `/advances`, `/grn-approvals`, `/reconciliation`
 
 > `VendorRegister.tsx`, `VendorStatus.tsx`, `BulkInvoiceIngestion.tsx`, `DesignTeam.tsx` exist as files but are **not routed** — leftover from dropped/parked features. Don't link to them.
 
@@ -154,6 +154,7 @@ Schema is large; use the Supabase MCP tools (`list_tables`, `execute_sql`) to in
 ### Other domains
 - **Items/benchmarks:** `cps_items` (~661 rows, `active` flag), `cps_item_rate_history`, `cps_market_benchmarks`, `cps_market_rate_cache`, `cps_pending_item_requests`, `cps_bom_mappings`, `cps_category_map`
 - **Suppliers:** `cps_suppliers`, `cps_supplier_items`, `cps_supplier_performance`, `cps_vendor_feedback`, `cps_vendor_registrations`
+- **Vendor Scout (lead discovery):** `cps_vendor_leads` (~377 rows) — Google-Maps-sourced vendor/contractor leads. Absorbed 2026-07 from the standalone `scraper-app-v2` app (was `scraper.vendor_leads`); that Railway/Vercel deployment is retired. Unique key `(place_id, city, category)` — the same business legitimately appears under several keywords, and each keyword is its own cache entry. `status: new | shortlisted | rejected | converted`; `converted_supplier_id` links to the `cps_suppliers` row created from the lead.
 - **Projects & BOQ:** `cps_projects`, `cps_project_assignments`, `cps_project_boqs`, `cps_boq_uploads`
 - **Contractor work orders:** `cps_contractors`, `cps_contractor_work_orders`, `cps_work_orders`, `cps_wo_line_items`, `cps_wo_boq_items`
 - **RA bills (running-account billing):** `cps_ra_bills` + `cps_ra_bill_items`/`_approvals`/`_attachments`/`_deductions`/`_payments`/`_validations`, `cps_retention_ledger`, `cps_advance_ledger`, `cps_debit_notes`
@@ -228,6 +229,16 @@ State lives in `cps_purchase_requisitions.approval_sheet_ai_result` (jsonb: `ass
 4. On submit: upload to `cps-quotes` storage bucket → insert `cps_quotes` header → insert `cps_quote_line_items` → mark token used → update `cps_rfq_suppliers.response_status` → audit log
 5. File-only (no manual lines) → webhook to n8n: `cps_config` key `webhook_quote_parse`, POST `{event:"quote_uploaded", quote_id, file_path, file_type, ...}` for AI parsing (Haiku 4.5 / Sonnet 4.6)
 6. `parse_status` = `parsed` (manual data) or `pending` (file-only, awaiting AI parse)
+
+## Vendor Scout (`/vendor-scout`, `VendorScout.tsx`)
+Finds vendors/contractors on Google Maps and feeds them into the supplier master. Replaces the
+standalone `scraper-app-v2` (FastAPI on Railway + Vite on Vercel), retired 2026-07.
+1. Search is **cache-first** — saved `cps_vendor_leads` for that `city + category` are returned instantly; only "Fetch fresh" bills Apify.
+2. Fresh search → edge function **`vendor-scout`** (`action: "start"` → Apify run id, then `action: "poll"` every 4 s until `SUCCEEDED`). Async because the Apify run outlives one edge-function invocation — do **not** revert it to Apify's `run-sync-get-dataset-items`.
+3. The function drives the Apify actor `compass~crawler-google-places` (needs the **`APIFY_TOKEN`** edge secret) and applies ported quality gates: valid 10-digit Indian phone required, address ≥10 chars, not closed, no coaching/institute keywords, city-cluster match (Delhi≈Noida≈Gurgaon…), then scores and dedupes. These word lists are tuned against real data — don't "clean them up".
+4. `category` stores the **user's keyword**, not Apify's category — the cache lookup depends on it.
+5. **Add to Suppliers** inserts into `cps_suppliers` with `added_via='vendor_scout'`, `verified=false`, `profile_complete=false`, stamps `converted_supplier_id` back on the lead, and audit-logs `VENDOR_SCOUT_CONVERT`. Leads already matching a supplier by phone/GSTIN/name show "Already listed" instead of an Add button.
+6. **Spend guard:** `cps_config.vendor_scout_daily_scrape_limit` (default 25) caps fresh scrapes per 24 h, counted off `VENDOR_SCOUT_SCRAPE` audit rows. Page is restricted to procurement/management roles; the edge function independently enforces `procurement_executive | procurement_head | it_head`.
 
 ## Company Details (for PO/GRN/WO documents — authoritative values live in `cps_config`)
 - Legal name: **HAGER STONE INTERNATIONAL PRIVATE LIMITED** (`company_name`); short: Hagerstone International (P) Ltd
