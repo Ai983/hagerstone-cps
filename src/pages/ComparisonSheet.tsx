@@ -51,10 +51,72 @@ const normalizeItemText = (s: string): string =>
     .replace(/\s+/g, " ")
     .trim();
 
+// Single letters are noise ("x" from "8x4", stray "m"), but single DIGITS are
+// not — dropping them made "10mm wire" and "GI WIRE 3MM" look identical.
 const tokenizeItemText = (s: string): string[] =>
   normalizeItemText(s)
     .split(" ")
-    .filter((t) => t.length > 1); // ignore single-char noise ("x", "-")
+    .filter((t) => t.length > 1 || /[0-9]/.test(t));
+
+// Dimensional units: a number in front of one of these is a SPECIFICATION —
+// 12mm gypsum is not 15mm gypsum, 25mm screw is not 35mm screw.
+const DIMENSION_UNITS = new Set([
+  "mm", "cm", "mtr", "mtrs", "meter", "metre", "meters", "metres", "ft", "feet", "foot",
+  "inch", "inches", "sqft", "sqm", "rft", "rmt", "kg", "kgs", "gm", "gms", "gram", "grams",
+  "ltr", "ltrs", "litre", "litres", "liter", "ml", "ton", "tonne", "tonnes", "watt", "amp", "ampere", "volt",
+]);
+
+// Counting / packaging words: a number in front of one of these is a QUANTITY,
+// not a spec — "30 bag Cement" is the same material as "Ambuja cement".
+const COUNT_UNITS = new Set([
+  "nos", "no", "pcs", "pc", "piece", "pieces", "bag", "bags", "box", "boxes", "packet",
+  "packets", "pkt", "bundle", "bundles", "roll", "rolls", "set", "sets", "pair", "pairs",
+  "dozen", "unit", "units", "qty", "quantity",
+]);
+
+// Words that carry no identifying information: units, tax/charge lines, and
+// filler nouns people pad descriptions with ("chemical", "material", "supply").
+// Stripping these is what lets "Fixo block chemical" line up with
+// "Ultratech Fixoblock 40kg" — the only word that identifies the product is
+// "fixoblock", and it has to survive on both sides for the comparison to work.
+const NOISE_WORDS = new Set([
+  ...DIMENSION_UNITS, ...COUNT_UNITS,
+  "gst", "tax", "igst", "cgst", "sgst", "freight", "transport", "transportation",
+  "installation", "labour", "labor", "charges", "charge", "discount", "rounding",
+  "consultancy", "service", "services", "per", "each", "approx", "approximately",
+  "and", "or", "the", "for", "with", "of", "on", "all", "as", "inc", "incl",
+  "including", "extra", "rate", "amount",
+  "chemical", "chemicals", "material", "materials", "item", "items", "misc",
+  "miscellaneous", "assorted", "general", "work", "works", "supply", "supplying",
+  "job", "type", "size", "sizes", "grade", "quality", "make", "brand", "colour",
+  "color", "standard", "regular",
+]);
+
+const isNumericToken = (t: string): boolean => /^\d+$/.test(t);
+const isDistinctiveToken = (t: string): boolean => !isNumericToken(t) && !NOISE_WORDS.has(t);
+
+// Numbers that describe the product rather than how much of it was ordered.
+const specNumbers = (tokens: string[]): string[] =>
+  tokens.filter((t, i) => isNumericToken(t) && !COUNT_UNITS.has(tokens[i + 1] ?? ""));
+
+// People write the same product both glued and split ("Fixoblock" vs "Fixo
+// block"). Merge an adjacent pair into one token whenever the glued form is a
+// real token on the other side.
+const glueTokens = (tokens: string[], other: Set<string>): string[] => {
+  const out: string[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const glued = i + 1 < tokens.length ? tokens[i] + tokens[i + 1] : "";
+    if (glued && other.has(glued)) {
+      out.push(glued);
+      i += 2;
+    } else {
+      out.push(tokens[i]);
+      i += 1;
+    }
+  }
+  return out;
+};
 
 // Levenshtein distance → similarity ratio in [0,1]. Catches spelling typos on
 // short strings ("cemnet" vs "cement").
@@ -75,32 +137,67 @@ function levenshtein(a: string, b: string): number {
   return prev[n];
 }
 
-// True if two line descriptions plausibly refer to the same material.
-// Combines three signals and takes the most generous:
+// Similarity in [0,1] between two free-text line descriptions. Comparison runs
+// on the *distinctive* words only — units, quantities, tax/charge words and
+// filler nouns are stripped first, and glued/split spellings are reconciled —
+// then the most generous of three signals wins:
 //  - Levenshtein ratio of the full normalized strings (spelling drift)
-//  - token Jaccard (word-order / extra-word drift)
-//  - token containment (one description is a subset of the other, e.g. a short
+//  - Jaccard over distinctive tokens (word-order / extra-word drift)
+//  - containment (one description is a subset of the other, e.g. a short
 //    PR line "safety shoes" inside a longer PO line "tiger lorex safety shoes")
-// Same-vendor + same-project + 30-day + founder-approved still gate the
-// exemption around this, so erring tolerant here is intentional and safe.
+// Two guards keep the tolerance from swallowing different materials:
+//  - conflicting specs veto the match outright (25mm screw vs 35mm screw)
+//  - a single shared word only counts if it is reasonably long AND the line it
+//    came from isn't the spec'd one ("Door closer" must not cover "door 92*39")
+// Same-vendor + same-project + founder-approved still gate the exemption around
+// this, so erring tolerant within those guards is intentional.
 const ITEM_MATCH_THRESHOLD = 0.8;
-function itemDescriptionsMatch(a: string, b: string): boolean {
+const MIN_SOLO_TOKEN_LEN = 4;
+function itemDescriptionSimilarity(a: string, b: string): number {
   const na = normalizeItemText(a);
   const nb = normalizeItemText(b);
-  if (!na || !nb) return false;
-  if (na === nb) return true;
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+
+  const rawA = tokenizeItemText(a);
+  const rawB = tokenizeItemText(b);
+  const tokensA = glueTokens(rawA, new Set(rawB));
+  const tokensB = glueTokens(rawB, new Set(rawA));
+
+  // Both sides carry specs and none of them agree → different material.
+  const specsA = specNumbers(tokensA);
+  const specsB = specNumbers(tokensB);
+  if (specsA.length && specsB.length && !specsA.some((n) => specsB.includes(n))) return 0;
 
   const levRatio = 1 - levenshtein(na, nb) / Math.max(na.length, nb.length);
 
-  const ta = new Set(tokenizeItemText(a));
-  const tb = new Set(tokenizeItemText(b));
-  let intersection = 0;
-  for (const t of ta) if (tb.has(t)) intersection++;
-  const union = ta.size + tb.size - intersection;
-  const jaccard = union ? intersection / union : 0;
-  const containment = intersection / Math.max(1, Math.min(ta.size, tb.size));
+  const distinctA = [...new Set(tokensA.filter(isDistinctiveToken))];
+  const distinctB = [...new Set(tokensB.filter(isDistinctiveToken))];
+  // Nothing but units/charges on one side (e.g. "Freight on Sale") — spelling
+  // similarity is all we have left.
+  if (!distinctA.length || !distinctB.length) return levRatio;
 
-  return Math.max(levRatio, jaccard, containment) >= ITEM_MATCH_THRESHOLD;
+  const shared = distinctA.filter((t) => distinctB.includes(t));
+  const union = distinctA.length + distinctB.length - shared.length;
+  const jaccard = union ? shared.length / union : 0;
+
+  const aIsSmaller = distinctA.length <= distinctB.length;
+  const smaller = aIsSmaller ? distinctA : distinctB;
+  const smallerSpecs = aIsSmaller ? specsA : specsB;
+  const otherSpecs = aIsSmaller ? specsB : specsA;
+  let containment = shared.length / smaller.length;
+  if (smaller.length === 1) {
+    const soloTooShort = smaller[0].length < MIN_SOLO_TOKEN_LEN;
+    const soloIsTheSpecdSide = smallerSpecs.length > 0 && otherSpecs.length === 0;
+    if (soloTooShort || soloIsTheSpecdSide) containment = 0;
+  }
+
+  return Math.max(levRatio, jaccard, containment);
+}
+
+// True if two line descriptions plausibly refer to the same material.
+function itemDescriptionsMatch(a: string, b: string): boolean {
+  return itemDescriptionSimilarity(a, b) >= ITEM_MATCH_THRESHOLD;
 }
 
 type ManualReviewStatus = "pending" | "in_review" | "reviewed" | "sent_for_approval";
@@ -361,7 +458,14 @@ export default function ComparisonSheetPage() {
   const [prLineItems, setPrLineItems] = useState<PrLineItem[]>([]);
   const [lastPurchases, setLastPurchases] = useState<Record<string, LastPurchase>>({});
   const [projectSite, setProjectSite] = useState<string | null>(null);
+  const [projectCode, setProjectCode] = useState<string | null>(null);
   const [repeatOrderExemption, setRepeatOrderExemption] = useState<{ poNumber: string; supplierName: string; approvedAt: string; poCount: number } | null>(null);
+  // Key of the inputs the repeat-order check has finished running for. Compared
+  // against the current inputs during render, so "still checking" is derived,
+  // never a stale flag — until it settles we must not show "Request Override
+  // from IT Team", because an unresolved check looks exactly like "no
+  // exemption", which is what sent RFQ-2026-0323 to IT unnecessarily.
+  const [exemptionCheckedKey, setExemptionCheckedKey] = useState<string | null>(null);
   const [marketBenchmarks, setMarketBenchmarks] = useState<Record<string, MarketBenchmark>>({});
   const [marketLoading, setMarketLoading] = useState(false);
   const [marketProgress, setMarketProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
@@ -1079,13 +1183,11 @@ export default function ComparisonSheetPage() {
           .eq("id", prId)
           .maybeSingle();
         setProjectSite((prRow as any)?.project_site ?? null);
-        // Fire-and-forget: check if a repeat-order exemption applies (same vendor + site + all materials, across any founder-approved PO(s))
-        const pCode = (prRow as any)?.project_code as string | null;
-        if (pCode && rfqId) {
-          checkRepeatOrderExemption(localPrLineItems, rfqId, pCode)
-            .then(setRepeatOrderExemption)
-            .catch(() => setRepeatOrderExemption(null));
-        }
+        // The repeat-order exemption check itself is driven by its own effect —
+        // it has to re-run whenever the approved-quote count changes, not just
+        // on mount, because the check can't identify the vendor until at least
+        // one quote is approved.
+        setProjectCode((prRow as any)?.project_code ?? null);
       }
 
       // Use order+limit instead of maybeSingle() so legacy duplicates (if any) don't error
@@ -1519,9 +1621,6 @@ export default function ComparisonSheetPage() {
       .order("created_at", { ascending: false });
     if (!pos?.length) return null;
 
-    const prItemsWithId = plis.filter(li => li.item_id);
-    const prItemsNoId   = plis.filter(li => !li.item_id);
-
     // Group POs by supplier: coverage must be satisfied by a SINGLE vendor
     // (across any number of their POs), never by pooling different vendors'
     // lines together — that would exempt materials no one vendor actually sold.
@@ -1548,21 +1647,20 @@ export default function ComparisonSheetPage() {
 
       // Every PR line must be covered by SOME pooled line; track which POs
       // actually contributed so the banner can report an accurate PO count.
+      // A canonical item_id match is the strongest signal, but ~63% of PO lines
+      // have no item_id, so a PR line that IS canonicalised must still be able
+      // to fall back to the tolerant description match — otherwise linking an
+      // item to the catalogue would make the exemption harder to earn, not easier.
       const contributing = new Set<string>();
-      const idOk = prItemsWithId.every(li => {
-        const hit = pooled.find(p => p.itemId && p.itemId === li.item_id);
-        if (hit) contributing.add(hit.po.id as string);
-        return !!hit;
-      });
-      // Free-text lines: tolerant fuzzy match (see itemDescriptionsMatch) so
-      // minor spelling/wording drift on the same material doesn't force an override.
-      const descOk = idOk && prItemsNoId.every(li => {
-        const hit = pooled.find(p => itemDescriptionsMatch(li.description ?? "", p.desc));
+      const allCovered = plis.every(li => {
+        const hit =
+          (li.item_id ? pooled.find(p => p.itemId && p.itemId === li.item_id) : undefined) ??
+          pooled.find(p => itemDescriptionsMatch(li.description ?? "", p.desc));
         if (hit) contributing.add(hit.po.id as string);
         return !!hit;
       });
 
-      if (idOk && descOk) {
+      if (allCovered) {
         // supplierPos is newest-first; report the most recent contributing PO.
         const repPo = supplierPos.find(p => contributing.has(p.id as string)) ?? supplierPos[0];
         const { data: sup } = await supabase
@@ -1582,6 +1680,33 @@ export default function ComparisonSheetPage() {
     }
     return null;
   };
+
+  // Re-run the exemption check whenever the inputs it depends on change — most
+  // importantly the approved-quote count, since the check can't name the vendor
+  // until a quote is approved. Running it only on mount meant a quote approved
+  // while this page was open never unlocked the exemption.
+  // null when there is nothing to check (no vendor identified yet, no project
+  // code, no lines) — in that case there is no pending state to wait for.
+  const exemptionInputsKey =
+    rfqId && projectCode && prLineItems.length && approvedQuoteCount > 0
+      ? `${rfqId}|${projectCode}|${prLineItems.map((li) => li.id).join(",")}|${approvedQuoteCount}`
+      : null;
+  const exemptionPending = exemptionInputsKey !== null && exemptionCheckedKey !== exemptionInputsKey;
+
+  useEffect(() => {
+    if (!exemptionInputsKey || !rfqId || !projectCode) {
+      setRepeatOrderExemption(null);
+      setExemptionCheckedKey(null);
+      return;
+    }
+    let cancelled = false;
+    checkRepeatOrderExemption(prLineItems, rfqId, projectCode)
+      .then((result) => { if (!cancelled) setRepeatOrderExemption(result); })
+      .catch(() => { if (!cancelled) setRepeatOrderExemption(null); })
+      .finally(() => { if (!cancelled) setExemptionCheckedKey(exemptionInputsKey); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exemptionInputsKey]);
 
   const generateSheetIfMissing = async () => {
     if (!rfqId) return;
@@ -1612,13 +1737,21 @@ export default function ComparisonSheetPage() {
         .eq("parse_status", "approved");
       const currentApproved = aqCount ?? 0;
       setApprovedQuoteCount(currentApproved);
-      if (currentApproved < 3 && overrideStatus !== "allowed" && !repeatOrderExemption) {
+      // Re-evaluate the exemption against live data rather than trusting the
+      // state snapshot — a quote approved in another tab since this page loaded
+      // can change the answer, and the state copy would still say "no exemption".
+      let exemption = repeatOrderExemption;
+      if (currentApproved < 3 && overrideStatus !== "allowed" && projectCode && prLineItems.length) {
+        exemption = await checkRepeatOrderExemption(prLineItems, rfqId, projectCode).catch(() => null);
+        setRepeatOrderExemption(exemption);
+      }
+      if (currentApproved < 3 && overrideStatus !== "allowed" && !exemption) {
         toast.error(`Kam se kam 3 quotes approve karo, ya IT team se override approval lo. Abhi ${currentApproved}/3 approved hain.`);
         setGenerating(false);
         return;
       }
       // Log when the repeat-order exemption is the only reason we're proceeding with < 3 quotes
-      if (repeatOrderExemption && currentApproved < 3 && overrideStatus !== "allowed") {
+      if (exemption && currentApproved < 3 && overrideStatus !== "allowed") {
         void supabase.from("cps_audit_log").insert({
           user_id: user?.id,
           user_name: user?.name,
@@ -1627,7 +1760,7 @@ export default function ComparisonSheetPage() {
           entity_type: "cps_rfqs",
           entity_id: rfqId,
           entity_number: rfq?.rfq_number,
-          description: `Repeat-order exemption applied for ${rfq?.rfq_number}. Vendor: ${repeatOrderExemption.supplierName}, PO: ${repeatOrderExemption.poNumber}${repeatOrderExemption.poCount > 1 ? ` (+${repeatOrderExemption.poCount - 1} more PO)` : ""} (founder approved, latest ${new Date(repeatOrderExemption.approvedAt).toLocaleDateString("en-IN")}). Sheet created with ${currentApproved} quote(s).`,
+          description: `Repeat-order exemption applied for ${rfq?.rfq_number}. Vendor: ${exemption.supplierName}, PO: ${exemption.poNumber}${exemption.poCount > 1 ? ` (+${exemption.poCount - 1} more PO)` : ""} (founder approved, latest ${new Date(exemption.approvedAt).toLocaleDateString("en-IN")}). Sheet created with ${currentApproved} quote(s).`,
           severity: "info",
           logged_at: new Date().toISOString(),
         });
@@ -3818,7 +3951,13 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               </div>
             )}
 
-            {approvedQuoteCount < 3 && overrideStatus !== "allowed" && !repeatOrderExemption && (
+            {approvedQuoteCount < 3 && exemptionPending && (
+              <p className="text-xs text-muted-foreground bg-muted/40 border border-border rounded px-3 py-2 max-w-xs">
+                Is site par isi vendor ke pichhle POs check ho rahe hain…
+              </p>
+            )}
+
+            {approvedQuoteCount < 3 && overrideStatus !== "allowed" && !repeatOrderExemption && !exemptionPending && (
               <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 max-w-xs">
                 Comparison sheet ke liye kam se kam <strong>3 quotes approve</strong> karne honge. Quotes page par jao aur baaki quotes review karo.
               </p>
@@ -3856,8 +3995,10 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               {generating ? "Ban rahi hai..." : "Comparison Sheet Banao"}
             </Button>
 
-            {/* Request override button — hidden when repeat-order exemption applies */}
-            {approvedQuoteCount < 3 && (overrideStatus === "none" || overrideStatus === "denied") && canCreateRFQ && !repeatOrderExemption && (
+            {/* Request override button — hidden when a repeat-order exemption applies
+                AND while the exemption check is still running, so nobody raises an
+                IT request for an RFQ that was about to exempt itself. */}
+            {approvedQuoteCount < 3 && (overrideStatus === "none" || overrideStatus === "denied") && canCreateRFQ && !repeatOrderExemption && !exemptionPending && (
               <Button
                 variant="outline"
                 size="sm"
