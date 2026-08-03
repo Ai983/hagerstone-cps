@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
-import { Bell, Check, CheckCheck, FileText, ShoppingCart, MessageSquare, Send, Shield } from "lucide-react";
+import { Bell, Check, CheckCheck, FileText, ShoppingCart, MessageSquare, Send, Shield, ClipboardList } from "lucide-react";
 
 const ROLE_COLORS: Record<string, string> = {
   procurement_head: "bg-primary/10 text-primary",
@@ -15,6 +15,7 @@ const ROLE_COLORS: Record<string, string> = {
   site_receiver: "bg-orange-100 text-orange-800",
   accounts_team: "bg-teal-100 text-teal-800",
   design_team: "bg-violet-100 text-violet-800",
+  project_coordinator: "bg-amber-100 text-amber-800",
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -22,11 +23,21 @@ const ROLE_LABELS: Record<string, string> = {
   procurement_head: "Procurement Head", it_head: "IT Head", management: "Management",
   finance: "Finance", site_receiver: "Site Receiver", auditor: "Auditor",
   accounts_team: "Accounts Team", design_team: "Design Team",
+  project_coordinator: "Project Coordinator",
 };
 
 /* ── Notification types ── */
 
+/**
+ * Two sources feed the bell:
+ *   - `personal` — cps_notifications rows addressed to THIS user (task assigned,
+ *     reminder, follow-up). Read state lives in the DB, so it follows them across
+ *     devices. Employees see only these.
+ *   - `activity`  — the legacy global cps_audit_log feed, non-employees only, whose
+ *     read state is still just a localStorage watermark.
+ */
 type NotifItem = {
+  kind: "personal" | "activity";
   id: string;
   action_type: string;
   entity_type: string;
@@ -35,6 +46,10 @@ type NotifItem = {
   user_name: string | null;
   logged_at: string;
   severity: string;
+  /** personal only */
+  link?: string | null;
+  title?: string;
+  read_at?: string | null;
 };
 
 /* Map action_type to icon, color, label, and route */
@@ -47,6 +62,15 @@ const ACTION_CONFIG: Record<string, { icon: typeof FileText; color: string; labe
   PO_APPROVED:         { icon: Check,         color: "text-green-700 bg-green-100",  label: "PO Approved",      route: "/purchase-orders" },
   PO_REJECTED:         { icon: Shield,        color: "text-red-600 bg-red-100",      label: "PO Rejected",      route: "/purchase-orders" },
   PO_PAYMENT_TERMS_SET:{ icon: ShoppingCart,  color: "text-indigo-600 bg-indigo-100", label: "Payment Terms Set", route: "/purchase-orders" },
+  task_assigned:       { icon: ClipboardList, color: "text-amber-700 bg-amber-100",   label: "Naya Kaam",        route: "/my-work" },
+  task_reminder:       { icon: ClipboardList, color: "text-red-600 bg-red-100",       label: "Reminder",         route: "/my-work" },
+  task_followup:       { icon: MessageSquare, color: "text-blue-600 bg-blue-100",     label: "Follow-up",        route: "/my-work" },
+  task_reopened:       { icon: ClipboardList, color: "text-amber-700 bg-amber-100",   label: "Wapas Khula",      route: "/my-work" },
+  task_cancelled:      { icon: Shield,        color: "text-red-600 bg-red-100",       label: "Cancel",           route: "/my-work" },
+  task_approved:       { icon: Check,         color: "text-green-700 bg-green-100",   label: "Approved",         route: "/my-work" },
+  task_started:        { icon: ClipboardList, color: "text-blue-600 bg-blue-100",     label: "Kaam Shuru",       route: "/tasks" },
+  task_progress:       { icon: ClipboardList, color: "text-blue-600 bg-blue-100",     label: "Task Update",      route: "/tasks" },
+  task_submitted:      { icon: Check,         color: "text-teal-600 bg-teal-100",     label: "Review Chahiye",   route: "/tasks" },
 };
 
 const DEFAULT_CONFIG = { icon: FileText, color: "text-muted-foreground bg-muted", label: "Activity", route: "/audit" };
@@ -64,14 +88,25 @@ export function TopBar() {
   });
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const showBell = user && !isEmployee;
+  // Everyone gets a bell now — site engineers need it for task assignments and
+  // deadline reminders, which are addressed to them personally.
+  const showBell = !!user;
 
   const fetchNotifs = useCallback(async () => {
-    if (!user || isEmployee) return;
+    if (!user) return;
     const since = new Date();
     since.setDate(since.getDate() - 7);
 
-    const { data } = await supabase
+    // Personal notifications: RLS already scopes cps_notifications to the caller.
+    const personalReq = supabase
+      .from("cps_notifications")
+      .select("id,type,title,body,link,entity_type,entity_id,read_at,created_at")
+      .gte("created_at", since.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    // Global activity feed — procurement context, not meaningful to field employees.
+    const activityReq = isEmployee ? null : supabase
       .from("cps_audit_log")
       .select("id,action_type,entity_type,entity_number,description,user_name,logged_at,severity")
       .gte("logged_at", since.toISOString())
@@ -83,25 +118,54 @@ export function TopBar() {
       .order("logged_at", { ascending: false })
       .limit(20);
 
-    const items = (data ?? []) as NotifItem[];
+    const [personalRes, activityRes] = await Promise.all([personalReq, activityReq]);
+
+    const personal: NotifItem[] = (personalRes.data ?? []).map((n: {
+      id: string; type: string; title: string; body: string | null; link: string | null;
+      entity_type: string | null; read_at: string | null; created_at: string;
+    }) => ({
+      kind: "personal",
+      id: n.id,
+      action_type: n.type,
+      entity_type: n.entity_type ?? "",
+      entity_number: null,
+      description: n.body ?? "",
+      title: n.title,
+      user_name: null,
+      logged_at: n.created_at,
+      severity: "info",
+      link: n.link,
+      read_at: n.read_at,
+    }));
+
+    const activity: NotifItem[] = ((activityRes?.data ?? []) as Array<Omit<NotifItem, "kind">>)
+      .map((a) => ({ ...a, kind: "activity" as const }));
+
+    const items = [...personal, ...activity].sort((a, b) => (a.logged_at < b.logged_at ? 1 : -1));
     setNotifs(items);
 
-    // Count unread based on lastReadAt
     const stored = localStorage.getItem(STORAGE_KEY) ?? "";
-    const unreadCount = stored
-      ? items.filter((n) => n.logged_at > stored).length
-      : items.length;
-    setUnread(unreadCount);
+    setUnread(
+      personal.filter((n) => !n.read_at).length +
+      activity.filter((n) => !stored || n.logged_at > stored).length,
+    );
   }, [user, isEmployee]);
 
   useEffect(() => {
+    // Initial load + realtime subscribe. fetchNotifs is async — its setState calls
+    // land in a later tick, not during this effect, so there is no cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchNotifs();
     if (!showBell) return;
 
-    // Listen for new audit log entries
+    // The client is pinned to db.schema = "cps", but that does NOT apply to realtime —
+    // the channel must name the schema explicitly or it silently never fires.
     const channel = supabase.channel("topbar-notifs");
     channel
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "cps_audit_log" }, () => {
+      .on("postgres_changes", { event: "INSERT", schema: "cps", table: "cps_notifications" }, () => {
+        fetchNotifs();
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "cps", table: "cps_audit_log" }, () => {
         fetchNotifs();
       })
       .subscribe();
@@ -110,7 +174,6 @@ export function TopBar() {
       channel.unsubscribe();
       supabase.removeChannel(channel);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, showBell, fetchNotifs]);
 
   // Close on outside click
@@ -122,21 +185,36 @@ export function TopBar() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const markAllRead = () => {
+  const markAllRead = async () => {
     const now = new Date().toISOString();
+    // Personal read state lives in the DB so it survives a device change; the
+    // global activity feed still uses the localStorage watermark.
     localStorage.setItem(STORAGE_KEY, now);
     setLastReadAt(now);
     setUnread(0);
+    setNotifs((prev) => prev.map((n) => (n.kind === "personal" ? { ...n, read_at: now } : n)));
+    if (user) {
+      await supabase.from("cps_notifications").update({ read_at: now }).is("read_at", null);
+    }
   };
 
   const handleOpenToggle = () => {
     setOpen((o) => !o);
   };
 
-  const handleNotifClick = (n: NotifItem) => {
+  const handleNotifClick = async (n: NotifItem) => {
     setOpen(false);
-    const config = ACTION_CONFIG[n.action_type] ?? DEFAULT_CONFIG;
-    navigate(config.route);
+    if (n.kind === "personal") {
+      if (!n.read_at) {
+        const now = new Date().toISOString();
+        setNotifs((prev) => prev.map((x) => (x.id === n.id ? { ...x, read_at: now } : x)));
+        setUnread((u) => Math.max(0, u - 1));
+        await supabase.from("cps_notifications").update({ read_at: now }).eq("id", n.id);
+      }
+      navigate(n.link || (ACTION_CONFIG[n.action_type] ?? DEFAULT_CONFIG).route);
+      return;
+    }
+    navigate((ACTION_CONFIG[n.action_type] ?? DEFAULT_CONFIG).route);
   };
 
   const fmt = (ts: string) => {
@@ -153,7 +231,8 @@ export function TopBar() {
     return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
   };
 
-  const isUnread = (n: NotifItem) => !lastReadAt || n.logged_at > lastReadAt;
+  const isUnread = (n: NotifItem) =>
+    n.kind === "personal" ? !n.read_at : (!lastReadAt || n.logged_at > lastReadAt);
 
   return (
     <header className="h-14 flex items-center justify-between border-b border-border bg-background px-3 sm:px-6 shrink-0 gap-2">
@@ -232,7 +311,9 @@ export function TopBar() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between gap-2">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <span className="text-xs font-semibold text-foreground">{config.label}</span>
+                                  <span className="text-xs font-semibold text-foreground truncate">
+                                    {n.kind === "personal" ? (n.title ?? config.label) : config.label}
+                                  </span>
                                   {n.entity_number && (
                                     <span className="font-mono text-[11px] text-primary font-medium truncate">{n.entity_number}</span>
                                   )}
@@ -258,9 +339,9 @@ export function TopBar() {
                     <button
                       type="button"
                       className="text-xs text-primary hover:underline w-full text-center"
-                      onClick={() => { setOpen(false); navigate("/audit"); }}
+                      onClick={() => { setOpen(false); navigate(isEmployee ? "/my-work" : "/audit"); }}
                     >
-                      View full activity log
+                      {isEmployee ? "Mera Kaam dekho" : "View full activity log"}
                     </button>
                   </div>
                 </div>

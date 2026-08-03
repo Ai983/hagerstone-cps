@@ -1,7 +1,7 @@
 import React, { createContext, use, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "it_head" | "management" | "finance" | "site_receiver" | "auditor" | "accounts_team" | "design_team";
+export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "it_head" | "management" | "finance" | "site_receiver" | "auditor" | "accounts_team" | "design_team" | "project_coordinator";
 
 export interface CpsUser {
   id: string; email: string; name: string; role: CpsRole;
@@ -25,6 +25,13 @@ interface AuthContextType {
    * permissions (cannot approve, create RFQ, manage suppliers, adjust stock).
    */
   isDesignTeam: boolean;
+  /**
+   * Project Coordinator — owns the project execution schedule (/schedule) and the
+   * task board (/tasks): uploads the schedule, assigns dated tasks to site engineers
+   * and to procurement, and follows them up. Also gets Site Stock + Stock Overview.
+   * Holds no procurement write permissions (cannot approve, create RFQ, manage suppliers).
+   */
+  isProjectCoordinator: boolean;
   /** True = current user is blocked from raising new PRs (missed an invoice-upload deadline). */
   isPrBlocked: boolean;
 }
@@ -137,12 +144,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       canViewStock: !!role,
       // design_team has a deliberate stock-write exception (otherwise view-only):
       // she manages Site Stock + Stock Overview after reviewing sites.
-      canIssueStock: role === "site_receiver" || role === "requestor" || role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team",
-      canAdjustStock: role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team",
+      canIssueStock: role === "site_receiver" || role === "requestor" || role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team" || role === "project_coordinator",
+      canAdjustStock: role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team" || role === "project_coordinator",
       isProcurementHead: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
       isManagement: role === "management",
       isEmployee: role === "requestor" || role === "site_receiver",
       isDesignTeam: role === "design_team",
+      isProjectCoordinator: role === "project_coordinator",
       isPrBlocked: user?.pr_blocked === true,
     }}>
       {children}

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, FileText, Send, ShoppingCart, Truck, MessageSquare,
-  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, Boxes, ListChecks, Trophy, KanbanSquare, LineChart, ShieldCheck, Briefcase,
+  BarChart3, Users, Package, Shield, MoreHorizontal, LogOut, Building2, UserCircle, Boxes, ListChecks, Trophy, KanbanSquare, LineChart, ShieldCheck, Briefcase, CalendarRange, ClipboardList, HardHat,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,9 @@ const ADMIN_PRIMARY = [
 ];
 
 const ADMIN_MORE = [
+  { title: "Schedule", url: "/schedule", icon: CalendarRange, roles: ["project_coordinator", "procurement_executive", "procurement_head", "it_head", "management"] },
+  { title: "Task Board", url: "/tasks", icon: ClipboardList, roles: ["project_coordinator", "procurement_executive", "procurement_head", "it_head", "management"] },
+  { title: "My Tasks", url: "/my-work", icon: HardHat, roles: ["project_coordinator", "procurement_executive", "procurement_head", "it_head", "management"] },
   { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor", "design_team"] },
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive", "procurement_head", "it_head", "management", "design_team"] },
   { title: "Work Orders", url: "/work-orders", icon: Briefcase, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor", "accounts_team", "design_team"] },
@@ -23,8 +26,8 @@ const ADMIN_MORE = [
   { title: "Analytics", url: "/analytics", icon: LineChart, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor", "accounts_team", "design_team"] },
   { title: "Delivery", url: "/delivery", icon: Truck, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor", "design_team"] },
   { title: "BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive", "procurement_head", "it_head", "management", "accounts_team", "design_team"] },
-  { title: "Stock", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor", "accounts_team", "design_team"] },
-  { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "design_team", "accounts_team"] },
+  { title: "Stock", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "finance", "auditor", "accounts_team", "design_team", "project_coordinator"] },
+  { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive", "procurement_head", "it_head", "management", "design_team", "accounts_team", "project_coordinator"] },
   { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive", "procurement_head", "it_head", "management", "auditor", "design_team"] },
   { title: "Items", url: "/items", icon: Package, roles: ["procurement_executive", "procurement_head", "it_head", "design_team"] },
   { title: "Audit Log", url: "/audit", icon: Shield, roles: ["auditor", "procurement_head", "it_head", "management", "design_team"] },
@@ -33,8 +36,18 @@ const ADMIN_MORE = [
 
 const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Mera Kaam", url: "/my-work", icon: HardHat },
   { title: "Meri Requests", url: "/requisitions", icon: FileText },
   { title: "Quotes", url: "/site-quotes", icon: Trophy },
+  { title: "Stock", url: "/stock", icon: Boxes },
+];
+
+// The coordinator has no business on RFQs/POs, so they get their own primary bar
+// rather than ADMIN_PRIMARY's procurement tabs.
+const COORDINATOR_PRIMARY = [
+  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Schedule", url: "/schedule", icon: CalendarRange },
+  { title: "Tasks", url: "/tasks", icon: ClipboardList },
   { title: "Stock", url: "/stock", icon: Boxes },
 ];
 
@@ -43,6 +56,7 @@ const ROLE_LABELS: Record<string, string> = {
   procurement_head: "Proc. Head", it_head: "IT Head", management: "Management",
   finance: "Finance", site_receiver: "Site Receiver", auditor: "Auditor",
   accounts_team: "Accounts Team", design_team: "Design Team",
+  project_coordinator: "Project Coordinator",
 };
 
 export function BottomNav() {
@@ -114,11 +128,12 @@ export function BottomNav() {
   }
 
   const visibleMore = ADMIN_MORE.filter(item => item.roles.includes(user.role));
+  const primary = user.role === 'project_coordinator' ? COORDINATOR_PRIMARY : ADMIN_PRIMARY;
 
   return (
     <>
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 h-16 bg-sidebar text-sidebar-foreground border-t border-sidebar-border flex items-center">
-        {ADMIN_PRIMARY.map(item => (
+        {primary.map(item => (
           <NavLink
             key={item.url}
             to={item.url}

@@ -77,6 +77,9 @@ const SiteQuotes = lazyWithRetry(() => import("@/pages/SiteQuotes"));
 const ProjectBOQ = lazyWithRetry(() => import("@/pages/ProjectBOQ"));
 const StockOverview = lazyWithRetry(() => import("@/pages/StockOverview"));
 const BudgetList = lazyWithRetry(() => import("@/pages/BudgetList"));
+const ProjectSchedule = lazyWithRetry(() => import("@/pages/ProjectSchedule"));
+const TaskBoard = lazyWithRetry(() => import("@/pages/TaskBoard"));
+const MyWork = lazyWithRetry(() => import("@/pages/MyWork"));
 const AdminOverrides = lazyWithRetry(() => import("@/pages/AdminOverrides"));
 const NotFound = lazyWithRetry(() => import("@/pages/NotFound"));
 
@@ -137,6 +140,9 @@ const App = () => (
               <Route path="/boq" element={<Protected><ProjectBOQ /></Protected>} />
               <Route path="/stock-overview" element={<Protected><StockOverview /></Protected>} />
               <Route path="/budget-list" element={<Protected><BudgetList /></Protected>} />
+              <Route path="/schedule" element={<Protected><ProjectSchedule /></Protected>} />
+              <Route path="/tasks" element={<Protected><TaskBoard /></Protected>} />
+              <Route path="/my-work" element={<Protected><MyWork /></Protected>} />
               <Route path="/admin/overrides" element={<Protected><AdminOverrides /></Protected>} />
               <Route path="*" element={<NotFound />} />
             </Routes>

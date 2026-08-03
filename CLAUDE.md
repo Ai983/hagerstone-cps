@@ -23,6 +23,7 @@ The automation spine is **n8n** (`primary-production-72e3f.up.railway.app`) usin
 - **PO WhatsApp Dispatch (PRODUCTION)** (`webhook_po_dispatch`) and **Founder PO Approval (WhatsApp)** (token links to directors).
 - **Finance/Imprest cluster** (WF1–WF4): imprest submission, founder/director approval, weekly/monthly founder reports, **PO→Finance dispatch bridge** (`webhook_po_finance_dispatch`).
 - **Site Stock Stale Reminder (24h)**.
+- **Task cluster (Project Coordinator, added 2026-08)** — `Hb7nFsAWQg23C3Nn` Task Assigned Dispatch (`webhook_task_assigned`), `V4KN3YGKkbWapxNm` Task Reminder Cron (daily 09:00 IST, polls `cps_task_reminders_due`, stamps `*_sent_at` so it is idempotent), `nGT35m2Dyq3qKMZ0` Task Update Notify (`webhook_task_update`).
 - The same n8n instance hosts ~20 unrelated HR/recruitment/Meta-lead workflows — those are NOT CPS.
 
 ## Commands
@@ -65,16 +66,17 @@ There is **no test runner configured** — no Vitest/Jest. `CPS_TEST_GUIDE.md` i
 Protected pages render inside `<Protected>` = `<ProtectedRoute><Layout>…</Layout></ProtectedRoute>`. `Layout` provides the desktop `Sidebar`, mobile `BottomNav`, and `TopBar`.
 
 ### Auth & roles
-`useAuth()` (`src/contexts/AuthContext`) is the single source of identity and permissions. It loads the `cps_users` row by `auth_uid`, falls back to email match, and auto-creates a `requestor` profile for new OAuth sign-ins. **10 roles** (`CpsRole`):
+`useAuth()` (`src/contexts/AuthContext`) is the single source of identity and permissions. It loads the `cps_users` row by `auth_uid`, falls back to email match, and auto-creates a `requestor` profile for new OAuth sign-ins. **11 roles** (`CpsRole`):
 
-`requestor`, `procurement_executive`, `procurement_head`, `it_head`, `management`, `finance`, `site_receiver`, `auditor`, `accounts_team`, `design_team`.
+`requestor`, `procurement_executive`, `procurement_head`, `it_head`, `management`, `finance`, `site_receiver`, `auditor`, `accounts_team`, `design_team`, `project_coordinator`.
 
 - `it_head` is effectively super-admin (full access + the only role that sees `/admin/overrides`).
 - `accounts_team` is view-only.
 - `design_team` (the Design Team Head, login `design@hagerstone.com`) is **view-only across all procurement pages** — it mirrors `procurement_head`'s nav allowlist but holds **no write permissions**. Its one write action is the Design acknowledgement on the PR verification gate (see PR → Auto RFQ Flow). `isDesignTeam` on `useAuth()` gates it.
-- `requestor` / `site_receiver` are "employees" — they get a separate, simplified sidebar (`EMPLOYEE_NAV` in `Sidebar.tsx`, Hindi-flavoured labels like "Meri Requests", "Saman List").
+- `project_coordinator` owns the Project Coordinator surface (see below): `/schedule`, `/tasks`, `/my-work`, plus `/stock` and `/stock-overview`. Unlike every other role it is gated by an **allowlist** in `ProtectedRoute.tsx` (`coordinatorRoutes`), not the employee blocklist — anything outside its own surface redirects to `/dashboard`. `isProjectCoordinator` on `useAuth()` gates it, and it gets its own mobile primary bar (`COORDINATOR_PRIMARY` in `BottomNav.tsx`) instead of the procurement tabs.
+- `requestor` / `site_receiver` are "employees" — they get a separate, simplified sidebar (`EMPLOYEE_NAV` in `Sidebar.tsx`, Hindi-flavoured labels like "Mera Kaam", "Meri Requests", "Saman List").
 
-**Permission helpers on `useAuth()`:** `canApprove`, `canCreateRFQ`, `canViewAudit`, `canViewPrices`, `canManageSuppliers`, `canViewStock`, `canIssueStock`, `canAdjustStock`, `isProcurementHead`, `isManagement`, `isEmployee`, `isDesignTeam`. Never re-derive role logic in pages — use these.
+**Permission helpers on `useAuth()`:** `canApprove`, `canCreateRFQ`, `canViewAudit`, `canViewPrices`, `canManageSuppliers`, `canViewStock`, `canIssueStock`, `canAdjustStock`, `isProcurementHead`, `isManagement`, `isEmployee`, `isDesignTeam`, `isProjectCoordinator`. Never re-derive role logic in pages — use these.
 
 ### Navigation
 `Sidebar.tsx` `NAV` array drives the desktop menu; each entry has a `roles` allowlist (`["all"]` = everyone). Employees bypass `NAV` entirely and see `EMPLOYEE_NAV`.
@@ -140,7 +142,7 @@ useEffect(() => {
 
 ## Routes
 **Public (no auth):** `/login`, `/vendor/upload-quote?token=xxx`, `/approve-po?token=xxx`, `/approve-release?token=xxx`, `/approve-advance?token=xxx`
-**Protected:** `/dashboard`, `/kanban`, `/analytics`, `/requisitions`, `/pr-review`, `/rfqs`, `/quotes`, `/comparison`, `/comparison/:rfqId`, `/purchase-orders`, `/work-orders`, `/delivery`, `/boq`, `/stock`, `/stock-overview`, `/site-quotes`, `/suppliers`, `/vendor-scout`, `/items`, `/invoices/upload`, `/audit`, `/admin/overrides`, `/advances`, `/grn-approvals`, `/reconciliation`
+**Protected:** `/dashboard`, `/kanban`, `/analytics`, `/requisitions`, `/pr-review`, `/rfqs`, `/quotes`, `/comparison`, `/comparison/:rfqId`, `/purchase-orders`, `/work-orders`, `/delivery`, `/boq`, `/stock`, `/stock-overview`, `/site-quotes`, `/suppliers`, `/vendor-scout`, `/items`, `/invoices/upload`, `/audit`, `/admin/overrides`, `/advances`, `/grn-approvals`, `/reconciliation`, `/budget-list`, `/schedule`, `/tasks`, `/my-work`
 
 > `VendorRegister.tsx`, `VendorStatus.tsx`, `BulkInvoiceIngestion.tsx`, `DesignTeam.tsx` exist as files but are **not routed** — leftover from dropped/parked features. Don't link to them.
 
@@ -156,6 +158,7 @@ Schema is large; use the Supabase MCP tools (`list_tables`, `execute_sql`) to in
 - **Suppliers:** `cps_suppliers`, `cps_supplier_items`, `cps_supplier_performance`, `cps_vendor_feedback`, `cps_vendor_registrations`
 - **Vendor Scout (lead discovery):** `cps_vendor_leads` (~377 rows) — Google-Maps-sourced vendor/contractor leads. Absorbed 2026-07 from the standalone `scraper-app-v2` app (was `scraper.vendor_leads`); that Railway/Vercel deployment is retired. Unique key `(place_id, city, category)` — the same business legitimately appears under several keywords, and each keyword is its own cache entry. `status: new | shortlisted | rejected | converted`; `converted_supplier_id` links to the `cps_suppliers` row created from the lead.
 - **Projects & BOQ:** `cps_projects`, `cps_project_assignments`, `cps_project_boqs`, `cps_boq_uploads`
+- **Project Coordinator (schedule + tasks, added 2026-08):** `cps_project_schedules` (one row per uploaded Excel/PDF schedule, versioned via `is_current`), `cps_schedule_activities` (AI-extracted activity + start/end date), `cps_site_tasks` (the assigned work), `cps_site_task_updates` (progress/completion evidence, bucket `cps-task-updates`), `cps_notifications` (per-user in-app notifications — the first real one CPS has had)
 - **Contractor work orders:** `cps_contractors`, `cps_contractor_work_orders`, `cps_work_orders`, `cps_wo_line_items`, `cps_wo_boq_items`
 - **RA bills (running-account billing):** `cps_ra_bills` + `cps_ra_bill_items`/`_approvals`/`_attachments`/`_deductions`/`_payments`/`_validations`, `cps_retention_ledger`, `cps_advance_ledger`, `cps_debit_notes`
 - **Stock:** `cps_stock`, `cps_stock_movements`, `cps_direct_orders`, `cps_holds`, `cps_dlp_tracker`
@@ -178,10 +181,12 @@ Schema is large; use the Supabase MCP tools (`list_tables`, `execute_sql`) to in
 - `cps_validate_grn_amount(p_grn_id)` → `{requires_variance_review, variance_percent, message, po_amount}` — GRN amount vs PO check
 - `cps_should_flip_delivery_tranche(p_grn_id)` → `{should_flip, delivery_percent, reason}` — whether GRN approval should trigger `on_delivery_grn` tranche
 - `cps_normalize_item_text()`, `cps_link_quote_line_to_canonical()`, `cps_link_po_line_to_canonical()` — item-text canonicalisation
-- `cps_current_user_role()` — RLS helper
+- `cps_current_user_role()`, `current_cps_user_id()`, `has_role(text[])`, `is_cps_user()` — RLS helpers
+- `cps_next_task_number()` → `TSK-2026-0001`
+- `cps_resolve_user_whatsapp(p_user_id)` → `91XXXXXXXXXX` — `cps_users.whatsapp` → `cps_users.phone` → **`finance.employees.phone` matched on email**. Only 4 of 60 `cps_users` carry a whatsapp number but 39 match a hub phone, so anything WhatsApping an internal user must go through this, not read `cps_users` directly.
 
 ### Views
-`cps_rfq_dashboard`, `cps_supplier_performance`, `cps_rfq_line_items_for_dispatch`, `cps_rfq_dispatch_details`
+`cps_rfq_dashboard`, `cps_supplier_performance`, `cps_rfq_line_items_for_dispatch`, `cps_rfq_dispatch_details`, `cps_task_reminders_due`, `cps_schedule_activity_progress`
 
 ## Anti-Corruption Rules (design intent — but config-gated in capture mode)
 These are the designed ideals. **In the current `capture` mode several are relaxed by `cps_config` (see Live State above) — check config before enforcing.**
@@ -240,6 +245,24 @@ standalone `scraper-app-v2` (FastAPI on Railway + Vite on Vercel), retired 2026-
 5. **Add to Suppliers** inserts into `cps_suppliers` with `added_via='vendor_scout'`, `verified=false`, `profile_complete=false`, stamps `converted_supplier_id` back on the lead, and audit-logs `VENDOR_SCOUT_CONVERT`. Leads already matching a supplier by phone/GSTIN/name show "Already listed" instead of an Add button.
 6. **Spend guard:** `cps_config.vendor_scout_daily_scrape_limit` (default 25) caps fresh scrapes per 24 h, counted off `VENDOR_SCOUT_SCRAPE` audit rows. Page is restricted to procurement/management roles; the edge function independently enforces `procurement_executive | procurement_head | it_head`.
 
+## Project Coordinator: schedule → tasks → "Mera Kaam" (added 2026-08)
+The work-assignment layer. Shared helpers live in `src/lib/tasks.ts` (types, `isOverdue`, `dueBadge`, `fireTaskWebhook`, `notifyUser`, `resolveWhatsapp`, `uploadTaskFiles`) — use them, don't re-derive.
+
+1. **`/schedule` (`ProjectSchedule.tsx`)** — a schedule reaches CPS two ways, both ending in the same `cps_project_schedules` + `cps_schedule_activities` rows (`source_type` distinguishes them):
+   - **Upload** (≤10 MB). **Primavera P6 exports are parsed deterministically, not by AI** — see `src/lib/scheduleParse.ts`. A P6 XLSX is its interchange format (sheets `TASK|RSRC|TASKPRED|PROJCOST|TASKRSRC|USERDATA`, two header rows, dates `DD-MM-YYYY HH:MM`), so `isP6Export()` keys off the fixed column names `task_code/task_name/start_date/end_date` and reads the `TASK` sheet directly. This matters twice over: **`04-08-2026` is 4 August under P6's declared `dd/mm/yyyy`** and guessing it as 8 April would silently corrupt a site deadline; and ~78% of a P6 workbook is noise (`RSRC` alone is ~3 KB of Primavera's stock sample resource library) that a model will happily invent activities from. Readable phase names ("INTERIOR WORK") are recovered from `TASKPRED.wbs_full_name`, since `TASK` only carries the code (`ITC.1`). Anything that is *not* a P6 export (hand-made Excel, PDF) falls back to `claude-proxy`, with the noise sheets stripped by `workbookToText()` and an explicit day-first rule in the prompt. **AI output is a pre-fill, never a direct insert** — it lands in an editable review table first.
+   - **Built inside CPS** — "CPS me Banao" creates a `source_type = 'manual'` schedule with no file, then activities are added one by one. For a small fit-out this avoids a detour through Primavera just to produce something to upload.
+
+   Either way the schedule then supports **full activity CRUD at any time** (not only pre-save): add/edit/delete on the live schedule, with `resyncScheduleHeader()` keeping `activity_count`/`schedule_start`/`schedule_end` honest. Deleting an activity that owns tasks is safe — `activity_id` is `ON DELETE SET NULL`, so the tasks survive on the board, merely unlinked (the confirm dialog says so).
+
+   Two views over the same activities: **Timeline** (Gantt) and **Activities** (table with per-row Assign / Edit / Delete). The Gantt is **hand-rolled from divs + %-widths** — the repo has no chart library (`src/components/ui/chart.tsx` imports `recharts`, which is *not installed*; it's dead code that breaks the build if imported). Bar colour and row status both come from `cps_schedule_activity_progress.activity_status`, derived from the tasks on that activity — never stored, never hand-set.
+
+   > There is **no live P6 integration and none is possible on P6 Professional** — the REST API belongs to P6 EPPM (the server product), and Professional keeps its data in a local DB on the coordinator's PC. Export → upload is the intended flow; don't promise a sync.
+2. **`/tasks` (`TaskBoard.tsx`)** — coordinator follow-up board, modelled on `KanbanBoard.tsx`: **no drag-and-drop library**, fixed-width columns + action buttons. Columns Overdue → Assigned → In Progress → Needs Review → Completed, where **Overdue is derived** (`due_date < today` and not completed/cancelled) and wins over the task's own status. Actions: Approve, Reopen (reason required), Follow-up, Cancel.
+3. **`AssignTaskDialog.tsx`** (shared by the Gantt and the board) — a task goes to a **site engineer OR a procurement user**; `audience` (`site | procurement`) is set from the assignee's role. The site default is whoever holds the `cps_project_assignments` row for that project. On assign: `cps_next_task_number()` → insert → `cps_notifications` row → `cps_audit_log` `TASK_ASSIGNED` → `webhook_task_assigned`.
+4. **`/my-work` (`MyWork.tsx`, "Mera Kaam")** — the assignee's screen, Hinglish and mobile-first. "Kaam Shuru Karo" → `in_progress`; "Update Daalo" any time while ongoing; "Kaam Poora" → `submitted` (**at least one file required**). Evidence is any file type, stored in the private bucket `cps-task-updates` and read back with `openSignedFile()`.
+5. **Reminders** — the app fires the instant WhatsApp; the daily n8n cron (09:00 IST) polls `cps_task_reminders_due` for `t_minus_1 | due_day | overdue`, sends, writes a `cps_notifications` row, and stamps `reminder_1day_sent_at` / `reminder_dueday_sent_at` / `overdue_notified_at`. **That stamp is the only thing making the cron idempotent** — the stamped row drops out of the view. Overdue also pings the coordinator.
+6. **The bell is now real** — `TopBar.tsx` merges per-user `cps_notifications` (read state in the DB, so it follows the user across devices) ahead of the legacy global audit feed, and employees finally get a bell. Realtime needs `schema: "cps"` named explicitly: `db.schema` on the JS client does **not** apply to realtime channels, and both tables had to be added to the `supabase_realtime` publication.
+
 ## Company Details (for PO/GRN/WO documents — authoritative values live in `cps_config`)
 - Legal name: **HAGER STONE INTERNATIONAL PRIVATE LIMITED** (`company_name`); short: Hagerstone International (P) Ltd
 - PAN `AAECH3768B`, CIN `U74999DL2017PTC326751`
@@ -256,7 +279,7 @@ Projects live **only** in `cps_projects` — every project dropdown/filter app-w
 
 ## Known Issues
 - Audit-log inserts are wired in PR creation and vendor quote submission — not in every other page action
-- `npx tsc --noEmit` shows 1 pre-existing error: `client.ts(3,39): Property 'env' does not exist on type 'ImportMeta'` — Vite env type config, ignore
+- `npx tsc --noEmit` shows **~30 pre-existing errors** (verified 2026-08-01) — the "1 error" note here was stale. `npm run build` is clean; these are type-only. They cluster into: unused shadcn stubs whose deps were never installed (`ui/chart.tsx` → recharts, `ui/carousel.tsx` → embla, `ui/context-menu|hover-card|menubar|resizable|slider`, `ui/sidebar.tsx` + `ui/toaster.tsx` → missing `@/hooks/*`), the `SupabaseClient<…,"cps">` vs `"public"` mismatch where a client is passed to a helper (ComparisonSheet, PurchaseOrders, WorkOrders), and a handful of genuine slips (`GrnApprovals.tsx:139` `val`, `PurchaseRequisitions.tsx:3538` `refetch`, nullable `file`/`patch.*`). None are in new code — when touching a file, check you didn't *add* to its count.
 
 ## Reference Docs (markdown set was pruned 2026-06 — only the below remain)
 **Current / trust:**

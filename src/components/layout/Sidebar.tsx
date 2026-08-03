@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy, ShieldCheck, Briefcase, Wallet, CheckSquare, FileCheck, Radar } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy, ShieldCheck, Briefcase, Wallet, CheckSquare, FileCheck, Radar, CalendarRange, ClipboardList, HardHat } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -9,6 +9,11 @@ const NAV = [
   { title: "Kanban Board", url: "/kanban", icon: KanbanSquare, roles: ["procurement_executive","procurement_head","it_head","management","auditor","finance","accounts_team","design_team"] },
   { title: "Analytics", url: "/analytics", icon: LineChart, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team","design_team"] },
   { title: "Purchase Requests", url: "/requisitions", icon: FileText, roles: ["all"] },
+  // Project Coordinator surface. /my-work is also here so a procurement assignee can
+  // find the tasks a coordinator sent them (employees reach it from EMPLOYEE_NAV).
+  { title: "Project Schedule", url: "/schedule", icon: CalendarRange, roles: ["project_coordinator","procurement_head","procurement_executive","it_head","management"] },
+  { title: "Task Board", url: "/tasks", icon: ClipboardList, roles: ["project_coordinator","procurement_head","procurement_executive","it_head","management"] },
+  { title: "My Tasks", url: "/my-work", icon: HardHat, roles: ["project_coordinator","procurement_head","procurement_executive","it_head","management"] },
   { title: "RFQs", url: "/rfqs", icon: Send, roles: ["procurement_executive","procurement_head","it_head","management","auditor","design_team"] },
   { title: "Quotes", url: "/quotes", icon: MessageSquare, roles: ["procurement_executive","procurement_head","it_head","management","auditor","design_team"] },
   { title: "Comparison", url: "/comparison", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management","design_team"] },
@@ -19,9 +24,9 @@ const NAV = [
   { title: "Work Orders", url: "/work-orders", icon: Briefcase, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team","design_team"] },
   { title: "Delivery Tracker", url: "/delivery", icon: Truck, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","design_team"] },
   { title: "Project BOQ", url: "/boq", icon: ListChecks, roles: ["procurement_executive","procurement_head","it_head","management","accounts_team","design_team"] },
-  { title: "Stock Overview", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team","design_team"] },
+  { title: "Stock Overview", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team","design_team","project_coordinator"] },
   { title: "Budget List", url: "/budget-list", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team","design_team"] },
-  { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","design_team","accounts_team"] },
+  { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","design_team","accounts_team","project_coordinator"] },
   { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor","design_team"] },
   // Narrower than Suppliers on purpose — a fresh search spends Apify credit.
   { title: "Vendor Scout", url: "/vendor-scout", icon: Radar, roles: ["procurement_executive","procurement_head","it_head","management"] },
@@ -33,6 +38,7 @@ const NAV = [
 
 const EMPLOYEE_NAV = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Mera Kaam", url: "/my-work", icon: HardHat },
   { title: "Meri Requests", url: "/requisitions", icon: FileText },
   { title: "Upload Quotes", url: "/site-quotes", icon: Trophy },
   { title: "Stock", url: "/stock", icon: Boxes },

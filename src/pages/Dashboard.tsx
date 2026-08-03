@@ -41,7 +41,7 @@ interface NotifItem {
 }
 
 export default function Dashboard() {
-  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead, isEmployee, isDesignTeam, isPrBlocked } = useAuth();
+  const { user, canApprove, canViewPrices, canViewAudit, canCreateRFQ, isProcurementHead, isEmployee, isDesignTeam, isProjectCoordinator, isPrBlocked } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
 
@@ -74,6 +74,12 @@ export default function Dashboard() {
   // Design Team Head — PRs awaiting her design acknowledgement on the verification gate
   type AckPendingPR = { id: string; pr_number: string; project_site: string; project_code: string | null };
   const [designAckPending, setDesignAckPending] = useState<AckPendingPR[]>([]);
+
+  // Project Coordinator — task follow-up counters + the delayed schedule activities
+  const [coordTasks, setCoordTasks] = useState<{ overdue: number; dueToday: number; review: number }>({ overdue: 0, dueToday: 0, review: 0 });
+  const [delayedActivities, setDelayedActivities] = useState<Array<{ activity_id: string; project_code: string; activity_name: string; end_date: string | null; overdue_count: number }>>([]);
+  // Assignee (site engineer / procurement) — my own open task count for the CTA tile
+  const [myOpenTasks, setMyOpenTasks] = useState(0);
 
   // Procurement Head — site engineers blocked from raising PRs (missed invoice deadline)
   type BlockedEngineer = { id: string; name: string; email: string | null; reason: string | null; blocked_at: string | null };
@@ -351,6 +357,40 @@ export default function Dashboard() {
         setDesignAckPending(pending);
       }
 
+      // Everyone who can be assigned work gets the open-task count for their tile.
+      if (user?.id) {
+        const { data: mine } = await supabase
+          .from("cps_site_tasks")
+          .select("id")
+          .eq("assigned_to", user.id)
+          .in("status", ["assigned", "in_progress"]);
+        setMyOpenTasks((mine ?? []).length);
+      }
+
+      // Project Coordinator — task follow-up + which schedule activities are slipping.
+      // activity_status is derived in cps_schedule_activity_progress; never recompute it here.
+      if (isProjectCoordinator) {
+        const today = new Date().toISOString().slice(0, 10);
+        const [openTasks, delayed] = await Promise.all([
+          supabase.from("cps_site_tasks")
+            .select("id,due_date,status")
+            .in("status", ["assigned", "in_progress", "submitted"]),
+          supabase.from("cps_schedule_activity_progress")
+            .select("activity_id,project_code,activity_name,end_date,overdue_count,activity_status")
+            .eq("activity_status", "delayed")
+            .limit(50),
+        ]);
+        const rows = (openTasks.data ?? []) as Array<{ due_date: string; status: string }>;
+        setCoordTasks({
+          overdue: rows.filter((r) => r.status !== "submitted" && r.due_date < today).length,
+          dueToday: rows.filter((r) => r.due_date === today).length,
+          review: rows.filter((r) => r.status === "submitted").length,
+        });
+        setDelayedActivities(
+          ((delayed.data ?? []) as Array<{ activity_id: string; project_code: string; activity_name: string; end_date: string | null; overdue_count: number }>).slice(0, 8),
+        );
+      }
+
       // Procurement Head — site engineers auto-blocked for missing an invoice deadline
       if (isProcurementHead) {
         const { data: blockedData } = await supabase
@@ -561,6 +601,73 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Project Coordinator — task follow-up + slipping schedule activities */}
+      {isProjectCoordinator && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: "Overdue Tasks", value: coordTasks.overdue, cls: "text-red-600" },
+              { label: "Due Today", value: coordTasks.dueToday, cls: "text-amber-600" },
+              { label: "Needs Review", value: coordTasks.review, cls: "text-blue-600" },
+              { label: "Delayed Activities", value: delayedActivities.length, cls: "text-red-600" },
+            ].map((s) => (
+              <Card key={s.label} className="cursor-pointer hover:border-primary/40 transition-colors" onClick={() => navigate("/tasks")}>
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground">{s.label}</p>
+                  <p className={`text-2xl font-bold ${s.cls}`}>
+                    {loading ? <Skeleton className="h-7 w-10" /> : s.value}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          <Card className="border-amber-200 bg-amber-50/40">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-base font-semibold flex items-center gap-2 text-amber-900">
+                <ClipboardList className="h-4 w-4 text-amber-700" />
+                Schedule activities peeche chal rahi hain
+              </CardTitle>
+              <Button size="sm" variant="outline" onClick={() => navigate("/schedule")}>
+                Schedule kholo <ArrowRight className="h-3.5 w-3.5 ml-1" />
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0">
+              {loading ? (
+                <div className="p-4"><Skeleton className="h-16 w-full" /></div>
+              ) : delayedActivities.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  <CheckCircle2 className="h-8 w-8 text-green-500/60 mx-auto mb-2" />
+                  Koi activity late nahi hai.
+                </div>
+              ) : (
+                <div className="divide-y divide-border">
+                  {delayedActivities.map((a) => (
+                    <div
+                      key={a.activity_id}
+                      className="flex items-center justify-between gap-3 px-4 py-2.5 cursor-pointer hover:bg-amber-100/40 transition-colors"
+                      onClick={() => navigate("/schedule")}
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{a.activity_name}</p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {a.project_code}{a.end_date ? ` · ${a.end_date} tak thi` : ""}
+                        </p>
+                      </div>
+                      {a.overdue_count > 0 && (
+                        <Badge variant="outline" className="text-red-700 border-red-300 bg-red-50 shrink-0">
+                          {a.overdue_count} late task
+                        </Badge>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* Design Team Head — PRs awaiting your acknowledgement */}
       {isDesignTeam && (
         <Card className="border-violet-200 bg-violet-50/50">
@@ -683,6 +790,28 @@ export default function Dashboard() {
                 </p>
                 {pendingInvoiceListJsx}
                 {howToUploadJsx}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Work assigned by the project coordinator */}
+          {myOpenTasks > 0 && (
+            <Card className="border-amber-300 bg-amber-50/70 cursor-pointer" onClick={() => navigate("/my-work")}>
+              <CardContent className="p-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0">
+                    <ClipboardList className="h-5 w-5 text-amber-700" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-amber-900">
+                      {myOpenTasks} kaam baaki hai
+                    </p>
+                    <p className="text-[13px] text-amber-800/90">
+                      Coordinator ne jo kaam diya hai, wahan update daalo.
+                    </p>
+                  </div>
+                </div>
+                <ArrowRight className="h-5 w-5 text-amber-700 shrink-0" />
               </CardContent>
             </Card>
           )}
