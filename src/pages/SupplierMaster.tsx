@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import PaymentReadinessTab from "@/components/suppliers/PaymentReadinessTab";
 
 import {
   Edit3,
@@ -643,9 +644,15 @@ For any field not found on the card, use empty string. For phone, if the card sh
           <TabsTrigger value="incomplete">
             Pending Registration{completenessCounts.incomplete > 0 ? ` (${completenessCounts.incomplete})` : ""}
           </TabsTrigger>
+          <TabsTrigger value="payment">Payment Readiness</TabsTrigger>
         </TabsList>
         <TabsContent value="complete" className="mt-4 space-y-6">{suppliersContent}</TabsContent>
         <TabsContent value="incomplete" className="mt-4 space-y-6">{suppliersContent}</TabsContent>
+        {/* Mounted only when selected so the readiness view is not queried on every
+            Supplier Master visit. Remounting also resets its filters cleanly. */}
+        <TabsContent value="payment" className="mt-4 space-y-6">
+          {activeTab === "payment" && <PaymentReadinessTab />}
+        </TabsContent>
       </Tabs>
 
       {/* Add/Edit Supplier Dialog */}
