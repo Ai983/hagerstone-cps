@@ -14,8 +14,10 @@ Phase 7 (cutover) not started and not ready.
 
 Current state — read before assuming anything works:
 - Payment gate is OFF (cps_config payment_gate_enforced = 'false')
-- Vendor master is 39 of 150 active suppliers payment-ready. This blocks
-  everything downstream. It is a data problem, not a code problem.
+- Vendor master is 91 of 150 active suppliers payment-ready (61%), as of the
+  2026-08-05 bank-only redefinition. It was 39 under the old GSTIN+PAN+bank
+  definition. The remaining 59 still block everything downstream. It is a data
+  problem, not a code problem.
 - Zero documents have ever been uploaded, so most of Phase 3 and half of
   Phase 5 are unexercised
 - No WhatsApp has ever been sent. cps_config.webhook_reminder is empty and no
@@ -31,8 +33,17 @@ Locked decisions — do not re-litigate:
 - Bypass is approved by the EA on the founder's behalf; authority is derived
   from finance.employees, never from the CPS role
 - 5-day post-bypass document deadline
-- PAN is tracked as its own flag; no assumption is encoded about whether it
-  is required for payment
+- Vendor payment readiness is BANK-ONLY: account number + IFSC + holder name.
+  GSTIN and PAN are tracked soft signals (has_gstin / has_pan drive the
+  counters, filters and CSV export) but are NOT preconditions for calling a
+  vendor payable. Accounts settled this on 2026-08-05; PAN alone had been the
+  sole blocker on 47 vendors.
+- GSTIN is a PER-PAYMENT rule, not a vendor-master gate. It is the
+  gst_certificate checklist document, attached only to vendor_material PRQs.
+  A genuine non-GST purchase gets a written gst_not_applicable exception,
+  which the gate honours. There is deliberately no hold mechanism for it.
+- Finance can REJECT a request back to under_verification with a written
+  reason, instead of only holding it. A paid PRQ can never be rejected.
 
 Parked security items — do not fix without being asked:
 hub_chatbot_ro (BYPASSRLS, 243 tables, reads bank/PAN/salary, NLP-to-SQL),
