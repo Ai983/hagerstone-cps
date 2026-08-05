@@ -138,6 +138,16 @@ export type PaymentRequest = {
   urgency: Urgency;
   po_pi_not_applicable: boolean;
   po_pi_exception_reason: string | null;
+  /** GST is a PER-PAYMENT rule, not a vendor-master gate: this waives the
+   *  gst_certificate checklist document, which the seeded rules attach only to
+   *  vendor_material PRQs. Separate from po_pi_* on purpose — that counter is
+   *  the D1 signal and must not be polluted. */
+  gst_not_applicable: boolean;
+  gst_exception_reason: string | null;
+  gst_exception_by: string | null;
+  gst_exception_at: string | null;
+  /** Set when Finance pushes a request back to under_verification. */
+  finance_reject_reason: string | null;
   status: PrqStatus;
   blocking_party: string | null;
   blank_fields: string[];

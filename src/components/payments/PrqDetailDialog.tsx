@@ -139,6 +139,8 @@ export default function PrqDetailDialog({
 
   const [exceptionOpen, setExceptionOpen] = useState(false);
   const [exceptionReason, setExceptionReason] = useState("");
+  const [gstExceptionOpen, setGstExceptionOpen] = useState(false);
+  const [gstExceptionReason, setGstExceptionReason] = useState("");
 
   const loadDocs = async () => {
     const { data } = await supabase
@@ -607,6 +609,35 @@ export default function PrqDetailDialog({
     onChanged();
   };
 
+  /* ── D3: GST not applicable, reason mandatory ──
+     Waives only the gst_certificate document, which the seeded rules attach
+     solely to vendor_material PRQs. Deliberately does NOT touch
+     po_pi_not_applicable — that counter is the D1 signal and stays clean. */
+  const markGstException = async () => {
+    const reason = gstExceptionReason.trim();
+    if (!reason) { toast.error("A written reason is required"); return; }
+    const { error } = await supabase
+      .from("cps_payment_requests")
+      .update({
+        gst_not_applicable: true,
+        gst_exception_reason: reason,
+        gst_exception_by: user?.id ?? null,
+        gst_exception_at: new Date().toISOString(),
+      } as never)
+      .eq("id", prq.id);
+    if (error) { toast.error(error.message); return; }
+
+    await auditPrq({
+      user, action: "PRQ_GST_EXCEPTION", entityId: prq.id, entityNumber: prq.prq_number,
+      description: `GST marked not applicable on ${prq.prq_number} — ${reason}`,
+      after: { reason },
+    });
+    setGstExceptionOpen(false);
+    setGstExceptionReason("");
+    toast.success("GST exception recorded — the GST certificate is no longer required for this request");
+    onChanged();
+  };
+
   const advance = async (status: PaymentRequest["status"]) => {
     const { error } = await supabase
       .from("cps_payment_requests").update({ status } as never).eq("id", prq.id);
@@ -642,6 +673,18 @@ export default function PrqDetailDialog({
         </DialogHeader>
 
         <div className="overflow-y-auto max-h-[70vh] pr-1 space-y-5">
+          {/* Finance pushed this back. Gated on status so it disappears by
+              itself once Procurement re-submits, rather than lingering. */}
+          {prq.status === "under_verification" && prq.finance_reject_reason && (
+            <div className="rounded-md border border-red-300 bg-red-50 p-3 text-xs">
+              <span className="font-medium text-red-800">Sent back by Finance.</span>{" "}
+              {prq.finance_reject_reason}
+              <span className="block text-red-700/80 mt-0.5">
+                Fix the issue and re-submit — this request is back with Procurement.
+              </span>
+            </div>
+          )}
+
           {prq.bank_source === "site_override" && (
             <div className="flex items-start gap-2 rounded-md bg-amber-50 text-amber-900 p-2.5 text-xs">
               <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
@@ -699,6 +742,13 @@ export default function PrqDetailDialog({
                   Mark PO/PI not applicable
                 </Button>
               )}
+              {/* GST is only ever on the checklist for vendor_material, so the
+                  exception cannot matter anywhere else. */}
+              {prq.payment_type === "vendor_material" && !prq.gst_not_applicable && (
+                <Button variant="outline" size="sm" onClick={() => setGstExceptionOpen((v) => !v)}>
+                  Mark GST not applicable
+                </Button>
+              )}
             </div>
 
             {prq.po_pi_not_applicable && (
@@ -720,6 +770,29 @@ export default function PrqDetailDialog({
                 <div className="flex gap-2">
                   <Button size="sm" onClick={markException}>Record exception</Button>
                   <Button size="sm" variant="ghost" onClick={() => setExceptionOpen(false)}>Cancel</Button>
+                </div>
+              </div>
+            )}
+
+            {prq.gst_not_applicable && (
+              <div className="rounded-md bg-muted p-2.5 text-xs">
+                <span className="font-medium">GST marked not applicable.</span>{" "}
+                {prq.gst_exception_reason}
+                <span className="block text-muted-foreground mt-0.5">
+                  The GST certificate is waived for this request — logged and counted, not a silent drop.
+                </span>
+              </div>
+            )}
+
+            {gstExceptionOpen && !prq.gst_not_applicable && (
+              <div className="rounded-md border p-3 space-y-2">
+                <Label className="text-xs">Why is GST not applicable? (required)</Label>
+                <Textarea rows={2} value={gstExceptionReason}
+                  onChange={(e) => setGstExceptionReason(e.target.value)}
+                  placeholder="e.g. unregistered vendor, composition-scheme supplier, no GST charged" />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={markGstException}>Save GST exception</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setGstExceptionOpen(false)}>Cancel</Button>
                 </div>
               </div>
             )}
