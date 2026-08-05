@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "npm run check:anon-grants && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:anon-grants": "node scripts/check-anon-column-grants.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

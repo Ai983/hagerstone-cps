@@ -198,6 +198,12 @@ export default function ApprovePoPage() {
       const poData = poRes.data as PoSummary & { supplier_id: string | null };
 
       /* get supplier name */
+      // ⚠️ anon has a COLUMN-LEVEL grant on cps_suppliers — only:
+      //   id, name, gstin, state, address_text, phone, email
+      // (supabase/migrations/20260803_rls_supplier_anon_scope.sql). Adding any
+      // other column here returns 403 for unauthenticated founders and breaks
+      // PO approval, with no type error to warn you.
+      // Guarded by `npm run check:anon-grants`.
       let supplierName: string | null = null;
       if (poData.supplier_id) {
         const { data: sup } = await supabase
@@ -253,6 +259,10 @@ export default function ApprovePoPage() {
       if (!poFull) return;
       let supplier: any = {};
       if ((poFull as any).supplier_id) {
+        // ⚠️ Column-grant boundary — see the note on the first supplier read.
+        // These seven are exactly what anon may select; bank_* and pan are NOT
+        // granted and must never be added here. `npm run check:anon-grants`
+        // fails the build if this list drifts from the migration.
         const { data: s } = await supabase.from("cps_suppliers")
           .select("name,gstin,state,address_text,phone,email").eq("id", (poFull as any).supplier_id).maybeSingle();
         supplier = s ?? {};
