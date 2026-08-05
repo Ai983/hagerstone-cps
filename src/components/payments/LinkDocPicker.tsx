@@ -118,6 +118,7 @@ export default function LinkDocPicker({
             <div className="text-xs text-muted-foreground mt-0.5">
               Value {formatInr(d.total_value)} · Paid {formatInr(d.paid_amount)} ·{" "}
               <span className="text-foreground font-medium">Balance {formatInr(d.balance_amount)}</span>
+              <span className="text-muted-foreground"> as per CPS records</span>
               {d.created_at ? ` · ${d.created_at.slice(0, 10)}` : ""}
             </div>
           </button>
@@ -135,7 +136,9 @@ export default function LinkDocPicker({
           </DialogTitle>
           <DialogDescription>
             Only this vendor's {anyProject ? "documents across all projects" : "documents on this project"} that
-            still have money owing. Nothing is linked automatically.
+            still have money owing. Nothing is linked automatically. Balances are{" "}
+            <span className="font-medium">as per CPS records</span> — a PO settled through the WhatsApp
+            sheet still shows its full balance here until cutover.
           </DialogDescription>
         </DialogHeader>
 

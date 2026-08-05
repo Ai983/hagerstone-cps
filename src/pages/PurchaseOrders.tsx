@@ -3749,7 +3749,10 @@ export default function PurchaseOrders() {
                             <span>·</span>
                             <span>Finance Paid: <strong className="text-green-700">₹{paid.toLocaleString("en-IN")}</strong> ({paidRows.length}/{count})</span>
                             <span>·</span>
-                            <span>Balance: <strong className="text-amber-700">₹{remaining.toLocaleString("en-IN")}</strong></span>
+                            {/* CPS only sees payments that travelled the CPS → Finance route.
+                                A PO settled through the WhatsApp sheet still reads as unpaid
+                                here, so this is labelled rather than presented as fact. */}
+                            <span>Balance: <strong className="text-amber-700">₹{remaining.toLocaleString("en-IN")}</strong> <span className="font-normal">as per CPS records</span></span>
                           </div>
                           {remaining <= 0 && total > 0 ? (
                             <div className="text-xs text-green-700">✓ Saari installments Finance ne pay kar di.</div>
@@ -3906,7 +3909,12 @@ export default function PurchaseOrders() {
                         <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-1">
                           <div className="text-sm font-semibold text-blue-900">⏳ Awaiting Payment</div>
                           <div className="text-xs text-blue-700">PO sent to Finance. No payment has been recorded yet.</div>
-                          <div className="text-xs font-semibold text-blue-800">Balance Due: ₹{poTotal.toLocaleString("en-IN")}</div>
+                          {/* "No payment recorded" means none recorded IN CPS. Until the
+                              WhatsApp sheet is retired this PO may already have been paid. */}
+                          <div className="text-xs font-semibold text-blue-800">
+                            Balance Due: ₹{poTotal.toLocaleString("en-IN")}{" "}
+                            <span className="font-normal">as per CPS records</span>
+                          </div>
                         </div>
                       );
                     }
@@ -3926,7 +3934,10 @@ export default function PurchaseOrders() {
                         <div className={`text-xs font-semibold ${isPartial ? "text-amber-800" : "text-green-800"}`}>
                           Paid: ₹{paidAmt.toLocaleString("en-IN")} of ₹{poTotal.toLocaleString("en-IN")}
                           {isPartial && (
-                            <span className="text-red-700 ml-2">— Balance Due: ₹{balanceDue.toLocaleString("en-IN")}</span>
+                            <span className="text-red-700 ml-2">
+                              — Balance Due: ₹{balanceDue.toLocaleString("en-IN")}{" "}
+                              <span className="font-normal">as per CPS records</span>
+                            </span>
                           )}
                         </div>
                         {viewPo.finance_payment_reference && (
