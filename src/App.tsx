@@ -80,6 +80,10 @@ const BudgetList = lazyWithRetry(() => import("@/pages/BudgetList"));
 const ProjectSchedule = lazyWithRetry(() => import("@/pages/ProjectSchedule"));
 const TaskBoard = lazyWithRetry(() => import("@/pages/TaskBoard"));
 const MyWork = lazyWithRetry(() => import("@/pages/MyWork"));
+const PaymentSheets = lazyWithRetry(() => import("@/pages/PaymentSheets"));
+const PaymentRequests = lazyWithRetry(() => import("@/pages/PaymentRequests"));
+const BackfillReport = lazyWithRetry(() => import("@/pages/BackfillReport"));
+const FounderExceptionBoard = lazyWithRetry(() => import("@/pages/FounderExceptionBoard"));
 const AdminOverrides = lazyWithRetry(() => import("@/pages/AdminOverrides"));
 const NotFound = lazyWithRetry(() => import("@/pages/NotFound"));
 
@@ -143,6 +147,10 @@ const App = () => (
               <Route path="/schedule" element={<Protected><ProjectSchedule /></Protected>} />
               <Route path="/tasks" element={<Protected><TaskBoard /></Protected>} />
               <Route path="/my-work" element={<Protected><MyWork /></Protected>} />
+              <Route path="/payment-sheets" element={<Protected><PaymentSheets /></Protected>} />
+              <Route path="/payment-requests" element={<Protected><PaymentRequests /></Protected>} />
+              <Route path="/backfill-report" element={<Protected><BackfillReport /></Protected>} />
+              <Route path="/exception-board" element={<Protected><FounderExceptionBoard /></Protected>} />
               <Route path="/admin/overrides" element={<Protected><AdminOverrides /></Protected>} />
               <Route path="*" element={<NotFound />} />
             </Routes>

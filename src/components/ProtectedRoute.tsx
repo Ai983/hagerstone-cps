@@ -2,7 +2,9 @@ import React from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 
-const adminOnlyRoutes = ['/rfqs', '/quotes', '/comparison', '/purchase-orders', '/suppliers', '/audit', '/invoices', '/kanban', '/analytics', '/schedule', '/tasks'];
+// '/payment-sheets' is deliberately absent — site raises its own sheets there.
+// Only the procurement-facing surfaces are employee-blocked.
+const adminOnlyRoutes = ['/rfqs', '/quotes', '/comparison', '/purchase-orders', '/suppliers', '/audit', '/invoices', '/kanban', '/analytics', '/schedule', '/tasks', '/payment-requests', '/backfill-report', '/exception-board'];
 
 // The project coordinator is not part of procurement — it gets an allowlist rather
 // than a blocklist, because everything outside its own surface is off-limits.
