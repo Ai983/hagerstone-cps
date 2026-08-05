@@ -2,6 +2,48 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+
+## Active build — Payment Compliance Gate
+
+Branch: feat/payment-compliance-gate (pushed, NOT merged to main)
+Spec: docs/PAYMENT_COMPLIANCE_GATE_SPEC.md
+Phase briefs: docs/Phases/
+
+Phases 1-6 built and their migrations are LIVE in production.
+Phase 7 (cutover) not started and not ready.
+
+Current state — read before assuming anything works:
+- Payment gate is OFF (cps_config payment_gate_enforced = 'false')
+- Vendor master is 39 of 150 active suppliers payment-ready. This blocks
+  everything downstream. It is a data problem, not a code problem.
+- Zero documents have ever been uploaded, so most of Phase 3 and half of
+  Phase 5 are unexercised
+- No WhatsApp has ever been sent. cps_config.webhook_reminder is empty and no
+  n8n workflow exists. The reminder queue has no consumer.
+- No email channel exists anywhere in CPS
+- No PRQ has ever reached Accounts
+
+Locked decisions — do not re-litigate:
+- One gate, at procurement exit. Site = soft flag only, never blocked.
+  Procurement = hard, nothing incomplete passes.
+- Vendors are NEVER contacted. Site or procurement fill every field.
+- Lead times: normal 2 calendar days, urgent 1, emergency same-day via bypass
+- Bypass is approved by the EA on the founder's behalf; authority is derived
+  from finance.employees, never from the CPS role
+- 5-day post-bypass document deadline
+- PAN is tracked as its own flag; no assumption is encoded about whether it
+  is required for payment
+
+Parked security items — do not fix without being asked:
+hub_chatbot_ro (BYPASSRLS, 243 tables, reads bank/PAN/salary, NLP-to-SQL),
+anon TRUNCATE on 68 tables, 10 orphan finance.po_payments rows,
+per-token scoping of /approve-po, 16 pre-existing security_definer views
+
+Verify against the live DB before assuming any column, constraint or policy
+exists. Repo documentation has been found wrong six or more times during this
+build — trust the database over any document, including this one.
+
+
 ## Project Overview
 Centralised Procurement System (CPS) for Hagerstone International — a construction/interiors/MEP/EPC company.
 Automates the full procurement lifecycle (PR → RFQ → Quote → Comparison → PO → Delivery → GRN) plus contractor work orders, RA bills, project BOQs and site stock — with near-zero manual intervention.
