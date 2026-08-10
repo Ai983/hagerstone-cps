@@ -70,16 +70,24 @@ export default function MyStuckPRsCard() {
   const [data, setData] = useState<MyPrAgeing | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
+  // Kept separate from `data === null`, which legitimately means "not a CPS user, no card".
+  // Collapsing the two is what let a 404 on this RPC go unnoticed on the live dashboard.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data: res, error } = await supabase.rpc("cps_my_pr_ageing");
+      // .schema("public") is REQUIRED: the shared client is created with db.schema = "cps",
+      // so a bare supabase.rpc() resolves to cps.cps_my_pr_ageing and 404s (PGRST202).
+      // This RPC lives in public, beside the other ageing functions.
+      const { data: res, error } = await supabase.schema("public").rpc("cps_my_pr_ageing");
       if (cancelled) return;
       if (error) {
         console.warn("[MyStuckPRsCard] cps_my_pr_ageing failed:", error.message);
+        setLoadError(error.message);
         setData(null);
       } else {
+        setLoadError(null);
         setData((res ?? null) as MyPrAgeing | null);
       }
       setLoading(false);
@@ -91,7 +99,23 @@ export default function MyStuckPRsCard() {
 
   if (loading) return <Skeleton className="h-28 w-full" />;
 
-  // Not a CPS user (or lookup failed) → this card isn't theirs.
+  // Visible on failure — a silent return null here is precisely how a broken RPC stayed
+  // invisible on the production dashboard.
+  if (loadError) {
+    return (
+      <Card className="border-amber-200 bg-amber-50/40">
+        <CardContent className="flex items-center gap-2.5 py-3">
+          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+          <p className="text-xs text-amber-900">
+            Aapke atke hue PRs load nahi ho paye.{" "}
+            <span className="text-amber-700 font-mono">{loadError}</span>
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Not a CPS user → this card genuinely isn't theirs.
   if (!data?.me) return null;
 
   const k = data.kpis;

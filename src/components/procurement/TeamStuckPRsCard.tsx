@@ -66,16 +66,22 @@ export default function TeamStuckPRsCard() {
   const navigate = useNavigate();
   const [data, setData] = useState<TeamAgeing | null>(null);
   const [loading, setLoading] = useState(true);
+  // Distinct from `data === null`, which legitimately means "caller isn't it_head/management".
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data: res, error } = await supabase.rpc("cps_team_pr_ageing");
+      // .schema("public") is REQUIRED: the shared client is created with db.schema = "cps",
+      // so a bare supabase.rpc() resolves to cps.cps_team_pr_ageing and 404s (PGRST202).
+      const { data: res, error } = await supabase.schema("public").rpc("cps_team_pr_ageing");
       if (cancelled) return;
       if (error) {
         console.warn("[TeamStuckPRsCard] cps_team_pr_ageing failed:", error.message);
+        setLoadError(error.message);
         setData(null);
       } else {
+        setLoadError(null);
         setData((res ?? null) as TeamAgeing | null);
       }
       setLoading(false);
@@ -86,6 +92,22 @@ export default function TeamStuckPRsCard() {
   }, []);
 
   if (loading) return <Skeleton className="h-32 w-full" />;
+
+  // Visible on failure — silently returning null here is how a broken RPC stayed invisible
+  // on the production dashboard.
+  if (loadError) {
+    return (
+      <Card className="border-amber-200 bg-amber-50/40">
+        <CardContent className="flex items-center gap-2.5 py-3">
+          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+          <p className="text-xs text-amber-900">
+            Team ke atke hue PRs load nahi ho paye.{" "}
+            <span className="text-amber-700 font-mono">{loadError}</span>
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   // NULL = caller isn't it_head/management. Not an error — just not their card.
   if (!data) return null;
