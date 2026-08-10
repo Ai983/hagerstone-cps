@@ -163,3 +163,50 @@ SELECT check, result FROM (
   UNION ALL SELECT * FROM approver_check
 ) all_checks
 ORDER BY CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END, check;
+
+-- === TASK 2 VERIFY ===
+
+-- Every row must say PASS.
+WITH rule_count_check AS (
+  SELECT 'rule count' AS check,
+         CASE WHEN count(*) = 23 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
+  FROM cps.cps_vendor_document_rules
+),
+premises_photo_check AS (
+  SELECT 'premises_photo never waivable' AS check,
+         CASE WHEN count(*) FILTER (WHERE waivable) = 0 THEN 'PASS' ELSE 'FAIL' END AS result
+  FROM cps.cps_vendor_document_rules WHERE document_type = 'premises_photo'
+),
+photo_with_vendor_check AS (
+  SELECT 'photo_with_vendor waivable for all 3 types' AS check,
+         CASE WHEN count(*) = 3 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
+  FROM cps.cps_vendor_document_rules
+  WHERE document_type = 'photo_with_vendor' AND waivable AND is_mandatory
+),
+expected_mandatory_counts(vendor_type, expected_count) AS (
+  VALUES ('company', 8), ('individual', 4), ('proprietor', 7)
+),
+mandatory_counts_raw AS (
+  SELECT vendor_type, count(*) FILTER (WHERE is_mandatory AND active) AS mandatory_docs
+  FROM cps.cps_vendor_document_rules
+  GROUP BY vendor_type
+),
+mandatory_count_checks AS (
+  -- LEFT JOIN off the expected list so a vendor_type with zero mandatory
+  -- rows still emits a FAIL row instead of silently dropping out of the
+  -- GROUP BY.
+  SELECT 'mandatory docs: ' || e.vendor_type AS check,
+         CASE WHEN coalesce(m.mandatory_docs, 0) = e.expected_count
+              THEN 'PASS'
+              ELSE 'FAIL - got ' || coalesce(m.mandatory_docs, 0)
+         END AS result
+  FROM expected_mandatory_counts e
+  LEFT JOIN mandatory_counts_raw m ON m.vendor_type = e.vendor_type
+)
+SELECT check, result FROM (
+  SELECT * FROM rule_count_check
+  UNION ALL SELECT * FROM premises_photo_check
+  UNION ALL SELECT * FROM photo_with_vendor_check
+  UNION ALL SELECT * FROM mandatory_count_checks
+) all_checks
+ORDER BY CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END, check;
