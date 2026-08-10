@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import MyStuckPRsCard from "@/components/procurement/MyStuckPRsCard";
+import TeamStuckPRsCard from "@/components/procurement/TeamStuckPRsCard";
 import { toast } from "sonner";
 import {
   FileText, Send, MessageSquare, ShoppingCart, Truck, Users,
@@ -605,6 +606,11 @@ export default function Dashboard() {
       {/* Your own stuck PRs — first thing a procurement head sees. Self-hiding: the card
           renders nothing unless the signed-in user actually owns requisitions. */}
       <MyStuckPRsCard />
+
+      {/* Team-wide stuck PRs — admins (it_head / management) own no PRs, so the personal card
+          above is always green for them. Role-gated inside the RPC, which returns NULL to
+          everyone else, so this renders nothing for a procurement head. */}
+      <TeamStuckPRsCard />
 
       {/* Project Coordinator — task follow-up + slipping schedule activities */}
       {isProjectCoordinator && (
