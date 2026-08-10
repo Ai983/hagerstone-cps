@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import MyStuckPRsCard from "@/components/procurement/MyStuckPRsCard";
 import { toast } from "sonner";
 import {
   FileText, Send, MessageSquare, ShoppingCart, Truck, Users,
@@ -600,6 +601,10 @@ export default function Dashboard() {
           ))}
         </div>
       </div>
+
+      {/* Your own stuck PRs — first thing a procurement head sees. Self-hiding: the card
+          renders nothing unless the signed-in user actually owns requisitions. */}
+      <MyStuckPRsCard />
 
       {/* Project Coordinator — task follow-up + slipping schedule activities */}
       {isProjectCoordinator && (
