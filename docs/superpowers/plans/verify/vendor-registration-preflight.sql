@@ -105,34 +105,61 @@ ORDER BY section,
 -- === TASK 1 VERIFY ===
 
 -- Every row must say PASS.
-SELECT 'tables' AS check,
-       CASE WHEN count(*) = 5 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
-FROM pg_tables WHERE schemaname = 'cps'
-  AND tablename IN ('cps_supplier_contacts','cps_supplier_documents',
-                    'cps_vendor_document_rules','cps_supplier_registration_checks',
-                    'cps_vendor_registration_tokens');
-
-SELECT 'all suppliers unregistered' AS check,
-       CASE WHEN count(*) FILTER (WHERE registration_status <> 'unregistered') = 0
-            THEN 'PASS' ELSE 'FAIL' END AS result
-FROM cps.cps_suppliers;
-
-SELECT 'anon has no grants on new tables' AS check,
-       CASE WHEN count(*) = 0 THEN 'PASS' ELSE 'FAIL - ' || count(*) || ' grants' END AS result
-FROM information_schema.role_table_grants
-WHERE table_schema = 'cps' AND grantee = 'anon'
-  AND table_name IN ('cps_supplier_contacts','cps_supplier_documents',
-                     'cps_vendor_document_rules','cps_supplier_registration_checks',
-                     'cps_vendor_registration_tokens');
-
-SELECT 'bucket private' AS check,
-       CASE WHEN public IS FALSE THEN 'PASS' ELSE 'FAIL' END AS result
-FROM storage.buckets WHERE id = 'cps-vendor-documents';
-
-SELECT 'enforcement inert' AS check,
-       CASE WHEN value = '' THEN 'PASS' ELSE 'FAIL - ' || value END AS result
-FROM cps.cps_config WHERE key = 'vendor_registration_enforced_from';
-
-SELECT 'approver seeded' AS check,
-       CASE WHEN value ~ '^[0-9a-f-]{36}$' THEN 'PASS' ELSE 'FAIL - ' || value END AS result
-FROM cps.cps_config WHERE key = 'vendor_registration_approvers';
+WITH tables_check AS (
+  -- 1. All five new tables exist.
+  SELECT 'tables' AS check,
+         CASE WHEN count(*) = 5 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
+  FROM pg_tables WHERE schemaname = 'cps'
+    AND tablename IN ('cps_supplier_contacts','cps_supplier_documents',
+                      'cps_vendor_document_rules','cps_supplier_registration_checks',
+                      'cps_vendor_registration_tokens')
+),
+unregistered_check AS (
+  -- 2. Migration didn't backfill anyone into a registered state.
+  SELECT 'all suppliers unregistered' AS check,
+         CASE WHEN count(*) FILTER (WHERE registration_status <> 'unregistered') = 0
+              THEN 'PASS' ELSE 'FAIL' END AS result
+  FROM cps.cps_suppliers
+),
+anon_grants_check AS (
+  -- 3. anon role has no grants on the new tables.
+  SELECT 'anon has no grants on new tables' AS check,
+         CASE WHEN count(*) = 0 THEN 'PASS' ELSE 'FAIL - ' || count(*) || ' grants' END AS result
+  FROM information_schema.role_table_grants
+  WHERE table_schema = 'cps' AND grantee = 'anon'
+    AND table_name IN ('cps_supplier_contacts','cps_supplier_documents',
+                       'cps_vendor_document_rules','cps_supplier_registration_checks',
+                       'cps_vendor_registration_tokens')
+),
+bucket_check AS (
+  -- 4. Document bucket exists and is private. LEFT JOIN off a one-row anchor
+  -- so a missing bucket still emits a row (FAIL), not silence.
+  SELECT 'bucket private' AS check,
+         CASE WHEN b.public IS FALSE THEN 'PASS' ELSE 'FAIL' END AS result
+  FROM (SELECT 1) anchor
+  LEFT JOIN storage.buckets b ON b.id = 'cps-vendor-documents'
+),
+enforcement_check AS (
+  -- 5. Enforcement date key is seeded but inert (empty). Same anchor pattern:
+  -- a missing config row must still FAIL, not vanish.
+  SELECT 'enforcement inert' AS check,
+         CASE WHEN c.value = '' THEN 'PASS' ELSE 'FAIL - ' || coalesce(c.value, 'MISSING') END AS result
+  FROM (SELECT 1) anchor
+  LEFT JOIN cps.cps_config c ON c.key = 'vendor_registration_enforced_from'
+),
+approver_check AS (
+  -- 6. Approver config key holds a real cps_users uuid.
+  SELECT 'approver seeded' AS check,
+         CASE WHEN c.value ~ '^[0-9a-f-]{36}$' THEN 'PASS' ELSE 'FAIL - ' || coalesce(c.value, 'MISSING') END AS result
+  FROM (SELECT 1) anchor
+  LEFT JOIN cps.cps_config c ON c.key = 'vendor_registration_approvers'
+)
+SELECT check, result FROM (
+  SELECT * FROM tables_check
+  UNION ALL SELECT * FROM unregistered_check
+  UNION ALL SELECT * FROM anon_grants_check
+  UNION ALL SELECT * FROM bucket_check
+  UNION ALL SELECT * FROM enforcement_check
+  UNION ALL SELECT * FROM approver_check
+) all_checks
+ORDER BY CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END, check;
