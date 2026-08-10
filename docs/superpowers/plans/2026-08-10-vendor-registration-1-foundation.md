@@ -482,7 +482,7 @@ Append under `-- === TASK 2 VERIFY ===`:
 -- Every row must say PASS.
 WITH rule_count_check AS (
   SELECT 'rule count' AS check,
-         CASE WHEN count(*) = 23 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
+         CASE WHEN count(*) = 24 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
   FROM cps.cps_vendor_document_rules
 ),
 premises_photo_check AS (
