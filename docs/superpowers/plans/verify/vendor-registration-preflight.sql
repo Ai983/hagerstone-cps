@@ -210,3 +210,91 @@ SELECT check, result FROM (
   UNION ALL SELECT * FROM mandatory_count_checks
 ) all_checks
 ORDER BY CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END, check;
+
+-- === TASK 3 VERIFY ===
+
+-- Run as a whole. It creates a throwaway vendor, asserts each guard fires,
+-- then rolls everything back. Nothing survives.
+BEGIN;
+
+DO $$
+DECLARE
+  v_id     uuid;
+  v_filler uuid;
+  v_msg    text;
+  v_fired  boolean;
+BEGIN
+  SELECT id INTO v_filler FROM cps.cps_users WHERE email = 'admin@hagerstone.com';
+
+  INSERT INTO cps.cps_suppliers (name, status, vendor_type, registration_status,
+                                 registration_filled_by, registration_intake)
+  VALUES ('ZZ TEST VENDOR — ROLLBACK ME', 'active', 'company', 'draft', v_filler, 'internal')
+  RETURNING id INTO v_id;
+
+  INSERT INTO cps.cps_supplier_registration_checks (supplier_id, check_key)
+  SELECT v_id, k FROM unnest(cps.cps_vendor_check_keys()) k;
+
+  -- A1: a bare draft must not be submittable.
+  IF (cps.cps_vendor_registration_status(v_id)->>'ready_to_submit')::boolean THEN
+    RAISE EXCEPTION 'A1 FAIL - empty draft reported ready to submit';
+  END IF;
+  RAISE NOTICE 'A1 PASS - empty draft is not submittable';
+
+  -- A2: all 8 company documents must be reported missing.
+  IF jsonb_array_length(cps.cps_vendor_registration_status(v_id)->'missing_documents') <> 8 THEN
+    RAISE EXCEPTION 'A2 FAIL - expected 8 missing documents, got %',
+      jsonb_array_length(cps.cps_vendor_registration_status(v_id)->'missing_documents');
+  END IF;
+  RAISE NOTICE 'A2 PASS - 8 mandatory company documents reported missing';
+
+  -- A3: a premises photo WITHOUT a location must not satisfy the rule (D8).
+  INSERT INTO cps.cps_supplier_documents (supplier_id, document_type, file_url)
+  VALUES (v_id, 'premises_photo', 'test/no-geo.jpg');
+  IF NOT (cps.cps_vendor_registration_status(v_id)->'missing_documents' ? 'premises_photo') THEN
+    RAISE EXCEPTION 'A3 FAIL - premises photo satisfied the rule without a location';
+  END IF;
+  RAISE NOTICE 'A3 PASS - premises photo without geo does not satisfy the rule';
+
+  -- A4: adding a location satisfies it.
+  UPDATE cps.cps_supplier_documents
+     SET geo_lat = 28.5355, geo_lng = 77.3910, geo_source = 'third_party'
+   WHERE supplier_id = v_id AND document_type = 'premises_photo';
+  IF cps.cps_vendor_registration_status(v_id)->'missing_documents' ? 'premises_photo' THEN
+    RAISE EXCEPTION 'A4 FAIL - geo-tagged premises photo still reported missing';
+  END IF;
+  RAISE NOTICE 'A4 PASS - geo-tagged premises photo satisfies the rule';
+
+  -- A5: an incomplete registration must not be submittable.
+  v_fired := false;
+  BEGIN
+    PERFORM cps.cps_submit_vendor_registration(v_id);
+  EXCEPTION WHEN others THEN
+    v_fired := true; v_msg := SQLERRM;
+  END;
+  IF NOT v_fired THEN RAISE EXCEPTION 'A5 FAIL - incomplete registration was submitted'; END IF;
+  RAISE NOTICE 'A5 PASS - submit refused: %', v_msg;
+
+  -- A6: approval of a non-pending registration must be refused.
+  v_fired := false;
+  BEGIN
+    PERFORM cps.cps_approve_vendor_registration(v_id);
+  EXCEPTION WHEN others THEN
+    v_fired := true; v_msg := SQLERRM;
+  END;
+  IF NOT v_fired THEN RAISE EXCEPTION 'A6 FAIL - draft registration was approved'; END IF;
+  RAISE NOTICE 'A6 PASS - approve refused: %', v_msg;
+
+  -- A7: rejection without a reason must be refused.
+  v_fired := false;
+  BEGIN
+    PERFORM cps.cps_reject_vendor_registration(v_id, '   ');
+  EXCEPTION WHEN others THEN
+    v_fired := true; v_msg := SQLERRM;
+  END;
+  IF NOT v_fired THEN RAISE EXCEPTION 'A7 FAIL - rejected with a blank reason'; END IF;
+  RAISE NOTICE 'A7 PASS - reject refused: %', v_msg;
+
+  RAISE NOTICE 'ALL ASSERTIONS PASSED';
+END $$;
+
+ROLLBACK;
