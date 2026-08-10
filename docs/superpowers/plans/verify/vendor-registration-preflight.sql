@@ -101,3 +101,38 @@ SELECT kind, item, result, detail FROM (
 ORDER BY section,
          CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END,
          item;
+
+-- === TASK 1 VERIFY ===
+
+-- Every row must say PASS.
+SELECT 'tables' AS check,
+       CASE WHEN count(*) = 5 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
+FROM pg_tables WHERE schemaname = 'cps'
+  AND tablename IN ('cps_supplier_contacts','cps_supplier_documents',
+                    'cps_vendor_document_rules','cps_supplier_registration_checks',
+                    'cps_vendor_registration_tokens');
+
+SELECT 'all suppliers unregistered' AS check,
+       CASE WHEN count(*) FILTER (WHERE registration_status <> 'unregistered') = 0
+            THEN 'PASS' ELSE 'FAIL' END AS result
+FROM cps.cps_suppliers;
+
+SELECT 'anon has no grants on new tables' AS check,
+       CASE WHEN count(*) = 0 THEN 'PASS' ELSE 'FAIL - ' || count(*) || ' grants' END AS result
+FROM information_schema.role_table_grants
+WHERE table_schema = 'cps' AND grantee = 'anon'
+  AND table_name IN ('cps_supplier_contacts','cps_supplier_documents',
+                     'cps_vendor_document_rules','cps_supplier_registration_checks',
+                     'cps_vendor_registration_tokens');
+
+SELECT 'bucket private' AS check,
+       CASE WHEN public IS FALSE THEN 'PASS' ELSE 'FAIL' END AS result
+FROM storage.buckets WHERE id = 'cps-vendor-documents';
+
+SELECT 'enforcement inert' AS check,
+       CASE WHEN value = '' THEN 'PASS' ELSE 'FAIL - ' || value END AS result
+FROM cps.cps_config WHERE key = 'vendor_registration_enforced_from';
+
+SELECT 'approver seeded' AS check,
+       CASE WHEN value ~ '^[0-9a-f-]{36}$' THEN 'PASS' ELSE 'FAIL - ' || value END AS result
+FROM cps.cps_config WHERE key = 'vendor_registration_approvers';
