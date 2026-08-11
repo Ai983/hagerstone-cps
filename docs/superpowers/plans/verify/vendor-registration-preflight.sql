@@ -213,9 +213,23 @@ ORDER BY CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END, check_name;
 
 -- === TASK 3 VERIFY ===
 
--- Run as a whole. It creates a throwaway vendor, asserts each guard fires,
--- then rolls everything back. Nothing survives.
-BEGIN;
+-- ONE statement. It creates a throwaway vendor, asserts each guard fires, then
+-- deliberately RAISEs at the end.
+--
+-- Why it ends in an error on success: RAISE NOTICE output is not surfaced by
+-- the Supabase SQL editor, so a block that reports via NOTICE looks like
+-- "Success. No rows returned" and tells you nothing. Raising instead puts the
+-- full result where you can read it, AND aborts the transaction, which is what
+-- rolls the test vendor back. An error here is the PASS path -- read the
+-- message.
+--
+-- NOTE ON A5/A6/A7: run from the SQL editor you are the `postgres` role, so
+-- cps.current_cps_user_id() is NULL and these three refuse at the "Not a CPS
+-- user" guard before reaching the guard they are named for. That still proves
+-- the functions refuse an unauthorised caller, but the maker-checker rule
+-- itself must be exercised from the browser as admin@hagerstone.com. The
+-- reason each one refused is printed so you can see which guard actually
+-- fired.
 
 DO $$
 DECLARE
@@ -223,6 +237,8 @@ DECLARE
   v_filler uuid;
   v_msg    text;
   v_fired  boolean;
+  v_log    text := '';
+  NL       text := chr(10);
 BEGIN
   SELECT id INTO v_filler FROM cps.cps_users WHERE email = 'admin@hagerstone.com';
 
@@ -236,33 +252,33 @@ BEGIN
 
   -- A1: a bare draft must not be submittable.
   IF (cps.cps_vendor_registration_status(v_id)->>'ready_to_submit')::boolean THEN
-    RAISE EXCEPTION 'A1 FAIL - empty draft reported ready to submit';
+    RAISE EXCEPTION '%', v_log || NL || 'A1 FAIL - empty draft reported ready to submit';
   END IF;
-  RAISE NOTICE 'A1 PASS - empty draft is not submittable';
+  v_log := v_log || NL || 'A1 PASS - empty draft is not submittable';
 
-  -- A2: all 8 company documents must be reported missing.
+  -- A2: all 8 mandatory company documents must be reported missing.
   IF jsonb_array_length(cps.cps_vendor_registration_status(v_id)->'missing_documents') <> 8 THEN
-    RAISE EXCEPTION 'A2 FAIL - expected 8 missing documents, got %',
+    RAISE EXCEPTION '%', v_log || NL || 'A2 FAIL - expected 8 missing documents, got ' ||
       jsonb_array_length(cps.cps_vendor_registration_status(v_id)->'missing_documents');
   END IF;
-  RAISE NOTICE 'A2 PASS - 8 mandatory company documents reported missing';
+  v_log := v_log || NL || 'A2 PASS - 8 mandatory company documents reported missing';
 
   -- A3: a premises photo WITHOUT a location must not satisfy the rule (D8).
   INSERT INTO cps.cps_supplier_documents (supplier_id, document_type, file_url)
   VALUES (v_id, 'premises_photo', 'test/no-geo.jpg');
   IF NOT (cps.cps_vendor_registration_status(v_id)->'missing_documents' ? 'premises_photo') THEN
-    RAISE EXCEPTION 'A3 FAIL - premises photo satisfied the rule without a location';
+    RAISE EXCEPTION '%', v_log || NL || 'A3 FAIL - premises photo satisfied the rule without a location';
   END IF;
-  RAISE NOTICE 'A3 PASS - premises photo without geo does not satisfy the rule';
+  v_log := v_log || NL || 'A3 PASS - premises photo without geo does not satisfy the rule';
 
   -- A4: adding a location satisfies it.
   UPDATE cps.cps_supplier_documents
      SET geo_lat = 28.5355, geo_lng = 77.3910, geo_source = 'third_party'
    WHERE supplier_id = v_id AND document_type = 'premises_photo';
   IF cps.cps_vendor_registration_status(v_id)->'missing_documents' ? 'premises_photo' THEN
-    RAISE EXCEPTION 'A4 FAIL - geo-tagged premises photo still reported missing';
+    RAISE EXCEPTION '%', v_log || NL || 'A4 FAIL - geo-tagged premises photo still reported missing';
   END IF;
-  RAISE NOTICE 'A4 PASS - geo-tagged premises photo satisfies the rule';
+  v_log := v_log || NL || 'A4 PASS - geo-tagged premises photo satisfies the rule';
 
   -- A5: an incomplete registration must not be submittable.
   v_fired := false;
@@ -271,8 +287,10 @@ BEGIN
   EXCEPTION WHEN others THEN
     v_fired := true; v_msg := SQLERRM;
   END;
-  IF NOT v_fired THEN RAISE EXCEPTION 'A5 FAIL - incomplete registration was submitted'; END IF;
-  RAISE NOTICE 'A5 PASS - submit refused: %', v_msg;
+  IF NOT v_fired THEN
+    RAISE EXCEPTION '%', v_log || NL || 'A5 FAIL - incomplete registration was submitted';
+  END IF;
+  v_log := v_log || NL || 'A5 PASS - submit refused: ' || v_msg;
 
   -- A6: approval of a non-pending registration must be refused.
   v_fired := false;
@@ -281,8 +299,10 @@ BEGIN
   EXCEPTION WHEN others THEN
     v_fired := true; v_msg := SQLERRM;
   END;
-  IF NOT v_fired THEN RAISE EXCEPTION 'A6 FAIL - draft registration was approved'; END IF;
-  RAISE NOTICE 'A6 PASS - approve refused: %', v_msg;
+  IF NOT v_fired THEN
+    RAISE EXCEPTION '%', v_log || NL || 'A6 FAIL - draft registration was approved';
+  END IF;
+  v_log := v_log || NL || 'A6 PASS - approve refused: ' || v_msg;
 
   -- A7: rejection without a reason must be refused.
   v_fired := false;
@@ -291,10 +311,10 @@ BEGIN
   EXCEPTION WHEN others THEN
     v_fired := true; v_msg := SQLERRM;
   END;
-  IF NOT v_fired THEN RAISE EXCEPTION 'A7 FAIL - rejected with a blank reason'; END IF;
-  RAISE NOTICE 'A7 PASS - reject refused: %', v_msg;
+  IF NOT v_fired THEN
+    RAISE EXCEPTION '%', v_log || NL || 'A7 FAIL - rejected with a blank reason';
+  END IF;
+  v_log := v_log || NL || 'A7 PASS - reject refused: ' || v_msg;
 
-  RAISE NOTICE 'ALL ASSERTIONS PASSED';
+  RAISE EXCEPTION '%', 'ALL 7 ASSERTIONS PASSED. This error is deliberate - it rolls back the test vendor. Nothing was written.' || v_log;
 END $$;
-
-ROLLBACK;
