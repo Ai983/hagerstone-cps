@@ -1146,8 +1146,11 @@ export type RegistrationSnapshot = {
   bank_complete: boolean;
   ready_to_submit: boolean;
   ready_to_approve: boolean;
-  error?: string;
 };
+
+export type RegistrationSnapshotResult =
+  | { ok: true; snapshot: RegistrationSnapshot }
+  | { ok: false; error: string };
 
 /** Mandatory + optional document rules for a vendor type, in display order. */
 export async function fetchDocRules(vendorType: VendorType): Promise<VendorDocRule[]> {
@@ -1161,13 +1164,20 @@ export async function fetchDocRules(vendorType: VendorType): Promise<VendorDocRu
   return (data ?? []) as VendorDocRule[];
 }
 
-/** Completeness report. Never throws on a missing row — returns an error field. */
-export async function fetchRegistrationStatus(supplierId: string): Promise<RegistrationSnapshot> {
+/**
+ * Completeness report. Never throws on a missing supplier row — the RPC
+ * returns `{ error }` in that case, which is mapped to `{ ok: false, error }`.
+ * A full payload is mapped to `{ ok: true, snapshot }`. Still throws on a
+ * transport-level Supabase error.
+ */
+export async function fetchRegistrationStatus(supplierId: string): Promise<RegistrationSnapshotResult> {
   const { data, error } = await supabase.rpc("cps_vendor_registration_status", {
     p_supplier_id: supplierId,
   });
   if (error) throw error;
-  return data as unknown as RegistrationSnapshot;
+  const result = data as unknown as (RegistrationSnapshot & { error?: string });
+  if (result?.error) return { ok: false, error: result.error };
+  return { ok: true, snapshot: result as RegistrationSnapshot };
 }
 
 /** The only sanctioned way to create or resume a registration. */
@@ -1366,7 +1376,10 @@ Deno.serve(async (req) => {
     if (Object.keys(clean).length === 0) return json({ error: "Nothing to save" }, 400);
 
     const { error } = await admin.from("cps_suppliers").update(clean).eq("id", supplierId);
-    if (error) return json({ error: error.message }, 500);
+    if (error) {
+      console.error("vendor-registration save failed", error.message);
+      return json({ error: "Could not save your details. Please try again." }, 500);
+    }
 
     await admin.from("cps_audit_log").insert({
       action_type: "VENDOR_REG_SAVED", entity_type: "supplier", entity_id: supplierId,
@@ -1388,7 +1401,10 @@ Deno.serve(async (req) => {
     const { data, error } = await admin.storage
       .from("cps-vendor-documents")
       .createSignedUploadUrl(path);
-    if (error) return json({ error: error.message }, 500);
+    if (error) {
+      console.error("vendor-registration upload_url failed", error.message);
+      return json({ error: "Could not create the upload link. Please try again." }, 500);
+    }
 
     return json({ path, token: data.token, signedUrl: data.signedUrl });
   }
@@ -1397,6 +1413,19 @@ Deno.serve(async (req) => {
   if (action === "submit") {
     const acceptedBy = (body.accepted_by_name ?? "").trim();
     if (!acceptedBy) return json({ error: "Please enter the name of the person accepting the terms." }, 400);
+
+    // Claim the token FIRST and atomically — the UPDATE...WHERE used_at IS NULL
+    // only succeeds for one concurrent caller, so two racing submits cannot
+    // both pass the earlier read-only token gate and double-write.
+    const { data: claimed } = await admin
+      .from("cps_vendor_registration_tokens")
+      .update({ used_at: new Date().toISOString(), is_active: false })
+      .eq("token", token)
+      .is("used_at", null)
+      .select("supplier_id")
+      .maybeSingle();
+
+    if (!claimed) return json({ error: "This form has already been submitted." }, 410);
 
     const { data: ver } = await admin
       .from("cps_config").select("value")
@@ -1413,9 +1442,6 @@ Deno.serve(async (req) => {
     // The vendor's half is done. Procurement still owes the diligence evidence,
     // so this does NOT move the record to pending_verification — that stays a
     // deliberate internal action once the premises photo and location exist.
-    await admin.from("cps_vendor_registration_tokens")
-      .update({ used_at: new Date().toISOString(), is_active: false })
-      .eq("token", token);
 
     await admin.from("cps_audit_log").insert({
       action_type: "VENDOR_REG_SUBMITTED", entity_type: "supplier", entity_id: supplierId,

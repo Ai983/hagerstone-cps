@@ -81,8 +81,11 @@ export type RegistrationSnapshot = {
   bank_complete: boolean;
   ready_to_submit: boolean;
   ready_to_approve: boolean;
-  error?: string;
 };
+
+export type RegistrationSnapshotResult =
+  | { ok: true; snapshot: RegistrationSnapshot }
+  | { ok: false; error: string };
 
 /** Mandatory + optional document rules for a vendor type, in display order. */
 export async function fetchDocRules(vendorType: VendorType): Promise<VendorDocRule[]> {
@@ -96,13 +99,20 @@ export async function fetchDocRules(vendorType: VendorType): Promise<VendorDocRu
   return (data ?? []) as VendorDocRule[];
 }
 
-/** Completeness report. Never throws on a missing row — returns an error field. */
-export async function fetchRegistrationStatus(supplierId: string): Promise<RegistrationSnapshot> {
+/**
+ * Completeness report. Never throws on a missing supplier row — the RPC
+ * returns `{ error }` in that case, which is mapped to `{ ok: false, error }`.
+ * A full payload is mapped to `{ ok: true, snapshot }`. Still throws on a
+ * transport-level Supabase error.
+ */
+export async function fetchRegistrationStatus(supplierId: string): Promise<RegistrationSnapshotResult> {
   const { data, error } = await supabase.rpc("cps_vendor_registration_status", {
     p_supplier_id: supplierId,
   });
   if (error) throw error;
-  return data as unknown as RegistrationSnapshot;
+  const result = data as unknown as (RegistrationSnapshot & { error?: string });
+  if (result?.error) return { ok: false, error: result.error };
+  return { ok: true, snapshot: result as RegistrationSnapshot };
 }
 
 /** The only sanctioned way to create or resume a registration. */
