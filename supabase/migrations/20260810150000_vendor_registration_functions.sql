@@ -29,8 +29,10 @@ CREATE OR REPLACE FUNCTION cps.cps_start_vendor_registration(
 ) RETURNS uuid
 LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'cps','public' AS $$
 DECLARE
-  v_user uuid := cps.current_cps_user_id();
-  v_id   uuid;
+  v_user      uuid := cps.current_cps_user_id();
+  v_id        uuid;
+  v_status    text;
+  v_prev_type text;
 BEGIN
   IF v_user IS NULL THEN
     RAISE EXCEPTION 'Not a CPS user';
@@ -47,7 +49,24 @@ BEGIN
                                    registration_filled_by, registration_intake)
     VALUES (btrim(p_name), 'active', p_vendor_type, 'draft', v_user, 'internal')
     RETURNING id INTO v_id;
+
+    INSERT INTO cps.cps_audit_log (user_id, action_type, entity_type, entity_id, description)
+    VALUES (v_user, 'VENDOR_REG_STARTED', 'supplier', v_id,
+            'Vendor registration started (' || p_vendor_type || ')');
   ELSE
+    SELECT registration_status, vendor_type INTO v_status, v_prev_type
+      FROM cps.cps_suppliers WHERE id = p_supplier_id FOR UPDATE;
+
+    IF v_status IS NULL THEN
+      RAISE EXCEPTION 'Supplier % not found', p_supplier_id;
+    END IF;
+    IF v_status = 'approved' THEN
+      RAISE EXCEPTION 'This vendor is already registered and approved. Reject the registration first if it genuinely needs to change.';
+    END IF;
+    IF v_status = 'pending_verification' THEN
+      RAISE EXCEPTION 'This registration is with the verifier and cannot be edited until it is approved or rejected.';
+    END IF;
+
     UPDATE cps.cps_suppliers
        SET vendor_type            = p_vendor_type,
            registration_status    = CASE WHEN registration_status IN ('unregistered','rejected')
@@ -62,16 +81,19 @@ BEGIN
     IF v_id IS NULL THEN
       RAISE EXCEPTION 'Supplier % not found', p_supplier_id;
     END IF;
+
+    INSERT INTO cps.cps_audit_log (user_id, action_type, entity_type, entity_id, description,
+                                   before_value, after_value)
+    VALUES (v_user, 'VENDOR_REG_STARTED', 'supplier', v_id,
+            'Vendor registration started (' || p_vendor_type || ')',
+            jsonb_build_object('vendor_type', v_prev_type, 'registration_status', v_status),
+            jsonb_build_object('vendor_type', p_vendor_type));
   END IF;
 
   -- Seed the verifier's checklist so the queue always has five rows to sign.
   INSERT INTO cps.cps_supplier_registration_checks (supplier_id, check_key)
   SELECT v_id, k FROM unnest(cps.cps_vendor_check_keys()) k
   ON CONFLICT (supplier_id, check_key) DO NOTHING;
-
-  INSERT INTO cps.cps_audit_log (user_id, action_type, entity_type, entity_id, description)
-  VALUES (v_user, 'VENDOR_REG_STARTED', 'supplier', v_id,
-          'Vendor registration started (' || p_vendor_type || ')');
 
   RETURN v_id;
 END $$;
@@ -200,7 +222,7 @@ DECLARE
 BEGIN
   IF v_user IS NULL THEN RAISE EXCEPTION 'Not a CPS user'; END IF;
 
-  SELECT * INTO v_sup FROM cps.cps_suppliers WHERE id = p_supplier_id;
+  SELECT * INTO v_sup FROM cps.cps_suppliers WHERE id = p_supplier_id FOR UPDATE;
   IF v_sup.id IS NULL THEN RAISE EXCEPTION 'Supplier not found'; END IF;
 
   SELECT value INTO v_approvers FROM cps.cps_config
@@ -229,7 +251,12 @@ BEGIN
      SET registration_status      = 'approved',
          registration_approved_by = v_user,
          registration_approved_at = now()
-   WHERE id = p_supplier_id;
+   WHERE id = p_supplier_id
+     AND registration_status = 'pending_verification';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'This registration changed while you were approving it. Reload and try again.';
+  END IF;
 
   INSERT INTO cps.cps_audit_log (user_id, action_type, entity_type, entity_id, description)
   VALUES (v_user, 'VENDOR_REG_APPROVED', 'supplier', p_supplier_id,
