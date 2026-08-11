@@ -107,7 +107,7 @@ ORDER BY section,
 -- Every row must say PASS.
 WITH tables_check AS (
   -- 1. All five new tables exist.
-  SELECT 'tables' AS check,
+  SELECT 'tables' AS check_name,
          CASE WHEN count(*) = 5 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
   FROM pg_tables WHERE schemaname = 'cps'
     AND tablename IN ('cps_supplier_contacts','cps_supplier_documents',
@@ -116,14 +116,14 @@ WITH tables_check AS (
 ),
 unregistered_check AS (
   -- 2. Migration didn't backfill anyone into a registered state.
-  SELECT 'all suppliers unregistered' AS check,
+  SELECT 'all suppliers unregistered' AS check_name,
          CASE WHEN count(*) FILTER (WHERE registration_status <> 'unregistered') = 0
               THEN 'PASS' ELSE 'FAIL' END AS result
   FROM cps.cps_suppliers
 ),
 anon_grants_check AS (
   -- 3. anon role has no grants on the new tables.
-  SELECT 'anon has no grants on new tables' AS check,
+  SELECT 'anon has no grants on new tables' AS check_name,
          CASE WHEN count(*) = 0 THEN 'PASS' ELSE 'FAIL - ' || count(*) || ' grants' END AS result
   FROM information_schema.role_table_grants
   WHERE table_schema = 'cps' AND grantee = 'anon'
@@ -134,7 +134,7 @@ anon_grants_check AS (
 bucket_check AS (
   -- 4. Document bucket exists and is private. LEFT JOIN off a one-row anchor
   -- so a missing bucket still emits a row (FAIL), not silence.
-  SELECT 'bucket private' AS check,
+  SELECT 'bucket private' AS check_name,
          CASE WHEN b.public IS FALSE THEN 'PASS' ELSE 'FAIL' END AS result
   FROM (SELECT 1) anchor
   LEFT JOIN storage.buckets b ON b.id = 'cps-vendor-documents'
@@ -142,19 +142,19 @@ bucket_check AS (
 enforcement_check AS (
   -- 5. Enforcement date key is seeded but inert (empty). Same anchor pattern:
   -- a missing config row must still FAIL, not vanish.
-  SELECT 'enforcement inert' AS check,
+  SELECT 'enforcement inert' AS check_name,
          CASE WHEN c.value = '' THEN 'PASS' ELSE 'FAIL - ' || coalesce(c.value, 'MISSING') END AS result
   FROM (SELECT 1) anchor
   LEFT JOIN cps.cps_config c ON c.key = 'vendor_registration_enforced_from'
 ),
 approver_check AS (
   -- 6. Approver config key holds a real cps_users uuid.
-  SELECT 'approver seeded' AS check,
+  SELECT 'approver seeded' AS check_name,
          CASE WHEN c.value ~ '^[0-9a-f-]{36}$' THEN 'PASS' ELSE 'FAIL - ' || coalesce(c.value, 'MISSING') END AS result
   FROM (SELECT 1) anchor
   LEFT JOIN cps.cps_config c ON c.key = 'vendor_registration_approvers'
 )
-SELECT check, result FROM (
+SELECT check_name, result FROM (
   SELECT * FROM tables_check
   UNION ALL SELECT * FROM unregistered_check
   UNION ALL SELECT * FROM anon_grants_check
@@ -162,23 +162,23 @@ SELECT check, result FROM (
   UNION ALL SELECT * FROM enforcement_check
   UNION ALL SELECT * FROM approver_check
 ) all_checks
-ORDER BY CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END, check;
+ORDER BY CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END, check_name;
 
 -- === TASK 2 VERIFY ===
 
 -- Every row must say PASS.
 WITH rule_count_check AS (
-  SELECT 'rule count' AS check,
+  SELECT 'rule count' AS check_name,
          CASE WHEN count(*) = 24 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
   FROM cps.cps_vendor_document_rules
 ),
 premises_photo_check AS (
-  SELECT 'premises_photo never waivable' AS check,
+  SELECT 'premises_photo never waivable' AS check_name,
          CASE WHEN count(*) FILTER (WHERE waivable) = 0 THEN 'PASS' ELSE 'FAIL' END AS result
   FROM cps.cps_vendor_document_rules WHERE document_type = 'premises_photo'
 ),
 photo_with_vendor_check AS (
-  SELECT 'photo_with_vendor waivable for all 3 types' AS check,
+  SELECT 'photo_with_vendor waivable for all 3 types' AS check_name,
          CASE WHEN count(*) = 3 THEN 'PASS' ELSE 'FAIL - got ' || count(*) END AS result
   FROM cps.cps_vendor_document_rules
   WHERE document_type = 'photo_with_vendor' AND waivable AND is_mandatory
@@ -195,7 +195,7 @@ mandatory_count_checks AS (
   -- LEFT JOIN off the expected list so a vendor_type with zero mandatory
   -- rows still emits a FAIL row instead of silently dropping out of the
   -- GROUP BY.
-  SELECT 'mandatory docs: ' || e.vendor_type AS check,
+  SELECT 'mandatory docs: ' || e.vendor_type AS check_name,
          CASE WHEN coalesce(m.mandatory_docs, 0) = e.expected_count
               THEN 'PASS'
               ELSE 'FAIL - got ' || coalesce(m.mandatory_docs, 0)
@@ -203,13 +203,13 @@ mandatory_count_checks AS (
   FROM expected_mandatory_counts e
   LEFT JOIN mandatory_counts_raw m ON m.vendor_type = e.vendor_type
 )
-SELECT check, result FROM (
+SELECT check_name, result FROM (
   SELECT * FROM rule_count_check
   UNION ALL SELECT * FROM premises_photo_check
   UNION ALL SELECT * FROM photo_with_vendor_check
   UNION ALL SELECT * FROM mandatory_count_checks
 ) all_checks
-ORDER BY CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END, check;
+ORDER BY CASE WHEN result LIKE 'FAIL%' THEN 0 ELSE 1 END, check_name;
 
 -- === TASK 3 VERIFY ===
 
