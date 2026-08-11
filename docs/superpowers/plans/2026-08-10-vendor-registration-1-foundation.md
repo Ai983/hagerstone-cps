@@ -886,7 +886,11 @@ BEGIN
      SET is_active = false
    WHERE supplier_id = p_supplier_id AND is_active;
 
-  v_token := encode(gen_random_bytes(24), 'hex');
+  -- gen_random_bytes is pgcrypto, which lives in the `extensions` schema on
+  -- Supabase and is unreachable under this function's pinned search_path.
+  -- gen_random_uuid() is core Postgres and needs no extension.
+  v_token := replace(gen_random_uuid()::text, '-', '')
+          || replace(gen_random_uuid()::text, '-', '');
 
   INSERT INTO cps.cps_vendor_registration_tokens
     (token, supplier_id, expires_at, created_by)
