@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy, ShieldCheck, Briefcase, Wallet, CheckSquare, FileCheck, Radar, CalendarRange, ClipboardList, HardHat, Receipt, BadgeIndianRupee, UserCheck, ShieldAlert } from "lucide-react";
+import { LayoutDashboard, Users, Package, FileText, Send, MessageSquare, BarChart3, ShoppingCart, Truck, Shield, ChevronLeft, ChevronRight, LogOut, Building2, KanbanSquare, LineChart, Boxes, ListChecks, Trophy, ShieldCheck, Briefcase, Wallet, CheckSquare, FileCheck, Radar, CalendarRange, ClipboardList, HardHat, Receipt, BadgeIndianRupee, UserCheck, ShieldAlert, UserPlus } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +27,7 @@ const NAV = [
   { title: "Stock Overview", url: "/stock-overview", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team","design_team","project_coordinator"] },
   { title: "Budget List", url: "/budget-list", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team","design_team"] },
   { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","design_team","accounts_team","project_coordinator"] },
+  { title: "Vendor Registration", url: "/vendor-registration", icon: UserPlus, roles: ["procurement_executive","procurement_head","it_head","management"] },
   { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor","design_team"] },
   // Phase 2 payment compliance. Site reaches /payment-sheets via EMPLOYEE_NAV instead.
   { title: "Payment Sheets", url: "/payment-sheets", icon: Receipt, roles: ["procurement_executive","procurement_head","it_head","management","finance","accounts_team"] },
