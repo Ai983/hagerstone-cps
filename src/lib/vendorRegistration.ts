@@ -161,3 +161,254 @@ export async function logVendorRegEvent(opts: {
     /* never surface an audit failure to the user */
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Portal data layer.
+ *
+ * Components import from here and never touch Supabase directly. Every
+ * status transition goes through a SECURITY DEFINER RPC — the client is
+ * never trusted to set registration_status, because the checklist and
+ * maker-checker rules live inside those functions.
+ * ------------------------------------------------------------------ */
+
+export const VENDOR_DOC_BUCKET = "cps-vendor-documents";
+
+export type SupplierRow = {
+  id: string;
+  name: string | null;
+  gstin: string | null;
+  pan: string | null;
+  address_text: string | null;
+  city: string | null;
+  state: string | null;
+  pincode: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  email: string | null;
+  bank_account_number: string | null;
+  bank_ifsc: string | null;
+  bank_account_holder_name: string | null;
+  bank_name: string | null;
+  vendor_type: VendorType | null;
+  registration_status: RegistrationStatus;
+  registration_filled_by: string | null;
+  registration_rejection_reason: string | null;
+  terms_version: string | null;
+  terms_accepted_by_name: string | null;
+  terms_accepted_at: string | null;
+};
+
+export type SupplierContact = {
+  contact_role: ContactRole;
+  name: string | null;
+  designation: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  email: string | null;
+};
+
+export type RegistrationCheck = {
+  check_key: string;
+  status: "pending" | "pass" | "fail";
+  notes: string | null;
+  checked_at: string | null;
+};
+
+const SUPPLIER_COLS =
+  "id,name,gstin,pan,address_text,city,state,pincode,phone,whatsapp,email," +
+  "bank_account_number,bank_ifsc,bank_account_holder_name,bank_name," +
+  "vendor_type,registration_status,registration_filled_by," +
+  "registration_rejection_reason,terms_version,terms_accepted_by_name,terms_accepted_at";
+
+export async function fetchSupplier(id: string): Promise<SupplierRow | null> {
+  const { data, error } = await supabase
+    .from("cps_suppliers").select(SUPPLIER_COLS).eq("id", id).maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as unknown as SupplierRow | null;
+}
+
+/** Blur-save of plain fields. Never include registration_status here. */
+export async function saveSupplierFields(
+  id: string, patch: Partial<Record<keyof SupplierRow, string | null>>,
+): Promise<void> {
+  const { registration_status, vendor_type, ...safe } = patch as Record<string, unknown>;
+  if (Object.keys(safe).length === 0) return;
+  const { error } = await supabase.from("cps_suppliers").update(safe).eq("id", id);
+  if (error) throw error;
+}
+
+export async function fetchContacts(id: string): Promise<SupplierContact[]> {
+  const { data, error } = await supabase
+    .from("cps_supplier_contacts")
+    .select("contact_role,name,designation,phone,whatsapp,email")
+    .eq("supplier_id", id);
+  if (error) throw error;
+  return (data ?? []) as SupplierContact[];
+}
+
+export async function saveContact(
+  id: string, role: ContactRole, patch: Partial<SupplierContact>,
+): Promise<void> {
+  const { error } = await supabase
+    .from("cps_supplier_contacts")
+    .upsert({ supplier_id: id, contact_role: role, ...patch, updated_at: new Date().toISOString() },
+            { onConflict: "supplier_id,contact_role" });
+  if (error) throw error;
+}
+
+export async function fetchDocuments(id: string): Promise<SupplierDocument[]> {
+  const { data, error } = await supabase
+    .from("cps_supplier_documents")
+    .select("id,document_type,label,file_url,document_number,geo_lat,geo_lng,geo_source,geo_note,waiver_reason,waiver_accepted_at,uploaded_at")
+    .eq("supplier_id", id)
+    .order("uploaded_at");
+  if (error) throw error;
+  return (data ?? []) as unknown as SupplierDocument[];
+}
+
+/** Upload to the private bucket, then record the row. */
+export async function uploadDocument(opts: {
+  supplierId: string; documentType: string; file: File;
+  userId: string | null; label?: string; documentNumber?: string;
+}): Promise<void> {
+  const safe = opts.file.name.replace(/[^\w.\-]/g, "_").slice(-80);
+  const path = `${opts.supplierId}/${opts.documentType}/${Date.now()}_${safe}`;
+
+  const { error: upErr } = await supabase.storage
+    .from(VENDOR_DOC_BUCKET).upload(path, opts.file, { upsert: false });
+  if (upErr) throw upErr;
+
+  const { error } = await supabase.from("cps_supplier_documents").insert({
+    supplier_id: opts.supplierId,
+    document_type: opts.documentType,
+    label: opts.label ?? null,
+    document_number: opts.documentNumber ?? null,
+    file_url: path,
+    uploaded_by: opts.userId,
+  });
+  if (error) throw error;
+}
+
+export async function deleteDocument(docId: string): Promise<void> {
+  const { error } = await supabase.from("cps_supplier_documents").delete().eq("id", docId);
+  if (error) throw error;
+}
+
+/** A waiver is a request; the verifier accepts it by signing the checklist. */
+export async function requestWaiver(
+  supplierId: string, documentType: string, reason: string,
+): Promise<void> {
+  const { error } = await supabase.from("cps_supplier_documents").insert({
+    supplier_id: supplierId, document_type: documentType, waiver_reason: reason.trim(),
+  });
+  if (error) throw error;
+}
+
+export async function setDocumentGeo(
+  docId: string, lat: number, lng: number,
+  source: "on_site" | "third_party", note: string | null,
+): Promise<void> {
+  const { error } = await supabase.from("cps_supplier_documents")
+    .update({ geo_lat: lat, geo_lng: lng, geo_source: source, geo_note: note,
+              captured_at: new Date().toISOString() })
+    .eq("id", docId);
+  if (error) throw error;
+}
+
+export async function fetchChecks(id: string): Promise<RegistrationCheck[]> {
+  const { data, error } = await supabase
+    .from("cps_supplier_registration_checks")
+    .select("check_key,status,notes,checked_at")
+    .eq("supplier_id", id);
+  if (error) throw error;
+  return (data ?? []) as RegistrationCheck[];
+}
+
+export async function saveCheck(
+  supplierId: string, checkKey: string,
+  status: "pending" | "pass" | "fail", notes: string | null, userId: string | null,
+): Promise<void> {
+  const { error } = await supabase
+    .from("cps_supplier_registration_checks")
+    .update({ status, notes, checked_by: userId, checked_at: new Date().toISOString() })
+    .eq("supplier_id", supplierId).eq("check_key", checkKey);
+  if (error) throw error;
+}
+
+/* ---- transitions: RPC only ---- */
+
+async function callRpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.rpc(fn, args);
+  if (error) throw new Error(error.message);
+  return data as T;
+}
+
+export const submitRegistration = (id: string) =>
+  callRpc("cps_submit_vendor_registration", { p_supplier_id: id });
+
+export const approveRegistration = (id: string) =>
+  callRpc("cps_approve_vendor_registration", { p_supplier_id: id });
+
+export const rejectRegistration = (id: string, reason: string) =>
+  callRpc("cps_reject_vendor_registration", { p_supplier_id: id, p_reason: reason });
+
+export const issueToken = (id: string) =>
+  callRpc<{ token: string; expires_at: string }>(
+    "cps_issue_vendor_registration_token", { p_supplier_id: id });
+
+/** Procurement recording that the vendor accepted the terms. The NAME of the
+ *  person who agreed is required — an unattributed acceptance is worth nothing
+ *  when a bill is later rejected against these terms. */
+export async function acceptTermsInternally(
+  id: string, acceptedByName: string, version: string,
+): Promise<void> {
+  const { error } = await supabase.from("cps_suppliers").update({
+    terms_version: version,
+    terms_accepted_by_name: acceptedByName.trim(),
+    terms_accepted_mode: "recorded_by_procurement",
+    terms_accepted_at: new Date().toISOString(),
+  }).eq("id", id);
+  if (error) throw error;
+}
+
+/** The verifier's queue. */
+export async function fetchPendingVerification(): Promise<
+  Array<{ id: string; name: string; vendor_type: VendorType | null;
+          registration_submitted_at: string | null; registration_filled_by: string | null }>
+> {
+  const { data, error } = await supabase
+    .from("cps_suppliers")
+    .select("id,name,vendor_type,registration_submitted_at,registration_filled_by")
+    .eq("registration_status", "pending_verification")
+    .order("registration_submitted_at");
+  if (error) throw error;
+  return (data ?? []) as never;
+}
+
+/** Existing vendors the portal can top up. Excludes approved ones — those are
+ *  refused by cps_start_vendor_registration anyway, so offering them misleads. */
+export async function fetchRegistrableSuppliers(search: string) {
+  let q = supabase
+    .from("cps_suppliers")
+    .select("id,name,gstin,city,registration_status")
+    .neq("registration_status", "approved")
+    .neq("registration_status", "pending_verification")
+    .order("name")
+    .limit(25);
+  if (search.trim()) q = q.ilike("name", `%${search.trim()}%`);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data ?? []) as Array<{ id: string; name: string; gstin: string | null;
+                                 city: string | null; registration_status: RegistrationStatus }>;
+}
+
+/** Terms text + version, straight from config so a wording change needs no deploy. */
+export async function fetchTerms(): Promise<{ text: string; version: string }> {
+  const { data, error } = await supabase
+    .from("cps_config").select("key,value")
+    .in("key", ["vendor_registration_terms_text", "vendor_registration_terms_version"]);
+  if (error) throw error;
+  const map = Object.fromEntries((data ?? []).map((r) => [r.key, r.value]));
+  return { text: map.vendor_registration_terms_text ?? "",
+           version: map.vendor_registration_terms_version ?? "v1" };
+}
