@@ -199,7 +199,7 @@ export default function WorkOrders() {
 
   // Send-to-Finance dialog (captures bank details, hands the WO to the finance app)
   const [sendFinanceWo, setSendFinanceWo] = useState<WoRow | null>(null);
-  // One-time backfill: generate + store PDFs for issued WOs missing one
+  // Bulk PDF rebuild: regenerate + store the PDF of every issued WO
   const [backfilling, setBackfilling] = useState(false);
 
   // ── fetch list ──
@@ -364,14 +364,19 @@ export default function WorkOrders() {
     setWizardOpen(true);
   };
 
-  // Issued work orders whose PDF was never stored (e.g. created before the
-  // cps-wo-pdfs bucket existed). Drives the "Generate missing PDFs" button.
-  const missingPdfCount = rows.filter((r) => r.status === "issued" && !r.wo_pdf_url).length;
+  // Every issued work order — each one either has no stored PDF (created before
+  // the cps-wo-pdfs bucket existed) or has a stale one (PDFs written by the
+  // wizard before the Item-column fix dropped the line item's `item` value).
+  // Drives the "Rebuild PDFs" button.
+  const issuedPdfCount = rows.filter((r) => r.status === "issued").length;
 
-  // Rebuild + upload PDFs for every issued WO that doesn't have one yet.
-  const backfillMissingPdfs = async () => {
-    const targets = rows.filter((r) => r.status === "issued" && !r.wo_pdf_url);
-    if (targets.length === 0) { toast.info("All issued work orders already have a PDF"); return; }
+  // Rebuild + upload the PDF of every issued WO, straight from its DB rows.
+  const rebuildIssuedPdfs = async () => {
+    const targets = rows.filter((r) => r.status === "issued");
+    if (targets.length === 0) { toast.info("Koi issued work order nahi hai"); return; }
+    if (!window.confirm(
+      `${targets.length} issued work order${targets.length === 1 ? "" : "s"} ka PDF dobara banega aur purana overwrite ho jayega. Continue?`
+    )) return;
     setBackfilling(true);
     let done = 0, failed = 0;
     for (const r of targets) {
@@ -381,7 +386,7 @@ export default function WorkOrders() {
       } catch { failed++; }
     }
     setBackfilling(false);
-    toast.success(`Generated ${done} PDF${done === 1 ? "" : "s"}${failed ? ` · ${failed} failed` : ""}`);
+    toast.success(`Rebuilt ${done} PDF${done === 1 ? "" : "s"}${failed ? ` · ${failed} failed` : ""}`);
     fetchAll();
   };
 
@@ -1030,10 +1035,10 @@ Rules:
         </div>
         {canManageWO && (
           <div className="flex items-center gap-2">
-            {missingPdfCount > 0 && (
-              <Button variant="outline" onClick={backfillMissingPdfs} disabled={backfilling}
-                title="Generate & store PDFs for issued work orders that don't have one yet">
-                {backfilling ? "Generating…" : `Generate ${missingPdfCount} missing PDF${missingPdfCount > 1 ? "s" : ""}`}
+            {issuedPdfCount > 0 && (
+              <Button variant="outline" onClick={rebuildIssuedPdfs} disabled={backfilling}
+                title="Regenerate & store the PDF of every issued work order from its current database rows">
+                {backfilling ? "Rebuilding…" : `Rebuild ${issuedPdfCount} PDF${issuedPdfCount > 1 ? "s" : ""}`}
               </Button>
             )}
             <Button onClick={openCreate}>
