@@ -732,12 +732,15 @@ export async function uploadWoPdf(
 
   const { error } = await supabase.storage
     .from("cps-wo-pdfs")
-    .upload(path, pdfBlob, { contentType: "application/pdf", upsert: true });
+    .upload(path, pdfBlob, { contentType: "application/pdf", upsert: true, cacheControl: "60" });
 
   if (error) return null;
 
   const { data } = supabase.storage.from("cps-wo-pdfs").getPublicUrl(path);
-  const publicUrl = data.publicUrl ?? null;
+  // A re-upload overwrites the same object path, so the public URL never
+  // changes and the browser/CDN happily serves the old PDF. Stamp a version
+  // query param so every rebuild is fetched fresh.
+  const publicUrl = data.publicUrl ? `${data.publicUrl}?v=${Date.now()}` : null;
 
   if (publicUrl) {
     await supabase
