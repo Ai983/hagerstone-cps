@@ -979,6 +979,7 @@ Rules:
     lineItems: w_lineItems
       .filter((li) => li.description.trim())
       .map<WoPdfLineItem>((li) => ({
+        item: li.item || null,
         hsn_code: li.hsn_code,
         description: li.description,
         delivery_date: li.delivery_date || null,
