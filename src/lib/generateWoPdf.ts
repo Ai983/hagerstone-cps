@@ -1,5 +1,7 @@
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+// Named imports (not the default ones) so this module also loads under Node's
+// CommonJS interop — rebuild-wo-pdfs.ts runs the same builder outside the browser.
+import { jsPDF } from "jspdf";
+import { autoTable } from "jspdf-autotable";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /* ─────────────────────────────────────────────────────────── types ── */
