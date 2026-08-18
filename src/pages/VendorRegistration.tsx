@@ -13,6 +13,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, ArrowLeft, ShieldCheck } from "lucide-react";
 import RegistrationStartPanel from "@/components/vendors/RegistrationStartPanel";
+import RegistrationIdentityForm from "@/components/vendors/RegistrationIdentityForm";
+import RegistrationContactsForm from "@/components/vendors/RegistrationContactsForm";
+import RegistrationBankForm from "@/components/vendors/RegistrationBankForm";
 import {
   type RegistrationSnapshot, type SupplierRow,
   fetchRegistrationStatus, fetchSupplier,
@@ -109,8 +112,20 @@ export default function VendorRegistration() {
         </div>
       )}
 
-      {/* Sections land here in Tasks 3-5, each receiving
-          supplier={supplier} snapshot={snapshot} onChanged={onChanged} */}
+      {supplier && snapshot && (
+        <>
+          <RegistrationIdentityForm
+            key={`id-${supplier.id}`} supplier={supplier} onChanged={onChanged}
+            disabled={supplier.registration_status !== "draft"} />
+          <RegistrationContactsForm
+            supplierId={supplier.id} onChanged={onChanged}
+            disabled={supplier.registration_status !== "draft"} />
+          <RegistrationBankForm
+            key={`bank-${supplier.id}`} supplier={supplier}
+            bankComplete={snapshot.bank_complete} onChanged={onChanged}
+            disabled={supplier.registration_status !== "draft"} />
+        </>
+      )}
     </div>
   );
 }
