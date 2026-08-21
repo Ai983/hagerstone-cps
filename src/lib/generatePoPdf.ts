@@ -1,5 +1,7 @@
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+// Named imports (not the default ones) so this module also loads under Node's
+// CommonJS interop — regenerate-po-pdf.ts runs the same builder outside the browser.
+import { jsPDF } from "jspdf";
+import { autoTable } from "jspdf-autotable";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /* ─────────────────────────────────────────────────────────── types ── */
@@ -42,6 +44,10 @@ export interface PoPdfData {
   /* order */
   paymentTerms?: string | null;
   deliveryDate?: string | null;
+  /* Optional per-PO overrides. When absent both are derived from deliveryDate
+     (+5 / +13 days) exactly as before. */
+  poUpto?: string | null;
+  validUpto?: string | null;
   projectCode?: string | null;
   projectName?: string | null;
 
@@ -241,8 +247,8 @@ export function buildPoPdf(data: PoPdfData): Blob {
   const today = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
   const poDate = data.poDate ? fmtDate(data.poDate) : today;
   const delivSch   = fmtDate(data.deliveryDate);
-  const poUpto     = addDays(data.deliveryDate, 5);
-  const validUpto  = addDays(data.deliveryDate, 13);
+  const poUpto     = data.poUpto ? fmtDate(data.poUpto) : addDays(data.deliveryDate, 5);
+  const validUpto  = data.validUpto ? fmtDate(data.validUpto) : addDays(data.deliveryDate, 13);
 
   /* Use the GSTIN stored on the PO record; fall back to UP GSTIN */
   const resolvedHagerstoneGstin = data.hagerstoneGstin ?? PRIMARY_HAGERSTONE_GSTIN;

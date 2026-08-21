@@ -334,7 +334,7 @@ type CreateLine = {
 const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
   const { data: po, error: poErr } = await supabase
     .from("cps_purchase_orders")
-    .select("po_number,pr_id,supplier_id,created_at,created_by,ship_to_address,payment_terms,delivery_date,project_code,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,version,revision_reason")
+    .select("po_number,pr_id,supplier_id,created_at,created_by,ship_to_address,payment_terms,delivery_date,po_upto,valid_upto,insp_at,project_code,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,version,revision_reason")
     .eq("id", poId)
     .single();
   if (poErr || !po) throw new Error("PO not found: " + (poErr?.message ?? ""));
@@ -386,9 +386,11 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
     supplierPhone: supplier.phone ?? null,
     supplierEmail: supplier.email ?? null,
     shipToAddress: (po as any).ship_to_address ?? pr.project_site ?? null,
-    inspAt: pr.project_site ?? null,
+    inspAt: (po as any).insp_at ?? pr.project_site ?? null,
     paymentTerms: (po as any).payment_terms,
     deliveryDate: (po as any).delivery_date,
+    poUpto: (po as any).po_upto ?? null,
+    validUpto: (po as any).valid_upto ?? null,
     projectCode: (po as any).project_code ?? pr.project_code ?? null,
     projectName: pr.project_code ?? (po as any).project_code ?? null,
     subTotal: Number((po as any).total_value ?? 0),
