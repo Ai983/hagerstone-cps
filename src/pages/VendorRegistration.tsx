@@ -16,6 +16,10 @@ import RegistrationStartPanel from "@/components/vendors/RegistrationStartPanel"
 import RegistrationIdentityForm from "@/components/vendors/RegistrationIdentityForm";
 import RegistrationContactsForm from "@/components/vendors/RegistrationContactsForm";
 import RegistrationBankForm from "@/components/vendors/RegistrationBankForm";
+import RegistrationDocuments from "@/components/vendors/RegistrationDocuments";
+import RegistrationDiligence from "@/components/vendors/RegistrationDiligence";
+import RegistrationTerms from "@/components/vendors/RegistrationTerms";
+import OfflineFormButton from "@/components/vendors/OfflineFormButton";
 import {
   type RegistrationSnapshot, type SupplierRow,
   fetchRegistrationStatus, fetchSupplier,
@@ -77,6 +81,9 @@ export default function VendorRegistration() {
             <Badge className={STATUS_STYLE[supplier.registration_status] ?? ""}>
               {supplier.registration_status.replace(/_/g, " ")}
             </Badge>
+            {supplier.vendor_type && (
+              <OfflineFormButton vendorName={supplier.name ?? ""} vendorType={supplier.vendor_type} />
+            )}
             <Button variant="outline" size="sm"
                     onClick={() => { setSupplierId(null); setSupplier(null); setSnapshot(null); }}>
               <ArrowLeft className="h-4 w-4 mr-1" />Another vendor
@@ -124,6 +131,20 @@ export default function VendorRegistration() {
             key={`bank-${supplier.id}`} supplier={supplier}
             bankComplete={snapshot.bank_complete} onChanged={onChanged}
             disabled={supplier.registration_status !== "draft"} />
+          {supplier.vendor_type && (
+            <RegistrationDocuments
+              supplierId={supplier.id}
+              vendorType={supplier.vendor_type}
+              missing={snapshot.missing_documents}
+              onChanged={onChanged}
+              disabled={supplier.registration_status !== "draft"} />
+          )}
+          <RegistrationDiligence
+            supplierId={supplier.id} onChanged={onChanged}
+            disabled={supplier.registration_status !== "draft"} />
+          <RegistrationTerms
+            key={`terms-${supplier.id}`} supplier={supplier}
+            snapshot={snapshot} onChanged={onChanged} />
         </>
       )}
     </div>

@@ -53,6 +53,7 @@ const Dashboard = lazyWithRetry(() => import("@/pages/Dashboard"));
 const PurchaseRequisitions = lazyWithRetry(() => import("@/pages/PurchaseRequisitions"));
 const SupplierMaster = lazyWithRetry(() => import("@/pages/SupplierMaster"));
 const VendorRegistration = lazyWithRetry(() => import("@/pages/VendorRegistration"));
+const VendorVerification = lazyWithRetry(() => import("@/pages/VendorVerification"));
 const VendorScout = lazyWithRetry(() => import("@/pages/VendorScout"));
 const ItemMaster = lazyWithRetry(() => import("@/pages/ItemMaster"));
 const RFQs = lazyWithRetry(() => import("@/pages/RFQs"));
@@ -116,6 +117,7 @@ const App = () => (
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
               <Route path="/vendor-registration" element={<Protected><VendorRegistration /></Protected>} />
+              <Route path="/vendor-verification" element={<Protected><VendorVerification /></Protected>} />
               <Route path="/suppliers" element={<Protected><SupplierMaster /></Protected>} />
               <Route path="/vendor-scout" element={<Protected><VendorScout /></Protected>} />
               <Route path="/items" element={<Protected><ItemMaster /></Protected>} />

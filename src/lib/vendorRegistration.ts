@@ -372,10 +372,15 @@ export async function acceptTermsInternally(
 }
 
 /** The verifier's queue. */
-export async function fetchPendingVerification(): Promise<
-  Array<{ id: string; name: string; vendor_type: VendorType | null;
-          registration_submitted_at: string | null; registration_filled_by: string | null }>
-> {
+export type PendingVerificationRow = {
+  id: string;
+  name: string;
+  vendor_type: VendorType | null;
+  registration_submitted_at: string | null;
+  registration_filled_by: string | null;
+};
+
+export async function fetchPendingVerification(): Promise<PendingVerificationRow[]> {
   const { data, error } = await supabase
     .from("cps_suppliers")
     .select("id,name,vendor_type,registration_submitted_at,registration_filled_by")
