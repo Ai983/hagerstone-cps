@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useAuth } from "@/contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { headerTotalsFromLines, extraChargeToLineRow } from "@/lib/quoteTotals";
-import { downscaleImageToJpegBase64, fileToBase64, fileToClaudeBlock } from "@/lib/imageForClaude";
+import { downscaleImageToJpegBase64, fileToBase64 } from "@/lib/imageForClaude";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 
-import { Building2, CalendarDays, ChevronsUpDown, ChevronRight, ChevronDown, Flag, LogIn, Plus, Search, ExternalLink, Loader2, AlertTriangle, CheckCircle2, Paperclip, UserPlus, Sparkles, Trash2, User } from "lucide-react";
+import { Building2, CalendarDays, ChevronsUpDown, ChevronRight, ChevronDown, Flag, LogIn, Plus, Search, ExternalLink, Loader2, AlertTriangle, CheckCircle2, Paperclip, UserPlus, Trash2, User } from "lucide-react";
 import { LegacyQuoteUploadModal } from "@/components/quotes/LegacyQuoteUploadModal";
 
 type QuoteParseStatus = "pending" | "parsed" | "needs_review" | "reviewed" | "approved" | "failed";
@@ -226,6 +227,7 @@ const buildCorrectionEntries = (oldRow: QuoteLineItem, next: Partial<QuoteLineIt
 
 export default function Quotes() {
   const { user, canViewPrices, canCreateRFQ, isProcurementHead } = useAuth();
+  const navigate = useNavigate();
   const isProcurementTeam = canCreateRFQ; // procurement_executive / procurement_head / it_head
 
   const [loading, setLoading] = useState(true);
@@ -262,12 +264,6 @@ export default function Quotes() {
   const [suppliersLoading, setSuppliersLoading] = useState(false);
   const [supplierSearch, setSupplierSearch] = useState("");
   const [supplierPopOpen, setSupplierPopOpen] = useState(false);
-
-  // New vendor inline form
-  const [newVendorMode, setNewVendorMode] = useState(false);
-  const [newVendorForm, setNewVendorForm] = useState({ name: "", phone: "", email: "", city: "", gstin: "" });
-  const [newVendorFile, setNewVendorFile] = useState<File | null>(null);
-  const [newVendorParsing, setNewVendorParsing] = useState(false);
 
   const [logForm, setLogForm] = useState({
     rfqId: "",
@@ -1490,9 +1486,6 @@ Rules:
     setSuppliers([]);
     setSupplierSearch("");
     setSupplierPopOpen(false);
-    setNewVendorMode(false);
-    setNewVendorForm({ name: "", phone: "", email: "", city: "", gstin: "" });
-    setNewVendorFile(null);
 
     setSuppliersLoading(true);
     const [rfqRes, supRes] = await Promise.all([
@@ -1530,56 +1523,6 @@ Rules:
     setSuppliersLoading(false);
   };
 
-  const parseVendorFromFile = async () => {
-    if (!newVendorFile) return;
-    if (!newVendorFile.type.startsWith("image/")) {
-      toast.error("AI parsing works with images (JPG/PNG). For PDFs, fill details manually.");
-      return;
-    }
-    setNewVendorParsing(true);
-    try {
-      // Downscaled to ≤1568px JPEG — vendor cards photographed on phones are
-      // multi-MB; full size just burns tokens.
-      const imageBlock = await fileToClaudeBlock(newVendorFile);
-      // invoke() rather than a bare fetch: it attaches the caller's Authorization
-      // header, which claude-proxy requires now that verify_jwt is on. A raw fetch
-      // sends no bearer and is rejected at the gateway before it reaches the function.
-      const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
-        body: {
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 512,
-          messages: [{
-            role: "user",
-            content: [
-              imageBlock,
-              { type: "text", text: `Extract vendor/supplier details from this document. Return ONLY a JSON object with these fields (omit any you cannot clearly read): {"name":"company name","phone":"phone number","email":"email address","city":"city name","gstin":"GST number"}` }
-            ]
-          }]
-        }
-      });
-      if (fnError) throw fnError;
-      const text = result?.content?.[0]?.text ?? "";
-      const match = text.match(/\{[\s\S]*\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
-        setNewVendorForm(prev => ({
-          name: parsed.name || prev.name,
-          phone: parsed.phone || prev.phone,
-          email: parsed.email || prev.email,
-          city: parsed.city || prev.city,
-          gstin: parsed.gstin || prev.gstin,
-        }));
-        toast.success("Vendor details extracted — please review and confirm.");
-      } else {
-        toast.error("Could not extract vendor details. Please fill manually.");
-      }
-    } catch (e) {
-      toast.error("Parse failed. Fill details manually.");
-    } finally {
-      setNewVendorParsing(false);
-    }
-  };
-
   const loadLogRfqItems = async (rfqId: string) => {
     if (!rfqId) { setLogRfqItems([]); setLogItemEntries({}); return; }
     setLogItemsLoading(true);
@@ -1611,36 +1554,10 @@ Rules:
       return;
     }
 
-    let resolvedSupplierId = logForm.supplierId;
+    const resolvedSupplierId = logForm.supplierId;
 
     if (logForm.rfqId) {
       if (!(await applyQuoteChangeGate(logForm.rfqId))) return;
-    }
-
-    // If new vendor mode: insert vendor first
-    if (newVendorMode) {
-      if (!newVendorForm.name.trim()) { toast.error("Vendor name is required"); return; }
-      // GSTIN is optional — only validate format if a value was entered
-      if (newVendorForm.gstin.trim() && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/.test(newVendorForm.gstin.trim().toUpperCase())) {
-        toast.error("Invalid GSTIN format — must be 15 characters or leave blank"); return;
-      }
-      const { data: vendorInsert, error: vendorErr } = await supabase
-        .from("cps_suppliers")
-        .insert([{
-          name: newVendorForm.name.trim(),
-          phone: newVendorForm.phone.trim() || null,
-          email: newVendorForm.email.trim() || null,
-          city: newVendorForm.city.trim() || null,
-          gstin: newVendorForm.gstin.trim() || null,
-          status: "active",
-          categories: [],
-          added_via: "manual_quote_log",
-        }])
-        .select("id")
-        .single();
-      if (vendorErr || !vendorInsert) { toast.error("Failed to add vendor: " + vendorErr?.message); return; }
-      resolvedSupplierId = (vendorInsert as any).id;
-      toast.success(`Vendor "${newVendorForm.name}" added to supplier database.`);
     }
 
     const rfqId = logForm.rfqId;
@@ -2149,72 +2066,40 @@ Rules:
 
                 <div className="space-y-1.5">
                   <Label>Supplier *</Label>
-                  {!newVendorMode ? (
-                    <>
-                      <Popover open={supplierPopOpen} onOpenChange={setSupplierPopOpen}>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            role="combobox"
-                            aria-expanded={supplierPopOpen}
-                            aria-controls="quotes-supplier-popover-content"
-                            className="w-full justify-between font-normal"
-                            disabled={suppliersLoading}
-                          >
-                            {logForm.supplierId ? (suppliers.find(s => s.id === logForm.supplierId)?.name ?? "Select supplier") : "Select supplier"}
-                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent id="quotes-supplier-popover-content" className="w-[300px] p-0 z-[300]">
-                          <Command>
-                            <CommandInput placeholder="Search supplier..." value={supplierSearch} onValueChange={setSupplierSearch} />
-                            <CommandList>
-                              <CommandEmpty>No supplier found.</CommandEmpty>
-                              <CommandGroup>
-                                {suppliers.filter(s => s.name.toLowerCase().includes(supplierSearch.toLowerCase())).map(s => (
-                                  <CommandItem key={s.id} value={s.name} onSelect={() => { setLogForm(p => ({ ...p, supplierId: s.id })); setSupplierPopOpen(false); }}>
-                                    {s.name}
-                                  </CommandItem>
-                                ))}
-                              </CommandGroup>
-                            </CommandList>
-                          </Command>
-                        </PopoverContent>
-                      </Popover>
-                      <button type="button" onClick={() => { setNewVendorMode(true); setLogForm(p => ({ ...p, supplierId: "" })); }}
-                        className="flex items-center gap-1.5 text-xs text-primary hover:underline mt-1">
-                        <UserPlus className="h-3.5 w-3.5" /> Add new vendor not in list
-                      </button>
-                    </>
-                  ) : (
-                    <div className="border rounded-lg p-3 space-y-3 bg-muted/30">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium flex items-center gap-1.5"><UserPlus className="h-4 w-4 text-primary" /> New Vendor</span>
-                        <button type="button" onClick={() => setNewVendorMode(false)} className="text-xs text-muted-foreground hover:text-foreground">← Back to list</button>
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label className="text-xs">Upload quote image to auto-fill</Label>
-                        <div className="flex gap-2">
-                          <Input type="file" accept="image/*,.pdf" className="text-xs h-8" onChange={e => setNewVendorFile(e.target.files?.[0] ?? null)} />
-                          <Button type="button" size="sm" variant="outline" className="shrink-0 gap-1.5 h-8 text-xs" onClick={parseVendorFromFile} disabled={!newVendorFile || newVendorParsing}>
-                            {newVendorParsing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Parse
-                          </Button>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="col-span-2 space-y-1"><Label className="text-xs">Company Name *</Label>
-                          <Input className="h-8 text-sm" value={newVendorForm.name} onChange={e => setNewVendorForm(p => ({ ...p, name: e.target.value }))} placeholder="Vendor Pvt Ltd" /></div>
-                        <div className="space-y-1"><Label className="text-xs">Phone</Label>
-                          <Input className="h-8 text-sm" value={newVendorForm.phone} onChange={e => setNewVendorForm(p => ({ ...p, phone: e.target.value }))} /></div>
-                        <div className="space-y-1"><Label className="text-xs">Email</Label>
-                          <Input className="h-8 text-sm" value={newVendorForm.email} onChange={e => setNewVendorForm(p => ({ ...p, email: e.target.value }))} /></div>
-                        <div className="space-y-1"><Label className="text-xs">City</Label>
-                          <Input className="h-8 text-sm" value={newVendorForm.city} onChange={e => setNewVendorForm(p => ({ ...p, city: e.target.value }))} /></div>
-                        <div className="space-y-1"><Label className="text-xs">GSTIN</Label>
-                          <Input className="h-8 text-sm" value={newVendorForm.gstin} onChange={e => setNewVendorForm(p => ({ ...p, gstin: e.target.value }))} placeholder="15-digit GSTIN (optional)" /></div>
-                      </div>
-                    </div>
-                  )}
+                  <Popover open={supplierPopOpen} onOpenChange={setSupplierPopOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={supplierPopOpen}
+                        aria-controls="quotes-supplier-popover-content"
+                        className="w-full justify-between font-normal"
+                        disabled={suppliersLoading}
+                      >
+                        {logForm.supplierId ? (suppliers.find(s => s.id === logForm.supplierId)?.name ?? "Select supplier") : "Select supplier"}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent id="quotes-supplier-popover-content" className="w-[300px] p-0 z-[300]">
+                      <Command>
+                        <CommandInput placeholder="Search supplier..." value={supplierSearch} onValueChange={setSupplierSearch} />
+                        <CommandList>
+                          <CommandEmpty>No supplier found.</CommandEmpty>
+                          <CommandGroup>
+                            {suppliers.filter(s => s.name.toLowerCase().includes(supplierSearch.toLowerCase())).map(s => (
+                              <CommandItem key={s.id} value={s.name} onSelect={() => { setLogForm(p => ({ ...p, supplierId: s.id })); setSupplierPopOpen(false); }}>
+                                {s.name}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                  <button type="button" onClick={() => navigate("/vendor-registration")}
+                    className="flex items-center gap-1.5 text-xs text-primary hover:underline mt-1">
+                    <UserPlus className="h-3.5 w-3.5" /> Register a new vendor
+                  </button>
                 </div>
               </div>
 

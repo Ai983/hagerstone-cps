@@ -179,22 +179,9 @@ export async function uploadParsedInvoice(
   }
 
   if (isNewVendor) {
-    const { error } = await supabase.from("cps_suppliers").insert({
-      vendor_id: vendorId,
-      name: parsed.vendor.name.toUpperCase(),
-      gstin: parsed.vendor.gstin,
-      email: parsed.vendor.email,
-      phone: parsed.vendor.phone,
-      address_text: parsed.vendor.address,
-      city: parsed.vendor.city,
-      state: parsed.vendor.state,
-      pincode: parsed.vendor.pincode,
-      categories: [],
-      regions: [],
-      status: "active",
-      is_test: false,
-    });
-    if (error) errors.push(`Warning: cps_suppliers insert failed: ${error.message}`);
+    errors.push(
+      `Warning: vendor "${parsed.vendor.name.toUpperCase()}" is not registered in CPS (cps_suppliers). Register it via the vendor registration portal.`,
+    );
   } else {
     const { data: existingSupplier } = await supabase
       .from("cps_suppliers")
@@ -203,18 +190,9 @@ export async function uploadParsedInvoice(
       .maybeSingle();
 
     if (!existingSupplier) {
-      const { error } = await supabase.from("cps_suppliers").insert({
-        vendor_id: vendorId,
-        name: parsed.vendor.name.toUpperCase(),
-        gstin: parsed.vendor.gstin,
-        email: parsed.vendor.email,
-        phone: parsed.vendor.phone,
-        city: parsed.vendor.city,
-        state: parsed.vendor.state,
-        status: "active",
-        is_test: false,
-      });
-      if (error) errors.push(`Warning: cps_suppliers insert failed: ${error.message}`);
+      errors.push(
+        `Warning: vendor "${parsed.vendor.name.toUpperCase()}" is not registered in CPS (cps_suppliers). Register it via the vendor registration portal.`,
+      );
     }
   }
 

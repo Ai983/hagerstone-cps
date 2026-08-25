@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { fileToClaudeBlock } from "@/lib/imageForClaude";
+import { useNavigate } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -284,6 +284,7 @@ export function LegacyQuoteUploadModal({
   preselectedRfqId,
 }: Props) {
   const { user } = useAuth();
+  const navigate = useNavigate();
 
   // Steps: 1 = RFQ selection, 2 = vendor, 3 = upload + review
   const [step, setStep] = useState(1);
@@ -297,22 +298,13 @@ export function LegacyQuoteUploadModal({
   const [rfqProjectNames, setRfqProjectNames] = useState<Record<string, string>>({});
 
   // Step 2
-  const [vendorTab, setVendorTab] = useState<"existing" | "new">("existing");
   const [supplierSearch, setSupplierSearch] = useState("");
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [suppliersLoading, setSuppliersLoading] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
-  const [newVendorAdded, setNewVendorAdded] = useState(false);
   const [rfqVendors, setRfqVendors] = useState<Supplier[]>([]);
   const [rfqVendorsLoading, setRfqVendorsLoading] = useState(false);
 
-  const [newVendorForm, setNewVendorForm] = useState({
-    name: "",
-    phone: "",
-    email: "",
-    gstin: "",
-  });
-  const [savingNewVendor, setSavingNewVendor] = useState(false);
 
   // Step 3
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -337,11 +329,8 @@ export function LegacyQuoteUploadModal({
       setStep(1);
       setSelectedRfqId(preselectedRfqId ?? "");
       setRfqItems([]);
-      setVendorTab("existing");
       setSupplierSearch("");
       setSelectedSupplier(null);
-      setNewVendorAdded(false);
-      setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
       setUploadFiles([]);
       setUploadedFileUrl(null);
       setUploadedFilePath(null);
@@ -440,68 +429,6 @@ export function LegacyQuoteUploadModal({
       });
   }, [supplierSearch]);
 
-  // ── Add new vendor ──────────────────────────────────────────────────────────
-  const handleAddNewVendor = async () => {
-    if (!newVendorForm.name.trim() || !newVendorForm.phone.trim()) {
-      toast.error("Vendor Name and Phone are required");
-      return;
-    }
-    // GSTIN is optional — only validate format if a value was entered
-    if (newVendorForm.gstin.trim() && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/.test(newVendorForm.gstin.trim().toUpperCase())) {
-      toast.error("Invalid GSTIN format — must be 15 characters or leave blank");
-      return;
-    }
-    if (!selectedRfqId) {
-      toast.error("Please select an RFQ first");
-      return;
-    }
-    setSavingNewVendor(true);
-    try {
-      const { data: newSupplier, error: supErr } = await supabase
-        .from("cps_suppliers")
-        .insert({
-          name: newVendorForm.name.trim(),
-          phone: newVendorForm.phone.trim(),
-          whatsapp: newVendorForm.phone.trim(),
-          email: newVendorForm.email.trim() || null,
-          gstin: newVendorForm.gstin.trim() || null,
-          added_via: "legacy_quote",
-          added_via_rfq_id: selectedRfqId,
-          profile_complete: false,
-          status: "active",
-          categories: ["General"],
-          verified: false,
-        })
-        .select()
-        .single();
-
-      if (supErr) throw supErr;
-
-      await supabase.from("cps_rfq_suppliers").insert({
-        rfq_id: selectedRfqId,
-        supplier_id: newSupplier.id,
-        added_manually: true,
-        added_by: user?.id,
-        response_status: "responded",
-      });
-
-      setSelectedSupplier({
-        id: newSupplier.id,
-        name: newSupplier.name,
-        categories: ["General"],
-        profile_complete: false,
-        phone: newVendorForm.phone.trim() || null,
-        email: newVendorForm.email.trim() || null,
-        gstin: newVendorForm.gstin.trim() || null,
-        address_text: null,
-      });
-      setNewVendorAdded(true);
-      toast.success("New vendor added");
-    } catch (e: any) {
-      toast.error("Failed to add vendor: " + e?.message);
-    }
-    setSavingNewVendor(false);
-  };
 
   // ── File drag-drop / select ─────────────────────────────────────────────────
   const handleFileDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -980,202 +907,119 @@ export function LegacyQuoteUploadModal({
           {/* ── STEP 2 ── */}
           {step === 2 && (
             <div className="space-y-4">
-              <Tabs
-                value={vendorTab}
-                onValueChange={(v) =>
-                  setVendorTab(v as "existing" | "new")
-                }
-              >
-                <TabsList className="w-full">
-                  <TabsTrigger value="existing" className="flex-1">
-                    Existing Vendor
-                  </TabsTrigger>
-                  <TabsTrigger value="new" className="flex-1">
-                    New Vendor (Not in System)
-                  </TabsTrigger>
-                </TabsList>
-
-                {/* Tab A — Existing */}
-                <TabsContent value="existing" className="space-y-3 pt-2">
-                  {/* RFQ-assigned vendors — shown first */}
-                  {rfqVendors.length > 0 && (
-                    <div className="space-y-2">
-                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Vendors assigned to this RFQ</p>
-                      <div className="space-y-2">
-                        {rfqVendors.map((s) => (
-                          <button
-                            key={s.id}
-                            type="button"
-                            onClick={() => setSelectedSupplier(s)}
-                            className={`w-full text-left rounded-lg border px-4 py-3 text-sm transition-colors ${
-                              selectedSupplier?.id === s.id
-                                ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                                : "border-border hover:bg-muted/40"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <div className="font-medium text-foreground">{s.name}</div>
-                              {s.profile_complete === false && (
-                                <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border">Incomplete</Badge>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap gap-2 mt-1 text-xs text-muted-foreground">
-                              {s.gstin && <span>GSTIN: {s.gstin}</span>}
-                              {s.phone && <span>Ph: {s.phone}</span>}
-                            </div>
-                            {s.categories && s.categories.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {s.categories.map((c) => (
-                                  <Badge key={c} className="text-xs border bg-blue-50 text-blue-700 border-blue-200">{c}</Badge>
-                                ))}
-                              </div>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="border-t border-border pt-2">
-                        <p className="text-xs text-muted-foreground mb-2">Or search for a different vendor:</p>
-                      </div>
-                    </div>
-                  )}
-                  {rfqVendorsLoading && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" /> Loading RFQ vendors…
-                    </div>
-                  )}
-                  <Input
-                    placeholder="Search by vendor name…"
-                    value={supplierSearch}
-                    onChange={(e) => setSupplierSearch(e.target.value)}
-                  />
-                  {suppliersLoading && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" /> Searching…
-                    </div>
-                  )}
-                  {!suppliersLoading && supplierSearch && suppliers.length === 0 && (
-                    <p className="text-sm text-muted-foreground">
-                      No vendors found. Try the "New Vendor" tab.
-                    </p>
-                  )}
+              <div className="space-y-3">
+                {/* RFQ-assigned vendors — shown first */}
+                {rfqVendors.length > 0 && (
                   <div className="space-y-2">
-                    {suppliers
-                      .filter((s) => !rfqVendors.some((rv) => rv.id === s.id))
-                      .map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => setSelectedSupplier(s)}
-                        className={`w-full text-left rounded-lg border px-4 py-3 text-sm transition-colors ${
-                          selectedSupplier?.id === s.id
-                            ? "border-primary bg-primary/5"
-                            : "border-border hover:bg-muted/40"
-                        }`}
-                      >
-                        <div className="font-medium text-foreground">{s.name}</div>
-                        {s.categories && s.categories.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {s.categories.map((c) => (
-                              <Badge
-                                key={c}
-                                className="text-xs border bg-blue-50 text-blue-700 border-blue-200"
-                              >
-                                {c}
-                              </Badge>
-                            ))}
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Vendors assigned to this RFQ</p>
+                    <div className="space-y-2">
+                      {rfqVendors.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setSelectedSupplier(s)}
+                          className={`w-full text-left rounded-lg border px-4 py-3 text-sm transition-colors ${
+                            selectedSupplier?.id === s.id
+                              ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                              : "border-border hover:bg-muted/40"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="font-medium text-foreground">{s.name}</div>
+                            {s.profile_complete === false && (
+                              <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border">Incomplete</Badge>
+                            )}
                           </div>
-                        )}
-                      </button>
-                    ))}
+                          <div className="flex flex-wrap gap-2 mt-1 text-xs text-muted-foreground">
+                            {s.gstin && <span>GSTIN: {s.gstin}</span>}
+                            {s.phone && <span>Ph: {s.phone}</span>}
+                          </div>
+                          {s.categories && s.categories.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {s.categories.map((c) => (
+                                <Badge key={c} className="text-xs border bg-blue-50 text-blue-700 border-blue-200">{c}</Badge>
+                              ))}
+                            </div>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="border-t border-border pt-2">
+                      <p className="text-xs text-muted-foreground mb-2">Or search for a different vendor:</p>
+                    </div>
                   </div>
-                  {selectedSupplier && !newVendorAdded && (
-                    <div className="flex items-center gap-2 rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-800">
-                      <CheckCircle2 className="h-4 w-4 shrink-0" />
-                      Selected: <strong>{selectedSupplier.name}</strong>
-                    </div>
-                  )}
-                </TabsContent>
-
-                {/* Tab B — New */}
-                <TabsContent value="new" className="space-y-4 pt-2">
-                  {newVendorAdded ? (
-                    <div className="flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
-                      <CheckCircle2 className="h-4 w-4 shrink-0" />
-                      New vendor <strong>{selectedSupplier?.name}</strong> added
-                      <Badge className="bg-amber-100 text-amber-800 border-amber-200 border text-xs ml-1">
-                        NEW VENDOR
-                      </Badge>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label>Vendor Name *</Label>
-                          <Input
-                            placeholder="e.g. A.S Enterprises"
-                            value={newVendorForm.name}
-                            onChange={(e) =>
-                              setNewVendorForm((p) => ({
-                                ...p,
-                                name: e.target.value,
-                              }))
-                            }
-                          />
+                )}
+                {rfqVendorsLoading && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading RFQ vendors…
+                  </div>
+                )}
+                <Input
+                  placeholder="Search by vendor name…"
+                  value={supplierSearch}
+                  onChange={(e) => setSupplierSearch(e.target.value)}
+                />
+                {suppliersLoading && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Searching…
+                  </div>
+                )}
+                {!suppliersLoading && supplierSearch && suppliers.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    No vendors found. If this vendor isn't in the system yet, register them in the vendor portal.
+                  </p>
+                )}
+                <div className="space-y-2">
+                  {suppliers
+                    .filter((s) => !rfqVendors.some((rv) => rv.id === s.id))
+                    .map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setSelectedSupplier(s)}
+                      className={`w-full text-left rounded-lg border px-4 py-3 text-sm transition-colors ${
+                        selectedSupplier?.id === s.id
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:bg-muted/40"
+                      }`}
+                    >
+                      <div className="font-medium text-foreground">{s.name}</div>
+                      {s.categories && s.categories.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {s.categories.map((c) => (
+                            <Badge
+                              key={c}
+                              className="text-xs border bg-blue-50 text-blue-700 border-blue-200"
+                            >
+                              {c}
+                            </Badge>
+                          ))}
                         </div>
-                        <div className="space-y-2">
-                          <Label>Phone (WhatsApp) *</Label>
-                          <Input
-                            placeholder="+91 9953901423"
-                            value={newVendorForm.phone}
-                            onChange={(e) =>
-                              setNewVendorForm((p) => ({
-                                ...p,
-                                phone: e.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Email</Label>
-                          <Input
-                            placeholder="optional"
-                            value={newVendorForm.email}
-                            onChange={(e) =>
-                              setNewVendorForm((p) => ({
-                                ...p,
-                                email: e.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>GSTIN</Label>
-                          <Input
-                            placeholder="15-digit GSTIN (optional)"
-                            value={newVendorForm.gstin}
-                            onChange={(e) =>
-                              setNewVendorForm((p) => ({
-                                ...p,
-                                gstin: e.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                      </div>
-                      <Button
-                        onClick={handleAddNewVendor}
-                        disabled={savingNewVendor}
-                        className="w-full"
-                      >
-                        {savingNewVendor && (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        )}
-                        Add & Continue →
-                      </Button>
-                    </>
-                  )}
-                </TabsContent>
-              </Tabs>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                {selectedSupplier && (
+                  <div className="flex items-center gap-2 rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-800">
+                    <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    Selected: <strong>{selectedSupplier.name}</strong>
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-2 rounded-md border border-dashed border-border px-3 py-2">
+                  <p className="text-xs text-muted-foreground">
+                    Vendor not in the system yet?
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigate("/vendor-registration")}
+                  >
+                    <Plus className="h-3.5 w-3.5 mr-1" />
+                    Register a new vendor
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
 

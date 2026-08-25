@@ -236,9 +236,6 @@ export default function RFQs() {
   const [matchedSuppliers, setMatchedSuppliers] = useState<Supplier[]>([]);
   const [reviewSelectedIds, setReviewSelectedIds] = useState<string[]>([]);
   const [showAllMatched, setShowAllMatched] = useState(false);
-  const [showNewVendorForm, setShowNewVendorForm] = useState(false);
-  const [newVendorForm, setNewVendorForm] = useState({ name: "", phone: "", email: "", gstin: "" });
-  const [savingNewVendor, setSavingNewVendor] = useState(false);
 
   // Suggested Suppliers (auto-match) — draft RFQs only
   const [suggestSelectedIds, setSuggestSelectedIds] = useState<string[]>([]);
@@ -712,8 +709,6 @@ export default function RFQs() {
     setReviewSelectedIds([]);
     setSuggestSelectedIds([]);
     setShowAllMatched(false);
-    setShowNewVendorForm(false);
-    setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
     setVendorSearch("");
     setSearchResults([]);
     setReviewLoading(true);
@@ -940,65 +935,6 @@ export default function RFQs() {
     }
   };
 
-  const addNewVendorToRFQ = async () => {
-    if (!reviewRfq) return;
-    if (!newVendorForm.name.trim() || !newVendorForm.phone.trim()) {
-      toast.error("Vendor Name and Phone are required");
-      return;
-    }
-    // GSTIN is optional — only validate format if a value was entered
-    if (newVendorForm.gstin.trim() && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/.test(newVendorForm.gstin.trim().toUpperCase())) {
-      toast.error("Invalid GSTIN format — must be 15 characters or leave blank");
-      return;
-    }
-    setSavingNewVendor(true);
-    const { data: newSupplier, error } = await supabase
-      .from("cps_suppliers")
-      .insert({
-        name: newVendorForm.name.trim(),
-        phone: formatWhatsApp(newVendorForm.phone),
-        whatsapp: formatWhatsApp(newVendorForm.phone),
-        email: newVendorForm.email.trim() || null,
-        gstin: newVendorForm.gstin.trim() || null,
-        status: "active",
-        categories: reviewRfqCategories.length > 0 ? reviewRfqCategories : ["General"],
-        added_via: "rfq_manual",
-        added_via_rfq_id: reviewRfq.id,
-        profile_complete: false,
-        verified: false,
-        performance_score: 100,
-      })
-      .select()
-      .single();
-
-    if (error || !newSupplier) {
-      toast.error("Failed to add vendor: " + error?.message);
-      setSavingNewVendor(false);
-      return;
-    }
-
-    const newEntry: Supplier = {
-      id: (newSupplier as any).id,
-      name: (newSupplier as any).name,
-      phone: (newSupplier as any).phone,
-      whatsapp: (newSupplier as any).whatsapp,
-      email: (newSupplier as any).email,
-      city: null,
-      categories: (newSupplier as any).categories,
-      performance_score: 100,
-      last_awarded_at: null,
-      status: "active",
-      profile_complete: false,
-      _isNew: true,
-    };
-
-    setMatchedSuppliers((prev) => [...prev, newEntry]);
-    setReviewSelectedIds((prev) => [...prev, newEntry.id]);
-    setShowNewVendorForm(false);
-    setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
-    toast.success(`${newVendorForm.name} added to this RFQ`);
-    setSavingNewVendor(false);
-  };
 
   // Debounced vendor search
   useEffect(() => {
@@ -2067,80 +2003,16 @@ export default function RFQs() {
                       </p>
                     )}
 
-                    {/* New Vendor Quick-Add — only for draft RFQs */}
+                    {/* New Vendor — route to the registration portal */}
                     {reviewRfq?.status === "draft" && <div className="mt-4 border-t border-border/60 pt-4">
                       <p className="text-xs text-muted-foreground mb-2">Vendor not in list?</p>
-                      {!showNewVendorForm ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowNewVendorForm(true)}
-                        >
-                          + Add New Vendor to this RFQ
-                        </Button>
-                      ) : (
-                        <div className="rounded-lg border border-border/60 p-4 bg-muted/20 space-y-3">
-                          <p className="text-sm font-medium text-foreground">Add New Vendor</p>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <Label className="text-xs">Vendor Name *</Label>
-                              <Input
-                                placeholder="e.g. Ajay Traders"
-                                value={newVendorForm.name}
-                                onChange={(e) => setNewVendorForm((p) => ({ ...p, name: e.target.value }))}
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-xs">WhatsApp *</Label>
-                              <Input
-                                placeholder="+91 98765 43210"
-                                value={newVendorForm.phone}
-                                onChange={(e) => setNewVendorForm((p) => ({ ...p, phone: e.target.value }))}
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-xs">Email</Label>
-                              <Input
-                                placeholder="optional"
-                                value={newVendorForm.email}
-                                onChange={(e) => setNewVendorForm((p) => ({ ...p, email: e.target.value }))}
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <Label className="text-xs">GSTIN</Label>
-                              <Input
-                                placeholder="15-digit GSTIN (optional)"
-                                value={newVendorForm.gstin}
-                                onChange={(e) => setNewVendorForm((p) => ({ ...p, gstin: e.target.value }))}
-                                required
-                              />
-                            </div>
-                          </div>
-                          <div className="flex gap-2 justify-end">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setShowNewVendorForm(false);
-                                setNewVendorForm({ name: "", phone: "", email: "", gstin: "" });
-                              }}
-                            >
-                              Cancel
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={addNewVendorToRFQ}
-                              disabled={savingNewVendor}
-                            >
-                              {savingNewVendor ? (
-                                <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />Adding…</>
-                              ) : (
-                                "Add to this RFQ →"
-                              )}
-                            </Button>
-                          </div>
-                        </div>
-                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate("/vendor-registration")}
+                      >
+                        Register a new vendor
+                      </Button>
                     </div>}
 
                   </div>

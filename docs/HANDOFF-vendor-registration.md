@@ -108,19 +108,25 @@ surfaces its real message ("This link is not valid." for a bogus token). The
 happy path (a real token → prefilled form → save, upload, submit) still needs an
 authenticated user to mint a token via `cps_issue_vendor_registration_token`.
 
-**Plan 4 — enforcement.** Phase A (ships dark) is **built**:
+**Plan 4 — enforcement. Largely COMPLETE.** Policy chosen by the user: existing
+vendors keep transacting (grace), NEW vendors must be registered + approved.
 
 | Piece | State |
 |---|---|
-| PO gate trigger on `cps_purchase_orders` (`20260825120000_vendor_registration_po_gate.sql`) | built, **ships DARK** — inert while `vendor_registration_enforced_from` is empty |
-| Warning surface — `cps_v_unregistered_trading_vendors` view + `UnregisteredVendorsBanner` on the dashboard | built, live for procurement (fails silent until the migration is applied) |
-| Phase B cutover playbook (`docs/superpowers/plans/cutover/vendor-registration-phase-b.sql`) | written — **deliberately NOT under `supabase/migrations/`** so `db push` can't apply the hard `REVOKE` early |
+| PO gate trigger, new-vs-legacy (`20260825120000` + `20260825130000`) | built. NEW vendor (created ≥ go_live) ⇒ PO refused until `approved`; LEGACY vendor ⇒ free until Phase B sets `enforced_from`. `130000` resets `go_live_at` to the cutover instant so all 834 existing vendors are legacy. |
+| The 9 inline "add vendor" paths (spec §1/§8) | **CLOSED** — every `cps_suppliers.insert` removed; screens now select existing vendors and link to the portal (SiteQuotes has no link by design; `invoice-uploader.ts` is a headless service). tsc back to 31, build passes. |
+| Warning surface — `cps_v_unregistered_trading_vendors` + `UnregisteredVendorsBanner` | built, live for procurement. |
+| DB floor — `REVOKE INSERT ON cps_suppliers` (`20260825140000`) | written; **apply after the frontend deploys** (header says so). Then the only door is `cps_start_vendor_registration`. |
 
-**Still open — Phase B, the coverage-gated flip (§14):** the nine UI closures
-(spec §1/§8 — remove inline vendor-add, point to the portal), then run the
-cutover playbook (set real verifier, set `enforced_from`, `REVOKE INSERT ON
-cps_suppliers`). The closures disrupt daily vendor-adding, so per §14 they wait
-for a coverage decision — they are NOT done yet, by design.
+**Apply order (the migrations are applied by hand in the SQL editor):**
+1. Deploy the frontend (this commit) to Vercel.
+2. Apply `20260825130000` (new-vs-legacy gate; resets go_live to now).
+3. Apply `20260825140000` (the REVOKE floor).
+`20260825120000` (the initial dark gate) is already applied.
+`enforced_from` stays EMPTY — existing vendors are never blocked. Phase B (the
+optional legacy-vendor deadline) is still just the one-row `enforced_from` flip
+in `docs/superpowers/plans/cutover/vendor-registration-phase-b.sql`, gated on
+coverage — do it only if/when you want to force the legacy backlog too.
 
 ## 4. Exact next steps
 
@@ -139,9 +145,10 @@ for a coverage decision — they are NOT done yet, by design.
    is still the seeded test admin. Point it at the designated verifier:
    `UPDATE cps.cps_config SET value = '<verifier cps_users.id>' WHERE key = 'vendor_registration_approvers';`
    The portal works with admin as approver until then — this only decides who approves.
-4. **Plan 4 Phase B (the flip).** Close the nine vendor-creation UI paths
-   (spec §1/§8), then run `docs/superpowers/plans/cutover/vendor-registration-phase-b.sql`
-   once coverage (`cps_v_unregistered_trading_vendors`) is acceptable.
+4. **Apply the two new migrations in order** after deploying this frontend:
+   `20260825130000` then `20260825140000` (see §3). Existing vendors stay
+   unblocked; new vendors must register. The legacy-deadline flip
+   (`enforced_from`) remains optional and coverage-gated.
 
 Execution convention used so far: fresh subagent per task, review after each, **agents write and commit code but never run builds, apply migrations or deploy** — the user verifies locally and applies migrations themselves.
 
