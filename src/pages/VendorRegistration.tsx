@@ -20,6 +20,7 @@ import RegistrationDocuments from "@/components/vendors/RegistrationDocuments";
 import RegistrationDiligence from "@/components/vendors/RegistrationDiligence";
 import RegistrationTerms from "@/components/vendors/RegistrationTerms";
 import OfflineFormButton from "@/components/vendors/OfflineFormButton";
+import RegistrationLinkButton from "@/components/vendors/RegistrationLinkButton";
 import {
   type RegistrationSnapshot, type SupplierRow,
   fetchRegistrationStatus, fetchSupplier,
@@ -83,6 +84,9 @@ export default function VendorRegistration() {
             </Badge>
             {supplier.vendor_type && (
               <OfflineFormButton vendorName={supplier.name ?? ""} vendorType={supplier.vendor_type} />
+            )}
+            {(supplier.registration_status === "draft" || supplier.registration_status === "rejected") && (
+              <RegistrationLinkButton supplierId={supplier.id} />
             )}
             <Button variant="outline" size="sm"
                     onClick={() => { setSupplierId(null); setSupplier(null); setSnapshot(null); }}>

@@ -49,8 +49,8 @@ Deno.serve(async (req) => {
   );
 
   let body: { action?: string; token?: string; patch?: Record<string, unknown>;
-              document_type?: string; file_name?: string;
-              accepted_by_name?: string };
+              document_type?: string; file_name?: string; path?: string;
+              document_number?: string | null; accepted_by_name?: string };
   try {
     body = await req.json();
   } catch {
@@ -152,6 +152,44 @@ Deno.serve(async (req) => {
     }
 
     return json({ path, token: data.token, signedUrl: data.signedUrl });
+  }
+
+  // ---- attach_document: record the row AFTER a signed upload succeeded ----
+  // upload_url only mints a signed URL; the file lands in storage with no
+  // cps_supplier_documents row, so the checklist and completeness RPC never see
+  // it. The vendor cannot insert that row itself (no anon policy, D12), so the
+  // service_role function records it here once the browser confirms the upload.
+  if (action === "attach_document") {
+    const docType = body.document_type ?? "";
+    if (!VENDOR_DOC_TYPES.includes(docType))
+      return json({ error: "That document cannot be uploaded here." }, 400);
+
+    const path = (body.path ?? "").trim();
+    // The path must sit under THIS supplier's folder — a token cannot record a
+    // file into another vendor's registration.
+    if (!path.startsWith(`${supplierId}/${docType}/`))
+      return json({ error: "That file does not belong to this registration." }, 400);
+
+    // One row per vendor document type: replace an earlier upload of the same
+    // type so a re-upload corrects rather than duplicates. Never touches the
+    // diligence types — they are not in VENDOR_DOC_TYPES.
+    await admin.from("cps_supplier_documents")
+      .delete().eq("supplier_id", supplierId).eq("document_type", docType);
+
+    const { error } = await admin.from("cps_supplier_documents").insert({
+      supplier_id: supplierId, document_type: docType,
+      file_url: path, document_number: body.document_number ?? null,
+    });
+    if (error) {
+      console.error("vendor-registration attach_document failed", error.message);
+      return json({ error: "Could not record the document. Please try again." }, 500);
+    }
+
+    await admin.from("cps_audit_log").insert({
+      action_type: "VENDOR_REG_DOC_UPLOADED", entity_type: "supplier", entity_id: supplierId,
+      description: `Vendor uploaded ${docType} via token link`,
+    });
+    return json({ ok: true });
   }
 
   // ---- submit: stamp terms, mark used, move to pending_verification -----

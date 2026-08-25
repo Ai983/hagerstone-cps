@@ -54,6 +54,7 @@ const PurchaseRequisitions = lazyWithRetry(() => import("@/pages/PurchaseRequisi
 const SupplierMaster = lazyWithRetry(() => import("@/pages/SupplierMaster"));
 const VendorRegistration = lazyWithRetry(() => import("@/pages/VendorRegistration"));
 const VendorVerification = lazyWithRetry(() => import("@/pages/VendorVerification"));
+const VendorRegister = lazyWithRetry(() => import("@/pages/VendorRegister"));
 const VendorScout = lazyWithRetry(() => import("@/pages/VendorScout"));
 const ItemMaster = lazyWithRetry(() => import("@/pages/ItemMaster"));
 const RFQs = lazyWithRetry(() => import("@/pages/RFQs"));
@@ -110,6 +111,7 @@ const App = () => (
           <React.Suspense fallback={<Loader />}>
             <Routes>
               <Route path="/vendor/upload-quote" element={<VendorUploadQuote />} />
+              <Route path="/vendor/registration" element={<VendorRegister />} />
               <Route path="/approve-po" element={<ApprovePoPage />} />
               <Route path="/approve-release" element={<ApproveReleasePage />} />
               <Route path="/approve-advance" element={<ApproveAdvancePage />} />
