@@ -321,18 +321,32 @@ export type ChecklistRule = {
   sort_order: number;
   active: boolean;
   notes: string | null;
+  /** The rule only applies at or above this payment amount. 0 = always. */
+  applies_above_amount: number;
 };
 
-/** The rules that apply to a given (payee type, kind) pair. */
+/**
+ * The rules that apply to a given (payee type, kind, amount) triple.
+ *
+ * `amount` scales the checklist to the size of the payment — a Rs 4,500 room
+ * rent and a Rs 5,00,000 lump sum should not carry identical evidence.
+ *
+ * An unknown amount requires EVERYTHING. Waiving a document because we could not
+ * read a number would be a control that fails open, so the null case is the
+ * strict case, never the lenient one.
+ */
 export function rulesFor(
   rules: ChecklistRule[],
   paymentType: PaymentType,
   kind: PaymentKind | null,
+  amount: number | null = null,
 ): ChecklistRule[] {
+  const amt = Number.isFinite(Number(amount)) ? Number(amount) : Number.POSITIVE_INFINITY;
   return rules.filter((r) => {
     if (!r.active) return false;
     if (r.payment_type && r.payment_type !== paymentType) return false;
     if (r.payment_kind && r.payment_kind !== kind) return false;
+    if (amt < Number(r.applies_above_amount ?? 0)) return false;
     return !!(r.payment_type || r.payment_kind);
   });
 }
@@ -477,8 +491,9 @@ export async function syncChecklistForPrq(
   rules: ChecklistRule[],
   shouldHaveBeenProvidedBy: string | null,
   kind: PaymentKind | null = null,
+  amount: number | null = null,
 ): Promise<ChecklistSync> {
-  const applicable = rulesFor(rules, paymentType, kind);
+  const applicable = rulesFor(rules, paymentType, kind, amount);
   const wanted = new Map(applicable.map((r) => [r.document_type, r]));
 
   const { data: existing } = await supabase
@@ -547,8 +562,11 @@ export async function createChecklistForPrq(
   rules: ChecklistRule[],
   shouldHaveBeenProvidedBy: string | null,
   kind: PaymentKind | null = null,
+  amount: number | null = null,
 ) {
-  const r = await syncChecklistForPrq(prqId, paymentType, rules, shouldHaveBeenProvidedBy, kind);
+  const r = await syncChecklistForPrq(
+    prqId, paymentType, rules, shouldHaveBeenProvidedBy, kind, amount,
+  );
   return r.added;
 }
 
