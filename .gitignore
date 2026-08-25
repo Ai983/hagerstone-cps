@@ -38,3 +38,6 @@ CPS_Pitch_Report*.html
 rfq-ready-vendors.html
 cps portfolio/
 cps portfolio.zip
+
+# Supabase CLI version cache
+supabase/.temp/
