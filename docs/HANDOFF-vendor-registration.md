@@ -49,35 +49,59 @@ Verification SQL lives in `docs/superpowers/plans/verify/vendor-registration-pre
 
 **Plan 1 — foundation: complete**, reviewed, applied, verified.
 
-**Plan 2 — the portal UI: Tasks 1–3 of 7 committed, not yet reviewed.**
+**Plan 2 — the portal UI: COMPLETE. Tasks 1–7 committed. Builds clean.**
 
 | Task | State |
 |---|---|
-| 1 · data layer (`src/lib/vendorRegistration.ts`, 163→414 lines) | committed `e254992` |
+| 1 · data layer (`src/lib/vendorRegistration.ts`) | committed `e254992` |
 | 2 · route `/vendor-registration`, shell, start panel, sidebar | committed `a2bdf54` |
 | 3 · identity, contacts, bank sections | committed `cf2668f` |
-| 4 · document checklist | **not started** |
-| 5 · site-visit evidence, terms, submit | not started |
-| 6 · verifier queue | not started |
-| 7 · bilingual offline form | **blocked** — see §5 |
+| 4 · document checklist (`RegistrationDocuments`) | committed `6b6800c` |
+| 5 · site-visit evidence, terms, submit (`RegistrationDiligence`, `RegistrationTerms`) | committed `6b6800c` |
+| 6 · verifier queue (`VendorVerification`, route + nav) | committed `6b6800c` |
+| 7 · bilingual offline form (`vendorOnboardingForm.ts`, `OfflineFormButton`) | committed `6b6800c` — Hindi is the draft dictionary, still pending native review |
 
-**The review of Tasks 1–3 was never run.** That is the first thing to do, before Task 4.
+Tasks 1–3 were reviewed against the schema and data layer before Tasks 4–7 were
+built on them: `saveSupplierFields` strips `registration_status`/`vendor_type`
+(line 234), every schema column the components read exists, and the committed
+files add zero to the tsc error count.
 
-Plans 3 (public vendor token page) and 4 (nine closures, PO trigger, warning banner) are **not written yet**.
+Verified after Tasks 4–7: `npx tsc --noEmit` holds at **31 pre-existing errors,
+none in vendor files**; `npm run build` passes and emits the portal, verifier
+and shared-lib chunks; the offline form was rendered headless — Devanagari
+conjuncts (रजिस्ट्रेशन, प्रमाणपत्र, विधिवत) shape correctly, company shows 6
+vendor-supplied rows + 2 Hagerstone-marked diligence rows, individual shows the
+shorter list. **Not yet done: manual QA against a real login** (no Supabase
+session available to the build agent) — in particular the maker-checker refusal
+on Task 6 still wants a human to see it fail.
+
+Plans 3 (public vendor token page) and 4 (nine closures, PO trigger, warning
+banner, enforcement) are **not written yet** — they are the remaining work.
 
 ## 4. Exact next steps
 
-1. **Review Tasks 1–3.** Diff `59178bb..cf2668f`. Watch specifically for: any component copying a prop into state (`no-adjust-state-on-prop-change` is an *error* in this repo), and whether `saveSupplierFields` really strips `registration_status`/`vendor_type` so a client can never set status directly.
-2. **Run `npx tsc --noEmit`** and confirm no new errors in the touched files. ~30 errors pre-exist; the count must not grow.
-3. **Manual QA of what exists** — log in, open Vendor Registration, confirm the start panel lists vendors, excludes `approved`/`pending_verification` ones, and that switching vendors shows the *new* vendor's values (the `key={...supplier.id}` remount).
-4. **Tasks 4, 5, 6** from `docs/superpowers/plans/2026-08-11-vendor-registration-2-portal.md`. Complete code is in the plan.
-5. Then write Plan 3, then Plan 4.
+1. **Manual QA against a real login.** Open Vendor Registration; confirm the
+   start panel lists vendors and excludes `approved`/`pending_verification`;
+   attach a document → counter increments and the red edge clears; capture the
+   premises photo location; record terms acceptance; Submit → `pending_verification`.
+   Then in Vendor Verification: sign the five checks and **confirm approve is
+   refused with "You filled this registration and cannot also approve it."** —
+   the one control protecting the bank account. Open the Offline form and print-
+   preview it (A4, Devanagari intact).
+2. **Hindi native-speaker review** of the offline form dictionary in
+   `src/lib/vendorOnboardingForm.ts` (see §5). Correct it there; every rendered
+   form picks the fix up.
+3. **Plan 3** — the public vendor token page (the edge function is already
+   deployed; `issueToken` is wired in the data layer, no UI yet).
+4. **Plan 4** — the nine closures, the PO trigger, and the warning banner.
+   Enforcement stays inert until the real verifier is configured and a cutover
+   is decided (§5).
 
 Execution convention used so far: fresh subagent per task, review after each, **agents write and commit code but never run builds, apply migrations or deploy** — the user verifies locally and applies migrations themselves.
 
 ## 5. Open questions — blocking, and owned by the user
 
-1. **Hindi wording review.** Task 7 is blocked on it. The bilingual dictionary is in `docs/superpowers/specs/2026-08-11-offline-vendor-onboarding-form-design.md` §6.1, drafted to be checked by a native speaker rather than shipped unchecked. Especially **व्यापार स्थल** ("business premises") and **विधिवत हस्ताक्षर** ("duly signed"). Correcting it before it goes into code avoids fixing the same wording twice.
+1. **Hindi wording review.** Task 7 now ships the draft dictionary embedded in `src/lib/vendorOnboardingForm.ts` (the strings are also in `docs/superpowers/specs/2026-08-11-offline-vendor-onboarding-form-design.md` §6.1). It renders and prints correctly, but the Hindi is a first draft and **must be checked by a native speaker before this reaches vendors** — especially **व्यापार स्थल** ("business premises") and **विधिवत हस्ताक्षर** ("duly signed"). Correct it in `vendorOnboardingForm.ts` and every rendered form updates.
 2. **Which GSTIN the per-vendor form prints.** Hagerstone has three (UP / Delhi / Haryana). The template shows all three; a per-vendor form could show only the delivery state's — but that needs a rule.
 3. **The cutover date has passed.** `2026-08-17` was chosen for PO blocking. Nothing broke (enforcement is inert), but it needs re-deciding — **coverage-based** ("flip when the active vendors are registered") is safer than another calendar date.
 4. **The D2 cost is still unmeasured.** Lifetime `added_via` counts are known: `invoice_import` 517, `legacy_quote` 153, `manual` 128, `rfq_manual` 30, `manual_quote_log` 14, `vendor_scout` 1. But **`invoice_import` is not a live path** — no code sets it; those 517 are a historical bulk seed. What matters is the *current* rate:
