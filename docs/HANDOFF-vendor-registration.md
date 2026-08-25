@@ -108,8 +108,19 @@ surfaces its real message ("This link is not valid." for a bogus token). The
 happy path (a real token → prefilled form → save, upload, submit) still needs an
 authenticated user to mint a token via `cps_issue_vendor_registration_token`.
 
-**Plan 4** (nine closures, PO trigger, warning banner, enforcement) is **not
-written yet** — it is the remaining work, and gated on user decisions (§5).
+**Plan 4 — enforcement.** Phase A (ships dark) is **built**:
+
+| Piece | State |
+|---|---|
+| PO gate trigger on `cps_purchase_orders` (`20260825120000_vendor_registration_po_gate.sql`) | built, **ships DARK** — inert while `vendor_registration_enforced_from` is empty |
+| Warning surface — `cps_v_unregistered_trading_vendors` view + `UnregisteredVendorsBanner` on the dashboard | built, live for procurement (fails silent until the migration is applied) |
+| Phase B cutover playbook (`docs/superpowers/plans/cutover/vendor-registration-phase-b.sql`) | written — **deliberately NOT under `supabase/migrations/`** so `db push` can't apply the hard `REVOKE` early |
+
+**Still open — Phase B, the coverage-gated flip (§14):** the nine UI closures
+(spec §1/§8 — remove inline vendor-add, point to the portal), then run the
+cutover playbook (set real verifier, set `enforced_from`, `REVOKE INSERT ON
+cps_suppliers`). The closures disrupt daily vendor-adding, so per §14 they wait
+for a coverage decision — they are NOT done yet, by design.
 
 ## 4. Exact next steps
 
@@ -128,9 +139,9 @@ written yet** — it is the remaining work, and gated on user decisions (§5).
    is still the seeded test admin. Point it at the designated verifier:
    `UPDATE cps.cps_config SET value = '<verifier cps_users.id>' WHERE key = 'vendor_registration_approvers';`
    The portal works with admin as approver until then — this only decides who approves.
-4. **Plan 4** — the nine closures, the PO trigger, and the warning banner.
-   Enforcement stays inert until the real verifier is configured and a cutover
-   is decided (§5).
+4. **Plan 4 Phase B (the flip).** Close the nine vendor-creation UI paths
+   (spec §1/§8), then run `docs/superpowers/plans/cutover/vendor-registration-phase-b.sql`
+   once coverage (`cps_v_unregistered_trading_vendors`) is acceptable.
 
 Execution convention used so far: fresh subagent per task, review after each, **agents write and commit code but never run builds, apply migrations or deploy** — the user verifies locally and applies migrations themselves.
 

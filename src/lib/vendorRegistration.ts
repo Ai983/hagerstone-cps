@@ -417,3 +417,23 @@ export async function fetchTerms(): Promise<{ text: string; version: string }> {
   return { text: map.vendor_registration_terms_text ?? "",
            version: map.vendor_registration_terms_version ?? "v1" };
 }
+
+/** The warning-surface work queue (Plan 4 §10): vendors with ≥1 PO whose
+ *  registration is not yet approved — reads cps_v_unregistered_trading_vendors. */
+export type UnregisteredTradingVendor = {
+  id: string;
+  name: string | null;
+  gstin: string | null;
+  city: string | null;
+  registration_status: RegistrationStatus;
+  po_count: number;
+  last_po_at: string | null;
+};
+
+export async function fetchUnregisteredTradingVendors(): Promise<UnregisteredTradingVendor[]> {
+  const { data, error } = await supabase
+    .from("cps_v_unregistered_trading_vendors")
+    .select("id,name,gstin,city,registration_status,po_count,last_po_at");
+  if (error) throw error;
+  return (data ?? []) as UnregisteredTradingVendor[];
+}

@@ -14,6 +14,7 @@ import {
   IndianRupee, TrendingDown, BarChart3, ClipboardList, CheckCircle2,
   Eye, Plus, ArrowRight, Bell, Unlock, ShieldAlert, AlertTriangle, Upload, Clock, Camera,
 } from "lucide-react";
+import UnregisteredVendorsBanner from "@/components/vendors/UnregisteredVendorsBanner";
 
 interface AuditRow {
   id: string;
@@ -585,6 +586,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4 lg:space-y-8">
+      <UnregisteredVendorsBanner />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
         <div>
