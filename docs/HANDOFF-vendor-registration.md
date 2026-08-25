@@ -82,30 +82,31 @@ on Task 6 still wants a human to see it fail.
 | `src/pages/VendorRegister.tsx` — public `/vendor/registration?token=` page | done (replaced the orphaned pre-portal self-registration form of the same name) |
 | `src/lib/vendorRegistrationPublic.ts` — unauthenticated edge-function client | done |
 | `src/components/vendors/RegistrationLinkButton.tsx` — procurement's 7-day link + copy | done (shown on draft/rejected) |
-| edge `vendor-registration` — new `attach_document` action | **written, NOT redeployed** |
+| edge `vendor-registration` — new `attach_document` action | **DEPLOYED to tpfv (2026-08-25)** |
 
-**Two operational items block a live end-to-end run of the token page:**
+**Both operational blockers are now cleared:**
 
-1. **Redeploy the edge function.** `upload_url` only minted a signed URL, so a
+1. **Edge function redeployed.** `upload_url` only minted a signed URL, so a
    vendor's uploaded file landed in storage with no `cps_supplier_documents`
-   row and never reached the checklist. A new `attach_document` action records
-   it (service_role, D12). The source is committed; the deployed function is
-   still the old one — **redeploy `supabase/functions/vendor-registration` via
-   the dashboard** (the CLI 403s on this account, per §2).
-2. **`.env.local` points at the wrong project.** It sets
-   `VITE_SUPABASE_ANON_KEY` (and `VITE_SUPABASE_URL`) for project `orhb…`, but
-   `src/integrations/supabase/client.ts` hardcodes the `tpfvnerrjhqwipyonngf`
-   URL where every vendor migration and the edge function actually live. The
-   client therefore sends `orhb`'s key to `tpfv`'s gateway → every Supabase call
-   fails `UNAUTHORIZED_LEGACY_JWT` locally, not just this page. Point the env at
-   `tpfvnerrjhqwipyonngf` (or clear `VITE_SUPABASE_ANON_KEY` to use the tpfv
-   fallback in `client.ts`) before local testing.
+   row and never reached the checklist. The new `attach_document` action records
+   it (service_role, D12). Deployed to `tpfvnerrjhqwipyonngf` with
+   `npx supabase functions deploy vendor-registration --project-ref tpfvnerrjhqwipyonngf --use-api`
+   — the CLI login on this machine works, so the earlier "403" note is stale.
+2. **`.env.local` fixed.** It pointed `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`
+   at project `orhbzvoqtingmqjbjzqw`, which **no longer resolves (dead project)**,
+   while `src/integrations/supabase/client.ts` hardcodes the
+   `tpfvnerrjhqwipyonngf` URL where every vendor migration and the edge function
+   live. That mismatch failed every Supabase call with `UNAUTHORIZED_LEGACY_JWT`
+   — locally, not just this page. `.env.local` now points at tpfv (the Anthropic
+   key and `VITE_CPVS_ENABLED` were preserved). It is gitignored, so the
+   **production/hosting env must likewise carry tpfv's anon key, or none** —
+   `client.ts` falls back to tpfv's key when the env var is unset.
 
-What was verified for Plan 3: route resolves, page mounts, the no-token and
-edge-error paths render, and the invoke transport reaches the live gateway and
-surfaces its message. The happy path (a real token → prefilled form → save,
-upload, submit) needs an authenticated user to mint a token via
-`cps_issue_vendor_registration_token` plus the env fix above.
+Verified for Plan 3: route resolves, page mounts, no-token and edge-error paths
+render, and with the env fixed the invoke reaches the live tpfv function and
+surfaces its real message ("This link is not valid." for a bogus token). The
+happy path (a real token → prefilled form → save, upload, submit) still needs an
+authenticated user to mint a token via `cps_issue_vendor_registration_token`.
 
 **Plan 4** (nine closures, PO trigger, warning banner, enforcement) is **not
 written yet** — it is the remaining work, and gated on user decisions (§5).
@@ -123,11 +124,11 @@ written yet** — it is the remaining work, and gated on user decisions (§5).
 2. **Hindi native-speaker review** of the offline form dictionary in
    `src/lib/vendorOnboardingForm.ts` (see §5). Correct it there; every rendered
    form picks the fix up.
-3. **Redeploy the `vendor-registration` edge function** so the token page's
-   document uploads are recorded (the `attach_document` action). See §3.
-4. **Fix `.env.local`** to point at `tpfvnerrjhqwipyonngf` so local Supabase
-   calls stop failing with `UNAUTHORIZED_LEGACY_JWT`. See §3.
-5. **Plan 4** — the nine closures, the PO trigger, and the warning banner.
+3. **Set the real verifier before real use.** `cps_config.vendor_registration_approvers`
+   is still the seeded test admin. Point it at the designated verifier:
+   `UPDATE cps.cps_config SET value = '<verifier cps_users.id>' WHERE key = 'vendor_registration_approvers';`
+   The portal works with admin as approver until then — this only decides who approves.
+4. **Plan 4** — the nine closures, the PO trigger, and the warning banner.
    Enforcement stays inert until the real verifier is configured and a cutover
    is decided (§5).
 
