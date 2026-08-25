@@ -41,3 +41,4 @@ cps portfolio.zip
 
 # Supabase CLI version cache
 supabase/.temp/
+.env*
