@@ -1,274 +1,252 @@
-import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+/**
+ * The public, unauthenticated vendor registration page — the "optional scoped
+ * link" a vendor opens to fill their own details.
+ *
+ * Route: /vendor/registration?token=xxx  (registered OUTSIDE <Protected>).
+ *
+ * Every read and write goes through the vendor-registration edge function via
+ * src/lib/vendorRegistrationPublic.ts — never a direct table call — so the anon
+ * key never touches cps_suppliers (design D12). This page can only ever reach
+ * the one supplier the token addresses.
+ *
+ * Inputs are uncontrolled with defaultValue + save-on-blur: nothing copies a
+ * prop into state, so the repo's no-adjust-state-on-prop-change rule holds.
+ */
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-
-import { supabase } from "@/integrations/supabase/client";
-
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { CheckCircle2, Loader2, Upload, XCircle } from "lucide-react";
+import { DOCUMENT_LABELS, VENDOR_TYPE_LABELS } from "@/lib/vendorRegistration";
+import {
+  type PublicVendorField, type VendorTokenPrefill,
+  saveVendorFields, submitVendorForm, uploadVendorDocument, validateVendorToken,
+} from "@/lib/vendorRegistrationPublic";
 
-import { Building2, CheckCircle } from "lucide-react";
+type Status = "loading" | "error" | "form" | "submitted";
 
-const CATEGORIES = [
-  "Cement", "Steel & TMT", "Electrical", "Plumbing", "Tiles & Flooring",
-  "Paints", "Hardware", "Safety Equipment", "MEP", "HVAC", "Fire Fighting",
-  "Civil Works", "Interiors", "Other",
-];
+const COMPANY_NAME = "Hagerstone International Pvt. Ltd";
 
-const REGIONS = [
-  "Delhi NCR", "Mumbai", "Bangalore", "Hyderabad", "Chennai", "Kolkata", "Pan India", "Other",
-];
+function Screen({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-muted/30 flex items-start justify-center p-4">
+      <div className="w-full max-w-2xl py-8">{children}</div>
+    </div>
+  );
+}
 
 export default function VendorRegister() {
-  const navigate = useNavigate();
-
-  const [companyName, setCompanyName] = useState("");
-  const [gstin, setGstin] = useState("");
-  const [pan, setPan] = useState("");
-  const [yearsInBusiness, setYearsInBusiness] = useState<number | "">("");
-
-  const [contactPerson, setContactPerson] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [whatsapp, setWhatsapp] = useState("");
-
-  const [addressText, setAddressText] = useState("");
-  const [city, setCity] = useState("");
-  const [state, setState] = useState("");
-  const [pincode, setPincode] = useState("");
-
-  const [categories, setCategories] = useState<string[]>([]);
-  const [regions, setRegions] = useState<string[]>([]);
-  const [businessDesc, setBusinessDesc] = useState("");
-  const [referenceClients, setReferenceClients] = useState("");
-
-  const [declaration, setDeclaration] = useState(false);
+  const token = new URLSearchParams(window.location.search).get("token") ?? "";
+  const [status, setStatus] = useState<Status>("loading");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [prefill, setPrefill] = useState<VendorTokenPrefill | null>(null);
+  const [busyDoc, setBusyDoc] = useState<string | null>(null);
+  const [acceptedBy, setAcceptedBy] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [submittedEmail, setSubmittedEmail] = useState("");
-  const [submittedId, setSubmittedId] = useState("");
+  // Baseline of what is already saved, so an unchanged blur does not re-POST.
+  const savedRef = useRef<Record<string, string>>({});
 
-  const toggleItem = (list: string[], item: string, setter: (v: string[]) => void) => {
-    setter(list.includes(item) ? list.filter((x) => x !== item) : [...list, item]);
+  const load = useCallback(async () => {
+    if (!token) { setErrorMsg("This link is missing its token."); setStatus("error"); return; }
+    try {
+      const data = await validateVendorToken(token);
+      const baseline: Record<string, string> = {};
+      for (const [k, v] of Object.entries(data.supplier)) if (typeof v === "string") baseline[k] = v;
+      savedRef.current = baseline;
+      setPrefill(data);
+      setStatus("form");
+    } catch (e: unknown) {
+      setErrorMsg(e instanceof Error ? e.message : "This link could not be opened.");
+      setStatus("error");
+    }
+  }, [token]);
+  useEffect(() => { void load(); }, [load]);
+
+  const onFieldBlur = async (key: PublicVendorField, raw: string) => {
+    const value = raw.trim();
+    if (value === (savedRef.current[key] ?? "")) return;
+    try {
+      await saveVendorFields(token, { [key]: value || null });
+      savedRef.current[key] = value;
+      toast.success("Saved");
+    } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Could not save"); }
   };
 
-  const handleSubmit = async () => {
-    if (!companyName.trim()) { toast.error("Company name is required"); return; }
-    if (!contactPerson.trim()) { toast.error("Contact person is required"); return; }
-    if (!email.trim()) { toast.error("Email is required"); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { toast.error("Invalid email address format"); return; }
-    if (!phone.trim()) { toast.error("Phone is required"); return; }
-    if (!/^(\+91)?[6-9]\d{9}$/.test(phone.trim().replace(/[\s-]/g, ""))) { toast.error("Invalid phone — enter 10-digit Indian mobile number"); return; }
-    // GSTIN is optional — but if entered, must match the standard 15-char format
-    if (gstin.trim() && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/.test(gstin.trim().toUpperCase())) {
-      toast.error("Invalid GSTIN format — must be 15 characters (e.g. 09AAECH3768B1ZM) or leave blank"); return;
-    }
-    // PAN is optional — but if entered, must be valid format
-    if (pan.trim() && !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.trim().toUpperCase())) { toast.error("Invalid PAN format — must be 10 characters (e.g. ABCDE1234F) or leave blank"); return; }
-    if (!declaration) { toast.error("Please confirm the declaration"); return; }
+  const onDoc = async (docType: string, file: File) => {
+    if (file.size > 20 * 1024 * 1024) { toast.error("File too large (max 20 MB)"); return; }
+    setBusyDoc(docType);
+    try {
+      await uploadVendorDocument(token, docType, file);
+      await load();
+      toast.success(`${DOCUMENT_LABELS[docType] ?? docType} uploaded`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Upload failed");
+    } finally { setBusyDoc(null); }
+  };
 
+  const submit = async () => {
+    if (!acceptedBy.trim()) { toast.error("Please type your name to accept the terms"); return; }
     setSubmitting(true);
     try {
-      const { data, error } = await supabase.from("cps_vendor_registrations").insert([{
-        company_name: companyName.trim(),
-        gstin: gstin.trim() || null,
-        pan: pan.trim() || null,
-        contact_person: contactPerson.trim(),
-        email: email.trim().toLowerCase(),
-        phone: phone.trim(),
-        whatsapp: whatsapp.trim() || null,
-        address_text: addressText.trim() || null,
-        city: city.trim() || null,
-        state: state.trim() || null,
-        pincode: pincode.trim() || null,
-        categories: categories.length ? categories : null,
-        regions: regions.length ? regions : null,
-        business_description: businessDesc.trim() || null,
-        years_in_business: yearsInBusiness !== "" ? Number(yearsInBusiness) : null,
-        reference_clients: referenceClients.trim() || null,
-        status: "pending",
-      }]).select("id").single();
-
-      if (error) throw error;
-
-      setSubmittedId(String((data as { id: string }).id).slice(0, 8).toUpperCase());
-      setSubmittedEmail(email.trim().toLowerCase());
-      setSubmitted(true);
-      toast.success("Registration submitted successfully");
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to submit registration");
-    } finally {
-      setSubmitting(false);
-    }
+      await submitVendorForm(token, acceptedBy.trim());
+      setStatus("submitted");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Could not submit");
+    } finally { setSubmitting(false); }
   };
 
-  if (submitted) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-6">
-        <Card className="max-w-lg w-full">
-          <CardContent className="py-12 text-center space-y-4">
-            <CheckCircle className="h-14 w-14 text-green-600 mx-auto" />
-            <h2 className="text-xl font-bold text-foreground">Registration Submitted Successfully!</h2>
-            <p className="text-muted-foreground">Your application is under review.</p>
-            <p className="text-sm text-muted-foreground">Reference: <span className="font-mono font-medium text-foreground">VR-{submittedId}</span></p>
-            <p className="text-sm text-muted-foreground">We will review your application within 3 working days.</p>
-            <p className="text-sm text-muted-foreground">To check your application status, use your email: <span className="font-medium text-foreground">{submittedEmail}</span></p>
-            <Button onClick={() => navigate(`/vendor/status?email=${encodeURIComponent(submittedEmail)}`)}>
-              Check Status
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
+  if (status === "loading") {
+    return <Screen><Card><CardContent className="py-16 flex items-center justify-center gap-3 text-muted-foreground">
+      <Loader2 className="h-5 w-5 animate-spin" />Opening your registration…
+    </CardContent></Card></Screen>;
   }
 
-  return (
-    <div className="min-h-screen bg-background">
-      <div className="max-w-3xl mx-auto py-10 px-4 space-y-8">
-        {/* Header */}
-        <div className="text-center space-y-2">
-          <div className="h-14 w-14 rounded-xl bg-primary/10 flex items-center justify-center mx-auto">
-            <Building2 className="h-7 w-7 text-primary" />
-          </div>
-          <h1 className="text-2xl font-bold text-foreground">Hagerstone International (P) Ltd</h1>
-          <h2 className="text-lg text-foreground">Vendor / Supplier Registration</h2>
-          <p className="text-muted-foreground text-sm">Join our approved supplier network</p>
-        </div>
+  if (status === "error") {
+    return <Screen><Card><CardContent className="py-16 text-center space-y-3">
+      <XCircle className="h-10 w-10 text-destructive mx-auto" />
+      <div className="text-lg font-semibold text-foreground">This link cannot be opened</div>
+      <p className="text-sm text-muted-foreground">{errorMsg}</p>
+      <p className="text-xs text-muted-foreground">Please ask {COMPANY_NAME}'s procurement team for a fresh link.</p>
+    </CardContent></Card></Screen>;
+  }
 
-        {/* Section 1 — Company Details */}
-        <Card>
-          <CardHeader><CardTitle className="text-base">Company Details</CardTitle></CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2 space-y-2">
-              <Label>Company Name *</Label>
-              <Input value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>GSTIN</Label>
-              <Input value={gstin} onChange={(e) => setGstin(e.target.value)} placeholder="15-digit GSTIN (optional)" />
-            </div>
-            <div className="space-y-2">
-              <Label>PAN</Label>
-              <Input value={pan} onChange={(e) => setPan(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>Years in Business</Label>
-              <Input type="number" value={yearsInBusiness} onChange={(e) => setYearsInBusiness(e.target.value ? Number(e.target.value) : "")} />
-            </div>
-          </CardContent>
-        </Card>
+  if (status === "submitted") {
+    return <Screen><Card><CardContent className="py-16 text-center space-y-3">
+      <CheckCircle2 className="h-10 w-10 text-primary mx-auto" />
+      <div className="text-lg font-semibold text-foreground">Thank you — your details are submitted</div>
+      <p className="text-sm text-muted-foreground">
+        {COMPANY_NAME}'s procurement team will verify your registration and be in touch.
+        You can close this page.
+      </p>
+    </CardContent></Card></Screen>;
+  }
 
-        {/* Section 2 — Contact Details */}
-        <Card>
-          <CardHeader><CardTitle className="text-base">Contact Details</CardTitle></CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Contact Person Name *</Label>
-              <Input value={contactPerson} onChange={(e) => setContactPerson(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>Email *</Label>
-              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>Phone *</Label>
-              <Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>WhatsApp</Label>
-              <Input type="tel" value={whatsapp} onChange={(e) => setWhatsapp(e.target.value)} />
-            </div>
-          </CardContent>
-        </Card>
+  if (!prefill) return null;
+  const { supplier, documents, rules, terms } = prefill;
+  const docByType = (t: string) => documents.find((d) => d.document_type === t);
+  const missingMandatory = rules.filter((r) => r.is_mandatory && !docByType(r.document_type)?.file_url);
 
-        {/* Section 3 — Address */}
-        <Card>
-          <CardHeader><CardTitle className="text-base">Address</CardTitle></CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2 space-y-2">
-              <Label>Address</Label>
-              <Textarea rows={2} value={addressText} onChange={(e) => setAddressText(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>City</Label>
-              <Input value={city} onChange={(e) => setCity(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>State</Label>
-              <Input value={state} onChange={(e) => setState(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>Pincode</Label>
-              <Input value={pincode} onChange={(e) => setPincode(e.target.value)} />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Section 4 — Business Profile */}
-        <Card>
-          <CardHeader><CardTitle className="text-base">Business Profile</CardTitle></CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-2">
-              <Label>Categories</Label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {CATEGORIES.map((cat) => (
-                  <label key={cat} className="flex items-center gap-2 text-sm cursor-pointer">
-                    <Checkbox
-                      checked={categories.includes(cat)}
-                      onCheckedChange={() => toggleItem(categories, cat, setCategories)}
-                    />
-                    {cat}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Regions</Label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {REGIONS.map((reg) => (
-                  <label key={reg} className="flex items-center gap-2 text-sm cursor-pointer">
-                    <Checkbox
-                      checked={regions.includes(reg)}
-                      onCheckedChange={() => toggleItem(regions, reg, setRegions)}
-                    />
-                    {reg}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Business Description <span className="text-muted-foreground text-xs ml-1">({businessDesc.length}/300)</span></Label>
-              <Textarea
-                rows={3}
-                maxLength={300}
-                value={businessDesc}
-                onChange={(e) => setBusinessDesc(e.target.value)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Reference Clients</Label>
-              <Textarea rows={2} value={referenceClients} onChange={(e) => setReferenceClients(e.target.value)} placeholder="List 2-3 past clients" />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Section 5 — Declaration */}
-        <Card>
-          <CardContent className="py-6 space-y-4">
-            <label className="flex items-start gap-3 cursor-pointer">
-              <Checkbox checked={declaration} onCheckedChange={(v) => setDeclaration(Boolean(v))} className="mt-0.5" />
-              <span className="text-sm">I confirm all information provided is accurate and complete</span>
-            </label>
-            <Button className="w-full" size="lg" onClick={handleSubmit} disabled={submitting || !declaration}>
-              {submitting ? "Submitting..." : "Submit Registration"}
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
+  const Field = (key: PublicVendorField, label: string, mono = false) => (
+    <div className="grid gap-1.5">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <Input defaultValue={supplier[key] ?? ""} className={mono ? "font-mono" : ""}
+             onBlur={(e) => onFieldBlur(key, e.target.value)} />
     </div>
+  );
+
+  return (
+    <Screen>
+      <div className="space-y-5">
+        <div className="text-center space-y-1">
+          <div className="text-lg font-bold text-foreground">{COMPANY_NAME}</div>
+          <div className="text-sm text-muted-foreground">Vendor Registration</div>
+          {supplier.vendor_type && (
+            <Badge variant="outline">{VENDOR_TYPE_LABELS[supplier.vendor_type]}</Badge>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground text-center">
+          Your entries save as you go. Attach the documents below, accept the terms, then submit.
+        </p>
+
+        <Card><CardContent className="pt-6 space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Business details</h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {Field("name", "Legal name (full name of firm)")}
+            {Field("gstin", "GSTIN", true)}
+            {Field("pan", "PAN number", true)}
+            {Field("phone", "Phone")}
+            {Field("whatsapp", "WhatsApp")}
+            {Field("email", "Email")}
+          </div>
+          {Field("address_text", "Full address")}
+          <div className="grid gap-3 sm:grid-cols-3">
+            {Field("city", "City")}
+            {Field("state", "State")}
+            {Field("pincode", "Pincode", true)}
+          </div>
+        </CardContent></Card>
+
+        <Card><CardContent className="pt-6 space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Bank details</h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {Field("bank_account_number", "Bank account number", true)}
+            {Field("bank_ifsc", "IFSC code", true)}
+            {Field("bank_account_holder_name", "Account holder name")}
+            {Field("bank_name", "Bank name / branch")}
+          </div>
+        </CardContent></Card>
+
+        <Card><CardContent className="pt-6 space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Documents</h2>
+          <div className="border border-border rounded-lg divide-y divide-border">
+            {rules.map((rule) => {
+              const doc = docByType(rule.document_type);
+              const attached = !!doc?.file_url;
+              return (
+                <div key={rule.document_type} className="flex items-center gap-3 p-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-foreground">
+                      {DOCUMENT_LABELS[rule.document_type] ?? rule.document_type}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {attached ? "Provided" : rule.is_mandatory ? "Required" : "Optional"}
+                    </div>
+                  </div>
+                  {attached ? (
+                    <Badge><CheckCircle2 className="h-3 w-3 mr-1" />Provided</Badge>
+                  ) : (
+                    <label>
+                      <Input type="file" className="hidden"
+                             onChange={(e) => { const f = e.target.files?.[0]; if (f) void onDoc(rule.document_type, f); e.target.value = ""; }} />
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border
+                                       text-xs font-medium cursor-pointer hover:bg-muted/40">
+                        {busyDoc === rule.document_type
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <Upload className="h-3.5 w-3.5" />}
+                        {attached ? "Replace" : "Attach"}
+                      </span>
+                    </label>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent></Card>
+
+        <Card><CardContent className="pt-6 space-y-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Delivery &amp; billing terms
+            </h2>
+            {terms.vendor_registration_terms_version && (
+              <Badge variant="outline">version {terms.vendor_registration_terms_version}</Badge>
+            )}
+          </div>
+          <pre className="whitespace-pre-wrap text-sm text-foreground bg-muted/40 rounded-lg p-3 font-sans">
+            {terms.vendor_registration_terms_text ?? ""}
+          </pre>
+          <div className="grid gap-1.5 max-w-sm">
+            <Label className="text-xs text-muted-foreground">
+              Type your name to accept these terms on behalf of the vendor
+            </Label>
+            <Input value={acceptedBy} onChange={(e) => setAcceptedBy(e.target.value)} />
+          </div>
+
+          {missingMandatory.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Still to attach: {missingMandatory.map((r) => DOCUMENT_LABELS[r.document_type] ?? r.document_type).join(", ")}.
+              You can submit now and send the rest to procurement, or attach them first.
+            </p>
+          )}
+
+          <Button disabled={submitting || !acceptedBy.trim()} onClick={submit}>
+            {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Submit registration
+          </Button>
+        </CardContent></Card>
+      </div>
+    </Screen>
   );
 }

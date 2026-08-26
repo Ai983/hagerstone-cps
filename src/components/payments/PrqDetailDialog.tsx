@@ -274,6 +274,7 @@ export default function PrqDetailDialog({
     const rules = await fetchChecklistRules();
     const sync = await syncChecklistForPrq(
       prq.id, next, rules, prq.raised_by, prq.payment_kind,
+      prq.net_amount ?? prq.amount ?? null,
     );
     setChangingType(false);
 
@@ -326,6 +327,7 @@ export default function PrqDetailDialog({
     const rules = await fetchChecklistRules();
     const sync = await syncChecklistForPrq(
       prq.id, prq.payment_type, rules, prq.raised_by, kind,
+      prq.net_amount ?? prq.amount ?? null,
     );
     setSettingKind(false);
 
@@ -413,7 +415,28 @@ export default function PrqDetailDialog({
     if (error) { toast.error("Could not save: " + error.message); return; }
 
     await recordFieldFills({ user, prq, changes, siteUserId: prq.raised_by });
-    toast.success("Saved");
+
+    // The amount decides which TIER of the checklist applies, so changing it can
+    // introduce or retire requirements. Re-sync rather than leave the checklist
+    // describing the old amount. Uploaded files are kept and demoted, never
+    // deleted — the same guarantee as a payee-type or kind change.
+    let tierNote = "";
+    if ("amount" in changes) {
+      const nextAmount = payload.amount == null ? null : Number(payload.amount);
+      const nextNet = nextAmount == null ? null : nextAmount - Number(prq.deduction ?? 0);
+      const rules = await fetchChecklistRules();
+      const sync = await syncChecklistForPrq(
+        prq.id, prq.payment_type, rules, prq.raised_by, prq.payment_kind, nextNet,
+      );
+      const parts = [
+        sync.added ? `${sync.added} now required` : null,
+        sync.removed ? `${sync.removed} no longer required` : null,
+      ].filter(Boolean);
+      if (parts.length) tierNote = ` — checklist: ${parts.join(", ")}`;
+      await loadDocs();
+    }
+
+    toast.success("Saved" + tierNote);
     onChanged();
   };
 

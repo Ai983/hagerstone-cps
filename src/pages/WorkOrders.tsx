@@ -23,6 +23,7 @@ import {
   Plus, Search, FileText, Trash2, Eye, ArrowLeft, ArrowRight,
   Save, CheckCircle2, X as XIcon, Briefcase,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import {
   buildWoPdf, uploadWoPdf, uploadWoRateList, ensureWoPdfFromDb,
@@ -121,6 +122,7 @@ const fmtDate = (d: string | null | undefined) => {
 
 export default function WorkOrders() {
   const { user, canViewPrices } = useAuth();
+  const navigate = useNavigate();
   // accounts_team is a view-only role — it can see Work Orders but not create/edit them.
   const canManageWO = user?.role !== "accounts_team";
   const [loading, setLoading] = useState(true);
@@ -156,7 +158,6 @@ export default function WorkOrders() {
   const [w_supplierContact, setSupplierContact] = useState("");
   const [w_supplierEmail, setSupplierEmail] = useState("");
   const [w_supplierAddress, setSupplierAddress] = useState("");
-  const [w_isNewVendor, setIsNewVendor] = useState(false);
   const [w_rateListFile, setRateListFile] = useState<File | null>(null);
   const [parsingRateList, setParsingRateList] = useState(false);
   const [w_existingRateListUrl, setExistingRateListUrl] = useState<string | null>(null);
@@ -338,7 +339,7 @@ export default function WorkOrders() {
     setProjectSite(""); setProjectCode(""); setCategory(""); setWorkAddress(""); setWorkAtName("");
     setSupplierId(""); setSupplierName(""); setSupplierGstin(""); setSupplierState("");
     setSupplierKindAttn(""); setSupplierContact(""); setSupplierEmail(""); setSupplierAddress("");
-    setIsNewVendor(false); setRateListFile(null);
+    setRateListFile(null);
     setExistingRateListUrl(null); setExistingRateListFilename(null);
     setPriceBasis(""); setDispatchBy("Road"); setFreightLabour("INCLUSIVE");
     setInsurance("SUPPLIER SCOPE"); setPackingTerms("STANDARD"); setWarranty("AS PER PI");
@@ -494,14 +495,6 @@ export default function WorkOrders() {
       setSupplierEmail(s.email ?? "");
       setSupplierAddress(s.address_text ?? "");
     }
-    setIsNewVendor(false);
-  };
-
-  const startNewVendor = () => {
-    setIsNewVendor(true);
-    setSupplierId("");
-    setSupplierName(""); setSupplierGstin(""); setSupplierState("");
-    setSupplierKindAttn(""); setSupplierContact(""); setSupplierEmail(""); setSupplierAddress("");
   };
 
   // Convert an uploaded Excel file (.xlsx / .xls) into a plain-text CSV-like dump
@@ -768,7 +761,7 @@ Rules:
   const persistWorkOrder = async (finalise: boolean): Promise<{ id: string; wo_number: string } | null> => {
     if (!user) { toast.error("Please log in"); return null; }
     if (!w_category) { toast.error("Category is required"); return null; }
-    if (!w_supplierName.trim()) { toast.error("Vendor name is required"); return null; }
+    if (!w_supplierId) { toast.error("Select an existing vendor"); return null; }
     if (w_lineItems.filter((li) => li.description.trim()).length === 0) {
       toast.error("Add at least one line item"); return null;
     }
@@ -787,25 +780,8 @@ Rules:
         woNumber = wizardEditWoNumber ?? rows.find((x) => x.id === woId)?.wo_number ?? "";
       }
 
-      // Resolve supplier — if new, insert into cps_suppliers
-      let supplierId: string | null = w_supplierId || null;
-      if (w_isNewVendor && w_supplierName.trim()) {
-        const { data: insSup, error: supErr } = await supabase
-          .from("cps_suppliers")
-          .insert({
-            name: w_supplierName.trim(),
-            gstin: w_supplierGstin || null,
-            phone: w_supplierContact || null,
-            email: w_supplierEmail || null,
-            address_text: w_supplierAddress || null,
-            state: w_supplierState || null,
-            status: "active",
-          } as any)
-          .select("id")
-          .single();
-        if (supErr) throw supErr;
-        supplierId = insSup?.id ?? null;
-      }
+      // Work orders reference an existing vendor selected in the wizard.
+      const supplierId: string | null = w_supplierId || null;
 
       const status: WoStatus = finalise ? "issued" : "draft";
 
@@ -1300,8 +1276,8 @@ Rules:
                       ))}
                     </SelectContent>
                   </Select>
-                  <Button type="button" variant="outline" onClick={startNewVendor}>
-                    <Plus className="h-4 w-4 mr-1.5" /> New Contractor
+                  <Button type="button" variant="outline" onClick={() => navigate("/vendor-registration")}>
+                    <Plus className="h-4 w-4 mr-1.5" /> Register a new vendor
                   </Button>
                 </div>
               </div>
@@ -1309,15 +1285,15 @@ Rules:
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t pt-4">
                 <div className="space-y-1 sm:col-span-2">
                   <Label>Vendor / Contractor Name *</Label>
-                  <Input value={w_supplierName} onChange={(e) => setSupplierName(e.target.value)} placeholder="e.g. PSP DESIGN STUDIO & ASSOCIATES" />
+                  <Input value={w_supplierName} readOnly className="bg-muted" placeholder="Select an existing vendor above" />
                 </div>
                 <div className="space-y-1">
                   <Label>GSTIN</Label>
-                  <Input value={w_supplierGstin} onChange={(e) => setSupplierGstin(e.target.value)} placeholder="15-digit GSTIN" />
+                  <Input value={w_supplierGstin} readOnly className="bg-muted" placeholder="—" />
                 </div>
                 <div className="space-y-1">
                   <Label>State</Label>
-                  <Input value={w_supplierState} onChange={(e) => setSupplierState(e.target.value)} placeholder="e.g. Delhi" />
+                  <Input value={w_supplierState} readOnly className="bg-muted" placeholder="—" />
                 </div>
                 <div className="space-y-1">
                   <Label>Kind Attn</Label>
@@ -1325,15 +1301,15 @@ Rules:
                 </div>
                 <div className="space-y-1">
                   <Label>Phone</Label>
-                  <Input value={w_supplierContact} onChange={(e) => setSupplierContact(e.target.value)} placeholder="Contact number" />
+                  <Input value={w_supplierContact} readOnly className="bg-muted" placeholder="—" />
                 </div>
                 <div className="space-y-1">
                   <Label>Email</Label>
-                  <Input value={w_supplierEmail} onChange={(e) => setSupplierEmail(e.target.value)} placeholder="contact@vendor.com" />
+                  <Input value={w_supplierEmail} readOnly className="bg-muted" placeholder="—" />
                 </div>
                 <div className="space-y-1 sm:col-span-2">
                   <Label>Address</Label>
-                  <Textarea value={w_supplierAddress} onChange={(e) => setSupplierAddress(e.target.value)} rows={2} placeholder="Full address" />
+                  <Textarea value={w_supplierAddress} readOnly className="bg-muted" rows={2} placeholder="—" />
                 </div>
               </div>
 
@@ -1661,7 +1637,7 @@ Rules:
                   onClick={() => setWizardStep((s) => s + 1)}
                   disabled={
                     (wizardStep === 0 && (!w_projectSite || !w_category)) ||
-                    (wizardStep === 1 && !w_supplierName.trim())
+                    (wizardStep === 1 && !w_supplierId)
                   }
                 >
                   Next <ArrowRight className="h-4 w-4 ml-1.5" />

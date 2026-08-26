@@ -4,13 +4,11 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -117,79 +115,6 @@ function ageLabel(iso: string | null): string {
   return `${Math.floor(days / 30)} months ago`;
 }
 
-type CpsUserLite = { id?: string; name?: string; role?: string } | null | undefined;
-
-/** Prefill the convert form straight off the lead — what bulk conversion uses unattended. */
-function formFromLead(lead: VendorLead): ConvertForm {
-  return {
-    name: lead.business_name ?? "",
-    phone: lead.phone ?? "",
-    email: "",
-    gstin: lead.gst ?? "",
-    address: lead.address ?? "",
-    city: lead.city ?? "",
-    categories: lead.category ?? "",
-  };
-}
-
-/**
- * Insert one lead into the supplier master, stamp the link back on the lead and
- * audit it. Shared by the single-row dialog and the bulk action so the two can
- * never drift apart on what a converted supplier looks like.
- */
-async function createSupplierFromLead(lead: VendorLead, form: ConvertForm, user: CpsUserLite) {
-  const phone = phoneKey(form.phone);
-
-  const { data: supplier, error } = await supabase
-    .from("cps_suppliers")
-    .insert([{
-      name: form.name.trim(),
-      phone: phone || null,
-      whatsapp: phone ? `91${phone}` : null,
-      gstin: form.gstin.trim() ? form.gstin.trim().toUpperCase() : null,
-      email: form.email.trim() || null,
-      address_text: form.address.trim() || null,
-      city: form.city.trim() || null,
-      categories: form.categories.split(",").map((c) => c.trim()).filter(Boolean),
-      status: "active",
-      added_via: "vendor_scout",
-      // Google Maps data is unverified and has no bank/PAN details — the
-      // supplier still has to be completed and verified by procurement.
-      verified: false,
-      profile_complete: false,
-      notes: `Added from Vendor Scout (${lead.lead_type}) — Google Maps${
-        lead.source_url ? `: ${lead.source_url}` : ""
-      }`,
-    }])
-    .select("id,name")
-    .single();
-  if (error) throw error;
-
-  await supabase
-    .from("cps_vendor_leads")
-    .update({
-      status: "converted",
-      converted_supplier_id: supplier.id,
-      converted_by: user?.id ?? null,
-      converted_at: new Date().toISOString(),
-    })
-    .eq("id", lead.id);
-
-  await supabase.from("cps_audit_log").insert({
-    user_id: user?.id ?? null,
-    user_name: user?.name ?? null,
-    user_role: user?.role ?? null,
-    action_type: "VENDOR_SCOUT_CONVERT",
-    entity_type: "supplier",
-    entity_id: supplier.id,
-    description: `Vendor Scout lead "${lead.business_name}" (${lead.city}/${lead.category}) added to supplier master`,
-    after_value: { lead_id: lead.id, supplier_id: supplier.id, lead_type: lead.lead_type },
-    severity: "info",
-  });
-
-  return supplier as { id: string; name: string };
-}
-
 function escapeCSV(value: unknown): string {
   if (value === null || value === undefined) return "";
   const s = String(value);
@@ -224,8 +149,9 @@ function downloadCSV(rows: VendorLead[]) {
 }
 
 export default function VendorScout() {
-  const { user, canManageSuppliers } = useAuth();
+  const { canManageSuppliers } = useAuth();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const [tab, setTab] = useState("search");
 
@@ -243,9 +169,6 @@ export default function VendorScout() {
   // Saved-data browser
   const [savedCity, setSavedCity] = useState("");
   const [savedCategory, setSavedCategory] = useState("");
-
-  const [convertLead, setConvertLead] = useState<VendorLead | null>(null);
-  const [bulkConfirm, setBulkConfirm] = useState(false);
 
   // ── Queries ───────────────────────────────────────────────────────────────
 
@@ -476,66 +399,6 @@ export default function VendorScout() {
     onError: (e: Error) => toast.error(e.message || "Could not delete lead"),
   });
 
-  // ── Convert to supplier ───────────────────────────────────────────────────
-
-  const convert = useMutation({
-    mutationFn: ({ lead, form }: { lead: VendorLead; form: ConvertForm }) =>
-      createSupplierFromLead(lead, form, user),
-    onSuccess: (supplier, { lead }) => {
-      setResults((rs) =>
-        rs.map((r) => (r.id === lead.id ? { ...r, status: "converted", converted_supplier_id: supplier.id } : r)),
-      );
-      setConvertLead(null);
-      invalidateLeads();
-      toast.success(`"${supplier.name}" added to Supplier Master`);
-    },
-    onError: (e: Error) => toast.error(e.message || "Could not add supplier"),
-  });
-
-  // Shortlisted leads that would actually produce a new supplier — already
-  // converted ones, and ones matching a supplier on phone/GSTIN/name, are excluded
-  // so the bulk button's count is the number of suppliers you will really get.
-  const bulkEligible = (shortlistedRows ?? []).filter(
-    (r) => r.status !== "converted" && !r.converted_supplier_id && !findExistingSupplier(r),
-  );
-
-  const bulkConvert = useMutation({
-    mutationFn: async (leads: VendorLead[]) => {
-      const seenPhones = new Set<string>();
-      const failed: string[] = [];
-      let added = 0;
-
-      // Sequential, not parallel: the in-batch phone dedupe below only works if
-      // each insert finishes before the next starts. A handful of leads is fast
-      // enough that concurrency buys nothing worth that risk.
-      for (const lead of leads) {
-        const key = phoneKey(lead.phone);
-        // The same business legitimately appears under several search keywords,
-        // so a shortlist can hold it twice — converting both would create two
-        // supplier rows for one vendor.
-        if (key.length === 10 && seenPhones.has(key)) continue;
-        try {
-          await createSupplierFromLead(lead, formFromLead(lead), user);
-          if (key.length === 10) seenPhones.add(key);
-          added += 1;
-        } catch (e) {
-          failed.push(`${lead.business_name}: ${e instanceof Error ? e.message : "failed"}`);
-        }
-      }
-      return { added, failed };
-    },
-    onSuccess: ({ added, failed }) => {
-      setBulkConfirm(false);
-      invalidateLeads();
-      if (added > 0) toast.success(`${added} supplier(s) added to the master`);
-      // Report partial failure honestly — a bulk run that half-worked must not
-      // look like a clean success.
-      if (failed.length > 0) toast.error(`${failed.length} could not be added — ${failed[0]}`);
-      if (added === 0 && failed.length === 0) toast.info("Nothing new to add");
-    },
-    onError: (e: Error) => toast.error(e.message || "Bulk add failed"),
-  });
-
   const savedCategories = savedCity ? facets?.byCity?.[savedCity] ?? [] : [];
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -623,9 +486,9 @@ export default function VendorScout() {
                           size="sm"
                           variant="outline"
                           disabled={!canManageSuppliers}
-                          onClick={() => setConvertLead(r)}
+                          onClick={() => navigate("/vendor-registration")}
                         >
-                          <UserPlus className="h-4 w-4 mr-1.5" /> Add to Suppliers
+                          <UserPlus className="h-4 w-4 mr-1.5" /> Register this lead
                         </Button>
                       )}
                       <Button
@@ -831,18 +694,6 @@ export default function VendorScout() {
                   <CardTitle className="text-base">Shortlisted leads</CardTitle>
                   <CardDescription>Starred vendors and contractors across every city.</CardDescription>
                 </div>
-                {bulkEligible.length > 0 && (
-                  <Button
-                    size="sm"
-                    disabled={!canManageSuppliers || bulkConvert.isPending}
-                    onClick={() => setBulkConfirm(true)}
-                  >
-                    {bulkConvert.isPending
-                      ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                      : <UserPlus className="h-4 w-4 mr-1.5" />}
-                    Add all {bulkEligible.length} to Suppliers
-                  </Button>
-                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -854,145 +705,7 @@ export default function VendorScout() {
         </TabsContent>
       </Tabs>
 
-      <Dialog open={bulkConfirm} onOpenChange={(o) => !o && setBulkConfirm(false)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add {bulkEligible.length} shortlisted lead(s) to Suppliers</DialogTitle>
-            <DialogDescription>
-              Each becomes an unverified supplier with an incomplete profile, using the name,
-              phone and address exactly as Google Maps has them — nothing is reviewed on the way
-              in. Leads already in the master are skipped. There is no undo.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="max-h-56 overflow-y-auto rounded-md border border-border divide-y divide-border">
-            {bulkEligible.map((l) => (
-              <div key={l.id} className="px-3 py-2 text-sm">
-                <span className="font-medium">{l.business_name}</span>
-                <span className="text-muted-foreground"> — {l.phone || "no phone"} · {l.city}</span>
-              </div>
-            ))}
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setBulkConfirm(false)} disabled={bulkConvert.isPending}>
-              Cancel
-            </Button>
-            <Button onClick={() => bulkConvert.mutate(bulkEligible)} disabled={bulkConvert.isPending}>
-              {bulkConvert.isPending && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
-              Add all {bulkEligible.length}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Rendered conditionally with a key so the form always starts from this lead. */}
-      {convertLead && (
-        <ConvertDialog
-          key={convertLead.id}
-          lead={convertLead}
-          saving={convert.isPending}
-          onCancel={() => setConvertLead(null)}
-          onSave={(form) => convert.mutate({ lead: convertLead, form })}
-        />
-      )}
     </div>
   );
 }
 
-// ─── Convert dialog ──────────────────────────────────────────────────────────
-
-type ConvertForm = {
-  name: string;
-  phone: string;
-  email: string;
-  gstin: string;
-  address: string;
-  city: string;
-  categories: string;
-};
-
-function ConvertDialog({
-  lead, saving, onCancel, onSave,
-}: {
-  lead: VendorLead;
-  saving: boolean;
-  onCancel: () => void;
-  onSave: (form: ConvertForm) => void;
-}) {
-  // Initialised once from the lead — the parent remounts via key={lead.id}, so
-  // there is no prop-to-state sync effect here (and no stale-render flash).
-  const [form, setForm] = useState<ConvertForm>({
-    name: lead.business_name ?? "",
-    phone: lead.phone ?? "",
-    email: "",
-    gstin: lead.gst ?? "",
-    address: lead.address ?? "",
-    city: lead.city ?? "",
-    categories: lead.category ?? "",
-  });
-
-  const set = (k: keyof ConvertForm) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onCancel()}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Add to Supplier Master</DialogTitle>
-          <DialogDescription>
-            Google Maps has no PAN, GSTIN or bank details — this supplier is created unverified
-            and with an incomplete profile, for procurement to finish.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="cv-name">Supplier name *</Label>
-            <Input id="cv-name" value={form.name} onChange={set("name")} />
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="cv-phone">Phone / WhatsApp</Label>
-              <Input id="cv-phone" value={form.phone} onChange={set("phone")} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="cv-email">Email</Label>
-              <Input id="cv-email" value={form.email} onChange={set("email")} placeholder="Not on Google Maps" />
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="cv-gstin">GSTIN</Label>
-              <Input id="cv-gstin" value={form.gstin} onChange={set("gstin")} placeholder="Rarely available" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="cv-city">City</Label>
-              <Input id="cv-city" value={form.city} onChange={set("city")} />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="cv-address">Address</Label>
-            <Input id="cv-address" value={form.address} onChange={set("address")} />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="cv-cats">Categories (comma separated)</Label>
-            <Input id="cv-cats" value={form.categories} onChange={set("categories")} />
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onCancel} disabled={saving}>Cancel</Button>
-          <Button onClick={() => onSave(form)} disabled={saving || !form.name.trim()}>
-            {saving && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
-            Add Supplier
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}

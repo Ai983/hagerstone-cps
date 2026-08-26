@@ -61,8 +61,6 @@ export default function SiteQuotes() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [supplierInput, setSupplierInput] = useState("");
   const [supplierMatch, setSupplierMatch] = useState<SupplierRow | null>(null);
-  const [newMobile, setNewMobile] = useState("");
-  const [newGstin, setNewGstin] = useState("");
   const [quoteFile, setQuoteFile] = useState<File | null>(null);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
@@ -224,15 +222,11 @@ export default function SiteQuotes() {
   const onPickSupplier = (s: SupplierRow) => {
     setSupplierMatch(s);
     setSupplierInput(s.name);
-    setNewMobile(s.whatsapp ?? s.phone ?? "");
-    setNewGstin(s.gstin ?? "");
   };
 
   const resetDialog = () => {
     setSupplierInput("");
     setSupplierMatch(null);
-    setNewMobile("");
-    setNewGstin("");
     setQuoteFile(null);
     setNotes("");
   };
@@ -249,48 +243,14 @@ export default function SiteQuotes() {
     if (!user) return;
     const pr = prs.find((p) => p.id === selectedPrId);
     if (!pr?.rfq_id) { toast.error("RFQ missing"); return; }
-    if (!supplierInput.trim()) { toast.error("Supplier name is required"); return; }
-    if (!supplierMatch && !newMobile.trim()) { toast.error("Mobile number is required for new vendors"); return; }
+    if (!supplierMatch) { toast.error("Select an existing supplier from the list — ask procurement to register it if it isn't there"); return; }
     if (!quoteFile) { toast.error("Attach the quote file or photo"); return; }
     if (quoteFile.size > 15 * 1024 * 1024) { toast.error("File too large (max 15 MB)"); return; }
 
     setSaving(true);
     try {
-      // 1. Find or create supplier
-      let supplierId = supplierMatch?.id ?? null;
-      if (!supplierId) {
-        const { data: created, error: supErr } = await supabase
-          .from("cps_suppliers")
-          .insert({
-            name: supplierInput.trim(),
-            whatsapp: newMobile.trim() || null,
-            phone: newMobile.trim() || null,
-            gstin: newGstin.trim() || null,
-            profile_complete: false,
-            active: true,
-            source: "site_added",
-          } as any)
-          .select("id").single();
-        if (supErr) throw supErr;
-        supplierId = (created as any).id as string;
-      } else {
-        // Existing vendor — if site just filled a previously-empty mobile / GSTIN, enrich the master
-        const patch: Record<string, string> = {};
-        if (!supplierMatch!.whatsapp && !supplierMatch!.phone && newMobile.trim()) {
-          patch.whatsapp = newMobile.trim();
-          patch.phone = newMobile.trim();
-        }
-        if (!supplierMatch!.gstin && newGstin.trim()) {
-          patch.gstin = newGstin.trim();
-        }
-        if (Object.keys(patch).length > 0) {
-          const { error: enrichErr } = await supabase
-            .from("cps_suppliers")
-            .update(patch as any)
-            .eq("id", supplierId);
-          if (enrichErr) throw enrichErr;
-        }
-      }
+      // 1. Existing supplier only — site users cannot register new vendors
+      const supplierId = supplierMatch.id;
 
       // 2. Upload the file — store the storage path (not a full URL); the
       // Quotes review page calls supabase.storage.getPublicUrl() on it.
@@ -533,34 +493,13 @@ export default function SiteQuotes() {
               {supplierMatch && (
                 <div className="text-[11px] text-green-700 flex items-center gap-1">
                   <CheckCircle2 className="h-3 w-3" />
-                  Existing vendor — details loaded
+                  Existing vendor selected
                 </div>
               )}
-            </div>
-
-            <div className="space-y-1">
-              <Label className="text-xs">Mobile / WhatsApp {supplierMatch ? "" : "*"}</Label>
-              <Input
-                value={newMobile}
-                onChange={(e) => setNewMobile(e.target.value)}
-                placeholder="10-digit number"
-                disabled={!!(supplierMatch && (supplierMatch.whatsapp || supplierMatch.phone))}
-              />
-              {supplierMatch && !supplierMatch.whatsapp && !supplierMatch.phone && (
-                <p className="text-[10px] text-amber-700">Mobile missing for this vendor — add it to enrich the master</p>
-              )}
-            </div>
-
-            <div className="space-y-1">
-              <Label className="text-xs">GSTIN (optional)</Label>
-              <Input
-                value={newGstin}
-                onChange={(e) => setNewGstin(e.target.value.toUpperCase())}
-                placeholder="15-char GSTIN"
-                disabled={!!(supplierMatch && supplierMatch.gstin)}
-              />
-              {supplierMatch && !supplierMatch.gstin && (
-                <p className="text-[10px] text-amber-700">GSTIN missing for this vendor — add it to enrich the master</p>
+              {!supplierMatch && (
+                <p className="text-[10px] text-muted-foreground">
+                  If the vendor isn't listed, ask procurement to register it.
+                </p>
               )}
             </div>
 

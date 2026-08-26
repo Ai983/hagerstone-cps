@@ -29,6 +29,9 @@ Locked decisions — do not re-litigate:
 - One gate, at procurement exit. Site = soft flag only, never blocked.
   Procurement = hard, nothing incomplete passes.
 - Vendors are NEVER contacted. Site or procurement fill every field.
+- Vendors ARE contacted for one-time onboarding (a scoped, expiring registration
+  link). This does not weaken the payment-gate rule that vendors are never
+  chased per payment — that rule stands.
 - Lead times: normal 2 calendar days, urgent 1, emergency same-day via bypass
 - Bypass is approved by the EA on the founder's behalf; authority is derived
   from finance.employees, never from the CPS role
@@ -107,7 +110,8 @@ There is **no test runner configured** — no Vitest/Jest. `CPS_TEST_GUIDE.md` i
 | Excel | `xlsx` (BOQ / vendor / stock imports) |
 | Icons | Lucide React |
 | Toasts | Sonner |
-| AI parsing | Claude (Haiku 4.5 / Sonnet 4.6) via n8n webhooks — quote & WO document parsing |
+| AI parsing | Claude `claude-haiku-4-5-20251001` — all calls routed through `supabase/functions/claude-proxy` which remaps every model name to Haiku and caps tokens per call |
+| Image prep | `src/lib/imageForClaude.ts` — shared utility; downscales images to ≤1568 px long edge, JPEG re-encode at q=0.85, white background under transparent PNGs; PDFs passed as-is |
 
 **Supabase URL:** `https://tpfvnerrjhqwipyonngf.supabase.co`
 
@@ -130,6 +134,8 @@ Protected pages render inside `<Protected>` = `<ProtectedRoute><Layout>…</Layo
 - `requestor` / `site_receiver` are "employees" — they get a separate, simplified sidebar (`EMPLOYEE_NAV` in `Sidebar.tsx`, Hindi-flavoured labels like "Mera Kaam", "Meri Requests", "Saman List").
 
 **Permission helpers on `useAuth()`:** `canApprove`, `canCreateRFQ`, `canViewAudit`, `canViewPrices`, `canManageSuppliers`, `canViewStock`, `canIssueStock`, `canAdjustStock`, `isProcurementHead`, `isManagement`, `isEmployee`, `isDesignTeam`, `isProjectCoordinator`. Never re-derive role logic in pages — use these.
+
+`isPrBlocked` — true when `cps_users.pr_blocked = true` for the current user. Blocks raising new PRs (wizard gate + disabled button + Hinglish red banner on `/requisitions`); login and invoice upload stay allowed. Cleared only by a procurement head from the Dashboard.
 
 ### Navigation
 `Sidebar.tsx` `NAV` array drives the desktop menu; each entry has a `roles` allowlist (`["all"]` = everyone). Employees bypass `NAV` entirely and see `EMPLOYEE_NAV`.
@@ -218,7 +224,8 @@ Schema is large; use the Supabase MCP tools (`list_tables`, `execute_sql`) to in
 - **GRN (updated flow):** `cps_grns` now has `status: pending_approval → confirmed | rejected`, `extracted_data` (AI OCR jsonb), `challan_number`, `variance_approved_by`, `variance_approval_reason`, `rejection_reason`. GRNs go to `GrnApprovals` page for procurement head review before confirming. On approval, `on_delivery_grn` tranches become due and `cps_payment_authorizations` release rows are auto-created.
 - **Escalation guard:** `cps_escalated_suppliers` — suppliers with unreconciled advances (7+ days) are blocked from new advance requests.
 - **Payment lifecycle (SPEC-PAY-01):** `cps_po_payment_schedules` (tranche schedule — extended with `basis`, `trigger_type`, `trigger_offset_days`, `paid_amount`, `authorization_id`), `cps_payment_authorizations` (immutable Gate-1/Gate-2/advance ledger — NEW), `cps_advance_requests` (emergency pre-PO cash advance — NEW)
-- **Plumbing:** `cps_users`, `cps_audit_log`, `cps_config` (key-value, e.g. n8n webhook URLs), `cps_webhook_events`, `cps_call_logs`, `cps_clarification_requests`, `cps_invoice_observations`, `cps_quote_upload_tokens`, `cps_po_approval_tokens` (extended with `scope` col: `po_approval | payment_release | advance`)
+- **Invoice delivery accountability:** `cps_invoice_delivery_schedules` — one row per PO; `po_id UNIQUE`, `delivery_date`, `invoice_deadline` (= delivery_date + `invoice_upload_deadline_days`, default 3), `site_engineer_id/email`, `status` CHECK(`scheduled | invoice_uploaded | overdue_blocked | closed`), notification timestamps. Created by procurement from Kanban "Payment Done" column. Cleared to `invoice_uploaded` when the engineer uploads the invoice in `UploadInvoiceDialog`.
+- **Plumbing:** `cps_users` (extended: `pr_blocked bool DEFAULT false`, `pr_blocked_reason text`, `pr_blocked_at timestamptz`, `pr_unblocked_by uuid`, `pr_unblocked_at timestamptz`), `cps_audit_log`, `cps_config`, `cps_webhook_events`, `cps_call_logs`, `cps_clarification_requests`, `cps_invoice_observations`, `cps_quote_upload_tokens`, `cps_po_approval_tokens` (extended with `scope` col: `po_approval | payment_release | advance`)
 
 ### Legacy tables (READ-ONLY — do not modify)
 `vendors`, `materials`, `invoices`, `invoice_line_items`
@@ -256,7 +263,15 @@ These are the designed ideals. **In the current `capture` mode several are relax
 1. **Manual review before approval** — Comparison sheet must be reviewed by procurement_executive before head/management can approve. Status: `pending → in_review → reviewed → sent_for_approval`
 2. **Supplier names visible on comparison sheet** — full transparency at decision stage
 3. **Blind quotation during collection** — Quotes page shows only `blind_quote_ref` (QT-2026-XXXX); supplier identity hidden until PO placed
-4. **No vendor self-registration** — public vendor registration was removed. The Suppliers page is split into **Complete / Incomplete** tabs; "Pending Registrations" now means suppliers with incomplete master data, reviewed by procurement. (NB: `cps_vendor_registrations` table + `VendorRegister.tsx`/`VendorStatus.tsx` still exist but are vestigial — 0 rows, not routed. `CPS_FOUNDER_ADDITIONS.md` still describes self-registration as a feature; that part of that doc is superseded.)
+4. **One vendor registration portal** — open self-registration stays deleted
+   (`VendorRegister.tsx` / `VendorStatus.tsx` / `cps_vendor_registrations` are
+   removed in Plan 3). Registration is a single internal portal at
+   `/vendor-registration`; procurement may optionally issue a **7-day
+   supplier-scoped token link** for the vendor to fill their own half. Mandatory
+   documents are driven by vendor type (`cps_vendor_document_rules`). A
+   designated verifier — `cps_config.vendor_registration_approvers`, never a
+   role — signs a five-item checklist and approves. The filler can never be the
+   approver. See `docs/superpowers/specs/2026-08-10-vendor-registration-single-portal-design.md`.
 
 ## Critical DB Gotchas (verified — do not regress)
 - **`cps_audit_log`:** timestamp column is `logged_at` — NEVER `created_at`
@@ -276,9 +291,24 @@ These are the designed ideals. **In the current `capture` mode several are relax
 ### PR Verification gate (two-gate, `PRReview.tsx`)
 Before a PR can move to RFQ it must be **verified by two independent sign-offs**, each made by the relevant person in their own login (order-independent):
 - **Procurement (PR Assignee)** — signed by a procurement role (`canSignProcurement`).
-- **Design Team Head** — signed by the `design_team` role (`canSignDesign`). Required **only** on design-scoped projects (`isDesignRequiredSite` → keyword allowlist in `verificationSignatures.ts`: Hero Homes, Dee Development/Bhuj, Vaneet, Koko, Sael); every other project is procurement-only (procurement ack alone → `verified`).
+- **Design Team Head** — signed by the `design_team` role (`canSignDesign`). Required **only** on design-scoped projects — determined by `isDesignRequiredSite()` in `src/config/verificationSignatures.ts`:
+  - `DESIGN_REQUIRED_SITE_KEYWORDS`: `["Hero Home", "Dee Development", "Bhuj", "Vaneet", "Koko", "Sael"]`
+  - `DESIGN_EXCLUDED_SITE_KEYWORDS` (checked first — exclusions win): `["Hero Homes Realty"]`
+  - "Hero Home's MU - Greater Noida" → design required. "Hero Homes Realty" → procurement-only. Always call `isDesignRequiredSite()`, never inline the keyword logic.
 
-State lives in `cps_purchase_requisitions.approval_sheet_ai_result` (jsonb: `assignee` + `design_head`, each with `user_id` + `agreed_at`); `approval_sheet_status` tracks progress: `null` → `procurement_ack` / `design_ack` (one side done, "waiting for the other" banner shown) → `verified` (both done, RFQ/Approve unlock). `handleConfirmSection(section)` re-reads the row before merging so the two parties never clobber each other. Audit actions: `PR_PROCUREMENT_ACK` / `PR_DESIGN_ACK`. The Design Team Head reaches this via an **Acknowledge** button on `/requisitions` and a "PRs awaiting your design acknowledgement" card on the dashboard.
+**Procurement note to Design Team Head** — optional free-text note procurement writes when acknowledging a design-required PR. Stored in `approval_sheet_ai_result.procurement_note`. Shown in the Design section after procurement has acknowledged (while with design and after verified). Cleared/preserved on re-ack.
+
+State lives in `cps_purchase_requisitions.approval_sheet_ai_result` (jsonb: `assignee` + `design_head`, each with `user_id` + `agreed_at`; + `procurement_note`); `approval_sheet_status` tracks progress: `null` → `procurement_ack` / `design_ack` (one side done, "waiting for the other" banner shown) → `verified` (both done, RFQ/Approve unlock). `handleConfirmSection(section)` re-reads the row before merging so the two parties never clobber each other. Audit actions: `PR_PROCUREMENT_ACK` / `PR_DESIGN_ACK`. The Design Team Head reaches this via an **Acknowledge** button on `/requisitions` and a "PRs awaiting your design acknowledgement" card on the dashboard.
+
+## Quote Total Model
+
+Every quote header has two totals kept in sync via `recomputeQuoteTotals()`:
+- **`total_quoted_value`** = sum of `rate × quantity` for all non-charge line items (subtotal before GST/freight/packing).
+- **`total_landed_value`** = full landed cost including GST, freight, packing, extra charges, and **less** any overall discount.
+
+**Overall Discount** (`ai_parsed_data.overall_discount`) — flat post-GST lump-sum discount the vendor gives on the whole quote (not per line). Captured in the Quotes review editor, persisted to `ai_parsed_data.overall_discount`, subtracted from `total_landed_value`. On Comparison Sheet and PO, emitted as a negative line item `"Less: Discount on total"` (base split from 18% GST so subtotal/GST columns stay consistent). Gap-fill reconciles to the authoritative header total.
+
+Extra charges may be `is_charge=true` line items (new) or `ai_parsed_data.extra_charges` (legacy upload). `recomputeQuoteTotals()` handles both: if no `is_charge` lines exist it folds in the legacy `extra_charges` before applying the discount.
 
 ## Vendor Quote Submission Flow (`VendorUploadQuote.tsx`)
 1. Vendor opens `/vendor/upload-quote?token=xxx` → token validated against `cps_quote_upload_tokens`
@@ -329,6 +359,63 @@ The work-assignment layer. Shared helpers live in `src/lib/tasks.ts` (types, `is
 
 ## Project Master List
 Projects live **only** in `cps_projects` — every project dropdown/filter app-wide reads this single table. The PR wizard has no free-text project entry; procurement must register a project there first. Set `active = false` to hide a project from dropdowns without losing history. See `CPS_PROJECTS.md` for the current list and address-quality notes.
+
+## Invoice-Upload Deadline & Site-Engineer PR Block (added 2026-07-02)
+
+Accountability loop ensuring invoices are collected after payment:
+
+1. **Procurement sets delivery date** in Kanban "Payment Done" column → creates `cps_invoice_delivery_schedules` row; fires `webhook_delivery_dispatch` → n8n WhatsApps the site engineer in Hinglish
+2. **n8n daily cron** sends delivery-day + final-day reminders; if deadline passes with no invoice upload → sets `cps_users.pr_blocked = true`
+3. **Blocked engineer** (`isPrBlocked`) cannot raise new PRs — wizard gate, disabled button, Hinglish red banner on `/requisitions`; login and invoice upload stay allowed
+4. **Invoice upload** (`UploadInvoiceDialog` in `PurchaseRequisitions.tsx`) marks schedule `invoice_uploaded` to stop reminders. The user-level `pr_blocked` flag stays until a procurement head manually clears it.
+5. **Dashboard — Procurement Head** sees blocked engineers table + "Unblock" button (clears `pr_blocked`, closes open overdue schedules, WhatsApps engineer)
+6. **Dashboard — Site Engineer** sees pending invoice nudge (auto-popup each visit while pending); links to `/requisitions?upload_pr=<prId>&upload_po_id=<poId>&upload_po_no=<poNo>` which auto-opens `UploadInvoiceDialog`
+
+**Kanban columns:** `payment_done` (7. Payment Done — delivery date set here) → `delivery_scheduled` (7b. Delivery Scheduled — awaiting site invoice upload)
+
+**Config keys:** `webhook_delivery_dispatch` (live: `https://primary-production-72e3f.up.railway.app/webhook/cps-delivery-dispatch`), `invoice_upload_deadline_days` (default `3`)
+
+**Migration:** `supabase/migrations/20260702_delivery_invoice_deadline.sql` — additive; new `cps_invoice_delivery_schedules` table, `pr_blocked*` columns on `cps_users`, config keys, RLS (incl. `users_update_pr_block` so procurement roles can UPDATE other users' block state).
+
+## Image Encoding for Claude (`src/lib/imageForClaude.ts`)
+
+Shared utility used by **all** document-parse flows (quotes, invoices, GRN, WO, vendor upload). Previously each flow had its own encoder; now all share this.
+
+- `fileToClaudeBlock(file)` — dispatches: PDF → `document` block (raw base64 pass-through); image → downscaled JPEG `image` block
+- `downscaleImageToJpegBase64(file)` — long edge capped at `MAX_IMAGE_EDGE = 1568 px`, JPEG q=0.85, **white background painted before draw** (JPEG has no alpha; without this, transparent PNG regions go black)
+- `fileToBase64(file)` — raw base64 for PDFs only
+
+Why 1568 px: Anthropic's vision API rejects >5 MB or >8000 px; internally downsamples past ~1568 px. Sending a 4000 px phone photo → 1568 px saves ~85% image tokens. Everything past 1568 px was thrown away server-side after we paid to upload it.
+
+## `claude-proxy` Edge Function — Model Allowlist & Usage Logging
+
+`supabase/functions/claude-proxy/index.ts` now enforces a `MODEL_ALLOW` allowlist instead of forwarding `body` verbatim:
+
+```
+MODEL_ALLOW maps:
+  claude-haiku-4-5-20251001  → Haiku, maxTokens: 50 000
+  claude-haiku-4-5           → Haiku, maxTokens: 50 000
+  claude-sonnet-4-6          → Haiku, maxTokens: 50 000  (deprecated alias)
+  claude-sonnet-4-5          → Haiku, maxTokens: 50 000
+  claude-opus-4              → Haiku, maxTokens: 50 000
+  claude-sonnet-4-20250514   → Haiku, maxTokens: 16 000  (ProjectBOQ.tsx legacy call)
+```
+
+Any model not in the table is **rejected (HTTP 400)** and logged. Callers cannot name Opus/Sonnet and accidentally charge against the key. Every successful call logs `{model, input_tokens, output_tokens}` to edge function console for attribution.
+
+## Comparison Sheet — Repeat-Order Exemption
+
+When building a comparison sheet, the system checks whether a repeat-order exemption applies (same vendor + same project site, all PR materials covered by a founder-approved PO). Changes since the original implementation:
+
+- **Fuzzy substring match** (case-insensitive) — no longer exact string. A PR line "safety shoes" inside a PO line "tiger lorex safety shoes" counts as covered.
+- **No 30-day window** — any founder-approved PO on the same project+vendor qualifies, regardless of age.
+- **Cross-PO coverage** — all of the vendor's POs on the same site are pooled; coverage must be satisfied by a **single vendor** (never by mixing two vendors' POs).
+- `repeatOrderExemption` state in `ComparisonSheet.tsx` holds `{poNumber, supplierName, approvedAt, poCount}` for the banner display.
+
+## Market Rate Cache TTL (`supabase/functions/market-rate-search`)
+
+- Priced results: **30 days** (up from 7 days)
+- "No price found" verdicts: **1 day** (was never cached — caused repeated lookups for items with no data)
 
 ## Known Issues
 - Audit-log inserts are wired in PR creation and vendor quote submission — not in every other page action

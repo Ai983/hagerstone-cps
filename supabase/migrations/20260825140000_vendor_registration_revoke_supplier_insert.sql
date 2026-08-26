@@ -1,0 +1,24 @@
+-- ============================================================================
+-- Vendor Registration — Plan 4 §8: close the door at the database.
+--
+-- ⚠️⚠️ APPLY ONLY AFTER the frontend build that closes the 9 inline "add vendor"
+-- paths is DEPLOYED (Vercel). Until that build is live, the running app still
+-- issues direct cps_suppliers inserts, and this REVOKE would make those screens
+-- throw. Applying it out of order breaks daily procurement.
+--
+-- Sequence:
+--   1. Deploy the frontend with the 9 closures (this commit).
+--   2. Apply 20260825130000 (new-vs-legacy PO gate + go_live reset).
+--   3. Apply THIS migration (the DB floor).
+--
+-- After this, the ONLY way a cps_suppliers row can be created is
+-- cps_start_vendor_registration — SECURITY DEFINER, runs as the function owner,
+-- so it is unaffected by this REVOKE. Every UI path already routes through it
+-- (the portal) or through existing-vendor selection. This is belt-and-suspenders
+-- so a direct API call, a missed path, or a future module cannot mint a vendor
+-- outside the one door.
+--
+-- Rollback (one line): GRANT INSERT ON cps.cps_suppliers TO authenticated;
+-- ============================================================================
+
+REVOKE INSERT ON cps.cps_suppliers FROM authenticated;

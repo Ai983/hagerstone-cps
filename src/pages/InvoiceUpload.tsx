@@ -89,6 +89,8 @@ export default function InvoiceUpload() {
   const [uploadedPath, setUploadedPath] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [supplierQuery, setSupplierQuery] = useState("");
+  const [supplierResults, setSupplierResults] = useState<{ id: string; name: string }[]>([]);
 
   // -------------------------------------------------------------------------
   // File handling
@@ -279,6 +281,29 @@ export default function InvoiceUpload() {
     setParsedData(prev => ({ ...prev, line_items: prev.line_items.filter((_, idx) => idx !== i) }));
 
   // -------------------------------------------------------------------------
+  // Supplier picker (unmatched OCR vendor) — new vendors go through Vendor Registration
+  // -------------------------------------------------------------------------
+
+  const searchSuppliers = async (q: string) => {
+    setSupplierQuery(q);
+    if (q.trim().length < 2) { setSupplierResults([]); return; }
+    const { data } = await supabase
+      .from("cps_suppliers")
+      .select("id, name")
+      .eq("status", "active")
+      .ilike("name", `%${q.trim()}%`)
+      .order("name")
+      .limit(8);
+    setSupplierResults((data ?? []) as { id: string; name: string }[]);
+  };
+
+  const selectSupplier = (s: { id: string; name: string }) => {
+    setMatchedSupplier({ id: s.id, name: s.name });
+    setSupplierResults([]);
+    setSupplierQuery("");
+  };
+
+  // -------------------------------------------------------------------------
   // Save
   // -------------------------------------------------------------------------
 
@@ -286,33 +311,18 @@ export default function InvoiceUpload() {
     if (!user || !uploadedPath || !file) return;
     if (!parsedData.invoice_number) { toast.error("Invoice number is required"); return; }
     if (parsedData.line_items.length === 0) { toast.error("Add at least one line item"); return; }
+    if (!matchedSupplier) {
+      toast.error("This vendor isn't in CPS. Select an existing supplier, or register it in Vendor Registration first.");
+      return;
+    }
 
     setSaving(true);
     try {
       const now = new Date().toISOString();
 
-      // 1. Match or create supplier
-      let supplierId: string;
-      if (matchedSupplier) {
-        supplierId = matchedSupplier.id;
-      } else {
-        const { data: newSupplier, error: sErr } = await supabase
-          .from("cps_suppliers")
-          .insert({
-            name: parsedData.vendor_name || "Unknown Vendor",
-            gstin: parsedData.vendor_gstin || null,
-            address_text: parsedData.vendor_address || null,
-            phone: parsedData.vendor_phone || null,
-            email: parsedData.vendor_email || null,
-            status: "active",
-            categories: ["General"],
-            regions: ["Pan India"],
-          } as any)
-          .select("id")
-          .single();
-        if (sErr || !newSupplier) throw new Error(sErr?.message || "Failed to create supplier");
-        supplierId = newSupplier.id;
-      }
+      // 1. Supplier must already exist in CPS (matched by GSTIN or picked manually).
+      // Inline vendor creation was removed — new vendors go through Vendor Registration.
+      const supplierId = matchedSupplier.id;
 
       // 2. Duplicate invoice check
       const { data: existingInvoice } = await supabase
@@ -563,7 +573,7 @@ export default function InvoiceUpload() {
                     ) : (
                       <Badge className="bg-amber-100 text-amber-800 border-amber-200 font-normal">
                         <AlertCircle className="h-3 w-3 mr-1" />
-                        New Vendor — will be added
+                        Not in CPS — select or register
                       </Badge>
                     )
                   )}
@@ -587,6 +597,38 @@ export default function InvoiceUpload() {
                     />
                   </div>
                 ))}
+                {matchedSupplier === null && (
+                  <div className="col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+                    <p className="text-xs text-amber-800">
+                      This vendor isn't in CPS — register it in Vendor Registration first, or select an existing supplier below.
+                    </p>
+                    <div className="relative">
+                      <Input
+                        value={supplierQuery}
+                        onChange={e => searchSuppliers(e.target.value)}
+                        placeholder={`Search existing suppliers${parsedData.vendor_name ? ` (OCR: ${parsedData.vendor_name})` : ""}…`}
+                        className="h-8 text-sm"
+                      />
+                      {supplierResults.length > 0 && (
+                        <div className="absolute z-10 mt-1 w-full rounded-md border border-border bg-popover shadow-md max-h-48 overflow-y-auto">
+                          {supplierResults.map(s => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => selectSupplier(s)}
+                              className="block w-full text-left px-3 py-2 text-sm text-foreground hover:bg-accent"
+                            >
+                              {s.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => navigate("/vendor-registration")} className="h-8 text-xs gap-1">
+                      <Plus className="h-3 w-3" /> Register a new vendor
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
 

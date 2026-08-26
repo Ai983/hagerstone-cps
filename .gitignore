@@ -29,3 +29,16 @@ dist-ssr
 
 # Raw BOQ source files (not committed, kept locally for reference)
 all sites boqs/
+
+# Raw pitch screenshots (kept locally; the report base64-inlines them)
+public/pitch-asset/
+
+# Local pitch/report artifacts and exports (not part of the app)
+CPS_Pitch_Report*.html
+rfq-ready-vendors.html
+cps portfolio/
+cps portfolio.zip
+
+# Supabase CLI version cache
+supabase/.temp/
+.env*

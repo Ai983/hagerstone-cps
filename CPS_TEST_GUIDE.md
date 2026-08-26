@@ -64,15 +64,6 @@ Click every sidebar link in order and verify the page loads:
 
 ---
 
-### Test 1.4 — Public Vendor Registration Page
-1. Open a new tab: http://localhost:5173/vendor/register
-2. Should load WITHOUT being redirected to login
-
-✅ PASS if: Registration form loads with Hagerstone header, no login required
-❌ FAIL if: Redirects to /login
-
----
-
 ## MODULE 2 — SUPPLIER MASTER
 
 ### Test 2.1 — View Suppliers
@@ -542,49 +533,57 @@ Click "Confirm GRN"
 
 ---
 
-## MODULE 10 — VENDOR REGISTRATION (Public)
+## MODULE 10 — VENDOR REGISTRATION (single portal)
 
-### Test 10.1 — Submit Vendor Registration
-Open http://localhost:5173/vendor/register (new tab, not logged in):
-1. Fill Company Name: "New Fire Systems Pvt Ltd"
-2. GSTIN: "07NEWFS0001A1Z0"
-3. Contact Person: "Rajesh Kumar"
-4. Email: "rajesh@newfiresystems.com"
-5. Phone: "+91 9700000001"
-6. City: "Delhi", State: "Delhi"
-7. Check categories: Fire Fighting, MEP
-8. Check regions: Delhi NCR, Pan India
-9. Business Description: "Specialised in fire fighting systems and MEP works since 2010"
-10. Check the declaration checkbox
-11. Click "Submit Registration"
+> The public self-registration page was deleted. Registration is internal, with
+> an optional 7-day token link sent to a specific vendor.
 
-✅ PASS if: Success screen shows "Registration Submitted Successfully!" with reference
-❌ FAIL if: Error or form doesn't submit
+### Test 10.1 — Registration is the only door
+1. Open `/suppliers`, `/rfqs`, `/quotes`, `/site-quotes`, `/invoices/upload`,
+   `/work-orders`, `/vendor-scout`.
+2. Confirm none offers an "add new vendor" free-text path. (Plan 3 — expect
+   this to still fail until then.)
 
 ---
 
-### Test 10.2 — Check Status
-Click "Check Status" on the success screen OR go to:
-http://localhost:5173/vendor/status?email=rajesh@newfiresystems.com
-
-✅ PASS if: Shows "⏳ Under Review" with company details
-❌ FAIL if: Error or blank page
+### Test 10.2 — Existing vendor auto-fill
+1. Open the registration portal, choose "existing vendor", pick a vendor that
+   already has a GSTIN and phone.
+2. Expected: name, GSTIN, address, phone and any bank fields are pre-filled.
 
 ---
 
-### Test 10.3 — Review Registration (Procurement Head)
-Back in the main app at /suppliers:
-1. Look for "Pending Registrations" tab at the top
-2. Should show "Pending Registrations (1)" with New Fire Systems
+### Test 10.3 — Checklist follows vendor type
+1. Choose type "Company". Expected 8 mandatory documents.
+2. Switch to "Individual / labour contractor". Expected 4.
 
-Click "Approve":
-1. Confirmation dialog appears
-2. Confirm approval
+---
 
-✅ PASS if: Toast "Vendor approved and added to supplier master"
-✅ PASS if: Supplier count goes from 15 to 16 in All Suppliers tab
-✅ PASS if: Going back to /vendor/status shows "✅ Approved"
-❌ FAIL if: Error or count not updated
+### Test 10.4 — Premises photo needs a location
+1. Upload a premises photo with location capture blocked/denied.
+2. Expected: still listed as missing. Add a location; it clears.
+
+---
+
+### Test 10.5 — Photo with vendor is waivable, premises photo is not
+1. Try to waive the premises photo. Expected: no waiver option.
+2. Waive "photo with vendor" with a written reason. Expected: accepted.
+
+---
+
+### Test 10.6 — Maker-checker
+1. Fill and submit a registration as `admin@hagerstone.com`.
+2. Approve it as the same login.
+3. Expected: refused — "You filled this registration and cannot also approve it."
+
+---
+
+### Test 10.7 — Vendor token link
+1. Generate a link. Confirm it expires in 7 days.
+2. Open it in a private window. Expected: only that vendor's details; no
+   premises photo, no internal checks, no other vendor.
+3. Submit it. Reopen the same link.
+4. Expected: "This form has already been submitted."
 
 ---
 
@@ -666,7 +665,6 @@ Copy this table and fill in results:
 | 1.1 Login | | |
 | 1.2 Dashboard KPIs | | |
 | 1.3 Sidebar Navigation | | |
-| 1.4 Public Vendor Register | | |
 | 2.1 View Suppliers | | |
 | 2.2 Search Suppliers | | |
 | 2.3 Add Supplier | | |
@@ -698,9 +696,13 @@ Copy this table and fill in results:
 | 9.3 In Transit Update | | |
 | 9.4 Mark Delivered | | |
 | 9.5 Confirm GRN | | |
-| 10.1 Vendor Registration | | |
-| 10.2 Check Status | | |
-| 10.3 Review Registration | | |
+| 10.1 Registration Is Only Door | | |
+| 10.2 Existing Vendor Auto-fill | | |
+| 10.3 Checklist Follows Vendor Type | | |
+| 10.4 Premises Photo Needs Location | | |
+| 10.5 Photo Waiver Rules | | |
+| 10.6 Maker-checker | | |
+| 10.7 Vendor Token Link | | |
 | 11.1 Audit Log | | |
 | 12.1 Dashboard Updates | | |
 | 12.2 Sign Out | | |
