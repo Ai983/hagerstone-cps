@@ -23,6 +23,7 @@ export const VENDOR_TYPE_LABELS: Record<VendorType, string> = {
 };
 
 export const DOCUMENT_LABELS: Record<string, string> = {
+  signed_policy: "Signed HSIPL Purchase Policy (v1.1)",
   pan_card: "PAN card",
   bank_proof: "Bank proof (cancelled cheque or bank letter)",
   gst_certificate: "GST certificate",
@@ -36,6 +37,7 @@ export const DOCUMENT_LABELS: Record<string, string> = {
 
 export const CHECK_LABELS: Record<string, string> = {
   docs_present_legible: "All documents present and legible",
+  policy_signed: "HSIPL Purchase Policy signed by the vendor",
   gst_filings_timely: "Vendor's GST filings are timely",
   supply_credibility: "Vendor is credible to supply the material",
   no_litigation: "No litigation against the vendor",

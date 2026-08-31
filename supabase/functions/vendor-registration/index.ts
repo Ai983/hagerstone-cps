@@ -29,7 +29,7 @@ const VENDOR_FIELDS = [
 
 /** Documents the vendor may upload. Diligence evidence is NOT in this list. */
 const VENDOR_DOC_TYPES = [
-  "pan_card", "bank_proof", "gst_certificate",
+  "pan_card", "bank_proof", "gst_certificate", "signed_policy",
   "itr_last_year", "itr_prior_year", "msme_udyam", "other_proof",
 ];
 

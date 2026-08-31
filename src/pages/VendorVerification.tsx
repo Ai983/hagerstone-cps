@@ -191,7 +191,7 @@ export default function VendorVerification() {
               </Button>
               <span className="text-xs text-muted-foreground">
                 {checks.filter((c) => c.status !== "pass").length === 0
-                  ? "All five signed"
+                  ? "All checks signed"
                   : `${checks.filter((c) => c.status !== "pass").length} check(s) unsigned`}
               </span>
             </div>

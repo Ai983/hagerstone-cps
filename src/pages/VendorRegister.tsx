@@ -19,7 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, Loader2, Upload, XCircle } from "lucide-react";
+import { CheckCircle2, Download, Loader2, Upload, XCircle } from "lucide-react";
 import { DOCUMENT_LABELS, VENDOR_TYPE_LABELS } from "@/lib/vendorRegistration";
 import {
   type PublicVendorField, type VendorTokenPrefill,
@@ -219,7 +219,7 @@ export default function VendorRegister() {
         <Card><CardContent className="pt-6 space-y-4">
           <div className="flex items-center gap-3 flex-wrap">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Delivery &amp; billing terms
+              HSIPL Purchase Policy
             </h2>
             {terms.vendor_registration_terms_version && (
               <Badge variant="outline">version {terms.vendor_registration_terms_version}</Badge>
@@ -228,6 +228,10 @@ export default function VendorRegister() {
           <pre className="whitespace-pre-wrap text-sm text-foreground bg-muted/40 rounded-lg p-3 font-sans">
             {terms.vendor_registration_terms_text ?? ""}
           </pre>
+          <a href="/HSIPL-Purchase-Policy-v1.1.pdf" target="_blank" rel="noreferrer"
+             className="inline-flex items-center gap-1.5 text-sm text-primary underline">
+            <Download className="h-4 w-4" />View / print the full policy (v1.1), sign it, and upload it below
+          </a>
           <div className="grid gap-1.5 max-w-sm">
             <Label className="text-xs text-muted-foreground">
               Type your name to accept these terms on behalf of the vendor

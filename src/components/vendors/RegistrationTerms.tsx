@@ -15,7 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Send } from "lucide-react";
+import { Download, Loader2, Send } from "lucide-react";
 import {
   type RegistrationSnapshot, type SupplierRow,
   acceptTermsInternally, fetchTerms, submitRegistration,
@@ -63,7 +63,7 @@ export default function RegistrationTerms({
       <CardContent className="pt-6 space-y-4">
         <div className="flex items-center gap-3 flex-wrap">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Delivery &amp; billing terms
+            HSIPL Purchase Policy
           </h2>
           {terms && <Badge variant="outline">version {terms.version}</Badge>}
         </div>
@@ -71,6 +71,18 @@ export default function RegistrationTerms({
         <pre className="whitespace-pre-wrap text-sm text-foreground bg-muted/40 rounded-lg p-3 font-sans">
           {terms?.text ?? "Loading…"}
         </pre>
+
+        <div className="flex items-center gap-3 flex-wrap -mt-1">
+          <a href="/HSIPL-Purchase-Policy-v1.1.pdf" target="_blank" rel="noreferrer">
+            <Button variant="outline" size="sm">
+              <Download className="h-4 w-4 mr-1.5" />View / print the policy (v1.1)
+            </Button>
+          </a>
+          <span className="text-xs text-muted-foreground">
+            Download it, get the vendor to sign it, then upload the signed copy under
+            <b> &ldquo;Signed HSIPL Purchase Policy&rdquo; </b> in the Documents section above.
+          </span>
+        </div>
 
         {snapshot.terms_accepted ? (
           <p className="text-sm text-muted-foreground">
