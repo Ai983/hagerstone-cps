@@ -59,8 +59,11 @@ export function AppSidebar() {
   const [collapsed, setCollapsed] = useState(false);
 
   const isEmployee = user?.role === 'requestor' || user?.role === 'site_receiver';
+  const isVendorRegistrar = user?.role === 'vendor_registrar';
   const visible = isEmployee
     ? EMPLOYEE_NAV
+    : isVendorRegistrar
+    ? NAV.filter(n => n.url === '/dashboard' || n.url === '/vendor-registration')
     : NAV.filter(n => n.roles.includes("all") || n.roles.includes(user?.role ?? ""));
 
   return (

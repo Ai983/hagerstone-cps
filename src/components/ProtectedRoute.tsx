@@ -10,6 +10,11 @@ const adminOnlyRoutes = ['/rfqs', '/quotes', '/comparison', '/purchase-orders', 
 // than a blocklist, because everything outside its own surface is off-limits.
 const coordinatorRoutes = ['/dashboard', '/schedule', '/tasks', '/my-work', '/stock', '/stock-overview', '/requisitions'];
 
+// A vendor registrar exists only to onboard vendors. Allowlisted to the
+// registration portal (+ dashboard) and nothing else — approval is the
+// verifier's job (maker-checker), so /vendor-verification is intentionally out.
+const vendorRegistrarRoutes = ['/dashboard', '/vendor-registration'];
+
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
   const location = useLocation();
@@ -21,6 +26,9 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ childr
   }
   if (user.role === 'project_coordinator' && !coordinatorRoutes.some(r => location.pathname.startsWith(r))) {
     return <Navigate to="/dashboard" replace />;
+  }
+  if (user.role === 'vendor_registrar' && !vendorRegistrarRoutes.some(r => location.pathname.startsWith(r))) {
+    return <Navigate to="/vendor-registration" replace />;
   }
   return <>{children}</>;
 };

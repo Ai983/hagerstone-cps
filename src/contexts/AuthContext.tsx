@@ -1,7 +1,7 @@
 import React, { createContext, use, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "it_head" | "management" | "finance" | "site_receiver" | "auditor" | "accounts_team" | "design_team" | "project_coordinator";
+export type CpsRole = "requestor" | "procurement_executive" | "procurement_head" | "it_head" | "management" | "finance" | "site_receiver" | "auditor" | "accounts_team" | "design_team" | "project_coordinator" | "vendor_registrar";
 
 export interface CpsUser {
   id: string; email: string; name: string; role: CpsRole;
@@ -138,7 +138,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       canCreateRFQ: role === "procurement_executive" || role === "procurement_head" || role === "it_head",
       canViewAudit: role === "auditor" || role === "procurement_head" || role === "it_head" || role === "management" || role === "procurement_executive" || role === "design_team",
       canViewPrices: role !== "requestor" && role !== "site_receiver",
-      canManageSuppliers: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
+      canManageSuppliers: role === "procurement_head" || role === "it_head" || role === "procurement_executive" || role === "vendor_registrar",
       // Stock permissions — anyone with a role can view. Issue is for site team (receiver/requestor) + procurement.
       // Adjust (corrections, opening stock, thresholds) is procurement-only.
       canViewStock: !!role,
