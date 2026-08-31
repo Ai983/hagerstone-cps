@@ -100,7 +100,9 @@ export default function RegistrationStartPanel({
               {!loading && rows.length === 0 && (
                 <div className="p-4 text-sm text-muted-foreground">No vendors found.</div>
               )}
-              {rows.map((r) => (
+              {[...rows].sort((a, b) =>
+                 Number(b.registration_status === "draft") - Number(a.registration_status === "draft"))
+                .map((r) => (
                 <button key={r.id} type="button" disabled={busy}
                         onClick={() => begin(r.id)}
                         className="w-full text-left p-3 hover:bg-muted/40 flex items-center gap-3">
@@ -111,13 +113,14 @@ export default function RegistrationStartPanel({
                     </div>
                   </div>
                   <Badge variant={r.registration_status === "draft" ? "secondary" : "outline"}>
-                    {r.registration_status}
+                    {r.registration_status === "draft" ? "draft — continue" : r.registration_status}
                   </Badge>
                 </button>
               ))}
             </div>
             <p className="text-xs text-muted-foreground">
               Picking a vendor fills the form with everything CPS already holds for them.
+              Rows marked <b>draft</b> are unfinished registrations — pick one to continue where you left off.
             </p>
           </div>
         )}

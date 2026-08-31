@@ -11,13 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircle, ArrowLeft, ShieldCheck } from "lucide-react";
+import { AlertCircle, ArrowLeft, Save, ShieldCheck } from "lucide-react";
 import RegistrationStartPanel from "@/components/vendors/RegistrationStartPanel";
 import RegistrationIdentityForm from "@/components/vendors/RegistrationIdentityForm";
 import RegistrationContactsForm from "@/components/vendors/RegistrationContactsForm";
 import RegistrationBankForm from "@/components/vendors/RegistrationBankForm";
 import RegistrationDocuments from "@/components/vendors/RegistrationDocuments";
 import RegistrationDiligence from "@/components/vendors/RegistrationDiligence";
+import RegistrationGstFilings from "@/components/vendors/RegistrationGstFilings";
 import RegistrationTerms from "@/components/vendors/RegistrationTerms";
 import OfflineFormButton from "@/components/vendors/OfflineFormButton";
 import RegistrationLinkButton from "@/components/vendors/RegistrationLinkButton";
@@ -58,6 +59,16 @@ export default function VendorRegistration() {
     if (supplierId) void refresh(supplierId);
   }, [supplierId, refresh]);
 
+  // Everything already blur-saves as it is typed and documents upload on pick,
+  // so a draft is always persisted. This button just flushes the field that
+  // still has focus, reassures the user, and returns to the front door — from
+  // which the same vendor can be reopened to continue.
+  const saveAndExit = useCallback(() => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    toast.success("Saved as draft. Open Vendor Registration and pick this vendor to continue.");
+    setTimeout(() => { setSupplierId(null); setSupplier(null); setSnapshot(null); }, 200);
+  }, []);
+
   if (!canManageSuppliers) {
     return (
       <div className="p-6">
@@ -87,6 +98,11 @@ export default function VendorRegistration() {
             )}
             {(supplier.registration_status === "draft" || supplier.registration_status === "rejected") && (
               <RegistrationLinkButton supplierId={supplier.id} />
+            )}
+            {supplier.registration_status === "draft" && (
+              <Button size="sm" onClick={saveAndExit}>
+                <Save className="h-4 w-4 mr-1" />Save &amp; exit
+              </Button>
             )}
             <Button variant="outline" size="sm"
                     onClick={() => { setSupplierId(null); setSupplier(null); setSnapshot(null); }}>
@@ -140,6 +156,13 @@ export default function VendorRegistration() {
               supplierId={supplier.id}
               vendorType={supplier.vendor_type}
               missing={snapshot.missing_documents}
+              onChanged={onChanged}
+              disabled={supplier.registration_status !== "draft"} />
+          )}
+          {supplier.vendor_type !== "individual" && (
+            <RegistrationGstFilings
+              supplierId={supplier.id}
+              gstin={supplier.gstin}
               onChanged={onChanged}
               disabled={supplier.registration_status !== "draft"} />
           )}

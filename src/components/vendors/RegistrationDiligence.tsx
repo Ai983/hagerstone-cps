@@ -117,7 +117,7 @@ export default function RegistrationDiligence({
           Site visit evidence — internal
         </h2>
         <p className="text-xs text-muted-foreground -mt-2">
-          Never shown to the vendor and never part of the vendor's link.
+          Optional for now. Never shown to the vendor and never part of the vendor's link.
         </p>
 
         {/* premises photo */}
@@ -126,7 +126,7 @@ export default function RegistrationDiligence({
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-foreground">{DOCUMENT_LABELS.premises_photo}</div>
               <div className="text-xs text-muted-foreground">
-                {!premises?.file_url ? "Mandatory — cannot be waived"
+                {!premises?.file_url ? "Optional"
                   : premises.geo_lat == null ? "Attached, but no location yet"
                   : `${premises.geo_lat}, ${premises.geo_lng} · ${premises.geo_source === "on_site" ? "captured on site" : `third-party — ${premises.geo_note ?? ""}`}`}
               </div>
@@ -157,7 +157,7 @@ export default function RegistrationDiligence({
             <div className="text-sm font-medium text-foreground">{DOCUMENT_LABELS.photo_with_vendor}</div>
             <div className="text-xs text-muted-foreground">
               {withVendor?.waiver_reason ? `Waiver requested — ${withVendor.waiver_reason}`
-                : withVendor?.file_url ? "Attached" : "Mandatory — waivable with a written reason"}
+                : withVendor?.file_url ? "Attached" : "Optional"}
             </div>
           </div>
           {withVendor?.file_url && (

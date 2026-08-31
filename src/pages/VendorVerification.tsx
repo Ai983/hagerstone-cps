@@ -21,13 +21,20 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Check, Loader2, ShieldCheck, X } from "lucide-react";
 import {
-  type PendingVerificationRow, type RegistrationCheck, type RegistrationSnapshot,
+  type GstEvaluation, type PendingVerificationRow, type RegistrationCheck, type RegistrationSnapshot,
   CHECK_LABELS, VENDOR_TYPE_LABELS,
   approveRegistration, fetchChecks, fetchPendingVerification,
-  fetchRegistrationStatus, rejectRegistration, saveCheck,
+  fetchLatestGstEvaluation, fetchRegistrationStatus, rejectRegistration, saveCheck,
 } from "@/lib/vendorRegistration";
 
 type Row = PendingVerificationRow;
+
+const GST_VERDICT: Record<string, { label: string; cls: string }> = {
+  compliant:     { label: "Filings look in order", cls: "bg-emerald-500/15 text-emerald-700 border border-emerald-500/30" },
+  attention:     { label: "Needs a closer look", cls: "bg-amber-500/15 text-amber-700 border border-amber-500/30" },
+  non_compliant: { label: "Problem found", cls: "bg-destructive/15 text-destructive border border-destructive/30" },
+  unreadable:    { label: "Could not read the screenshots", cls: "bg-muted text-muted-foreground border border-border" },
+};
 
 export default function VendorVerification() {
   const { user, canManageSuppliers } = useAuth();
@@ -35,6 +42,7 @@ export default function VendorVerification() {
   const [selected, setSelected] = useState<Row | null>(null);
   const [checks, setChecks] = useState<RegistrationCheck[]>([]);
   const [snapshot, setSnapshot] = useState<RegistrationSnapshot | null>(null);
+  const [gstEval, setGstEval] = useState<GstEvaluation | null>(null);
   const [busy, setBusy] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -48,9 +56,12 @@ export default function VendorVerification() {
   const open = async (row: Row) => {
     setSelected(row);
     try {
-      const [c, s] = await Promise.all([fetchChecks(row.id), fetchRegistrationStatus(row.id)]);
+      const [c, s, g] = await Promise.all([
+        fetchChecks(row.id), fetchRegistrationStatus(row.id), fetchLatestGstEvaluation(row.id),
+      ]);
       setChecks(c);
       setSnapshot(s.ok ? s.snapshot : null);
+      setGstEval(g);
     } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Could not load the registration"); }
   };
 
@@ -157,6 +168,19 @@ export default function VendorVerification() {
                 </div>
               ))}
             </div>
+
+            {gstEval && (
+              <div className={`rounded-lg p-3 space-y-2 text-sm ${GST_VERDICT[gstEval.verdict]?.cls ?? ""}`}>
+                <div className="flex items-center gap-2 font-semibold">
+                  GST filing check: {GST_VERDICT[gstEval.verdict]?.label ?? gstEval.verdict}
+                  {gstEval.gstin_match === false && <Badge variant="destructive">GSTIN mismatch</Badge>}
+                </div>
+                <p>{gstEval.summary}</p>
+                <p className="text-[11px] opacity-80">
+                  Agent suggestion — the "GST filings are timely" check above reflects this; override if needed.
+                </p>
+              </div>
+            )}
 
             <div className="flex items-center gap-3 flex-wrap border-t border-border pt-4">
               <Button disabled={busy} onClick={approve}>

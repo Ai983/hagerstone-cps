@@ -437,3 +437,69 @@ export async function fetchUnregisteredTradingVendors(): Promise<UnregisteredTra
   if (error) throw error;
   return (data ?? []) as UnregisteredTradingVendor[];
 }
+
+/* ---- GST filing compliance ------------------------------------------------
+ * Screenshots are stored as cps_supplier_documents under gst_ss_* types (not in
+ * the rules table, so they never gate submit). The vendor-gst-eval edge function
+ * reads them and writes a verdict to cps_supplier_gst_evaluations. */
+
+export const GST_SS_TYPES = ["gst_ss_profile", "gst_ss_fy2425", "gst_ss_fy2526", "gst_ss_fy2627"] as const;
+export type GstScreenshotType = (typeof GST_SS_TYPES)[number];
+
+export const GST_SS_LABELS: Record<GstScreenshotType, string> = {
+  gst_ss_profile: "Business details (the search-result page)",
+  gst_ss_fy2425:  "Filing table — 2024-25",
+  gst_ss_fy2526:  "Filing table — 2025-26",
+  gst_ss_fy2627:  "Filing table — 2026-27",
+};
+
+export type GstEvaluation = {
+  id: string;
+  verdict: "compliant" | "attention" | "non_compliant" | "unreadable";
+  risk_level: "low" | "medium" | "high";
+  gstin_match: boolean | null;
+  summary: string | null;
+  details: Record<string, unknown>;
+  evaluated_at: string;
+};
+
+export async function fetchGstScreenshots(id: string): Promise<SupplierDocument[]> {
+  const { data, error } = await supabase
+    .from("cps_supplier_documents")
+    .select("id,document_type,label,file_url,document_number,geo_lat,geo_lng,geo_source,geo_note,waiver_reason,waiver_accepted_at,uploaded_at")
+    .eq("supplier_id", id)
+    .in("document_type", GST_SS_TYPES as unknown as string[])
+    .order("uploaded_at");
+  if (error) throw error;
+  return (data ?? []) as unknown as SupplierDocument[];
+}
+
+export async function fetchLatestGstEvaluation(supplierId: string): Promise<GstEvaluation | null> {
+  const { data, error } = await supabase
+    .from("cps_supplier_gst_evaluations")
+    .select("id,verdict,risk_level,gstin_match,summary,details,evaluated_at")
+    .eq("supplier_id", supplierId)
+    .order("evaluated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as unknown as GstEvaluation) ?? null;
+}
+
+/** Run the agent over the uploaded GST screenshots. Surfaces the function's
+ *  own error text (e.g. "upload the business-details screenshot") rather than a
+ *  generic 500. */
+export async function runGstEvaluation(supplierId: string): Promise<GstEvaluation> {
+  const { data, error } = await supabase.functions.invoke("vendor-gst-eval", { body: { supplierId } });
+  if (error) {
+    let msg = error.message;
+    try {
+      const ctx = (error as { context?: Response }).context;
+      const body = ctx ? await ctx.json() : null;
+      if (body?.error) msg = body.error;
+    } catch { /* keep the generic message */ }
+    throw new Error(msg);
+  }
+  if ((data as { error?: string })?.error) throw new Error((data as { error: string }).error);
+  return (data as { evaluation: GstEvaluation }).evaluation;
+}
