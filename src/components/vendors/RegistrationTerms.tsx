@@ -84,6 +84,14 @@ export default function RegistrationTerms({
           </span>
         </div>
 
+        {supplier.terms_accepted_at && !snapshot.terms_accepted && (
+          <div className="text-sm rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-800 p-3">
+            <b>Policy updated to version {terms?.version ?? "1.1"}.</b> This vendor's earlier
+            acceptance{supplier.terms_version ? ` (version ${supplier.terms_version})` : ""} is no longer valid.
+            Please share the new policy, get it re-signed, upload the signed copy, and record acceptance again below.
+          </div>
+        )}
+
         {snapshot.terms_accepted ? (
           <p className="text-sm text-muted-foreground">
             Accepted by <b className="text-foreground">{supplier.terms_accepted_by_name}</b>
