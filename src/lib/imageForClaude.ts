@@ -1,6 +1,12 @@
-// Shared file→Claude-content-block encoding for every document-parse flow.
+// Shared file→content-block encoding for every document-parse flow.
 //
-// Anthropic's vision API rejects an image (HTTP 400) when it is larger than 5 MB
+// The block shape produced here is the Anthropic message shape. That is now an
+// INTERNAL CONTRACT, not a provider choice: since 2026-09-01 CPS runs on OpenAI,
+// and supabase/functions/claude-proxy translates these blocks into OpenAI
+// Responses parts on the way out. Keeping the shape is what let every parse flow
+// change provider without an edit — don't "modernise" it in one call site only.
+//
+// A vision API rejects an image (HTTP 400) when it is larger than 5 MB
 // or has a side longer than 8000 px, and internally downsamples anything whose
 // long edge exceeds ~1568 px regardless. Phone-camera photos of paper bills
 // routinely blow past those limits (3–8 MB, 4000 px+). Sending them raw also
@@ -68,8 +74,9 @@ export const downscaleImageToJpegBase64 = (
     img.src = url;
   });
 
-/** Anthropic content block for one uploaded file/blob: PDF → document (as-is),
- *  anything else → downscaled JPEG image block. */
+/** Content block for one uploaded file/blob: PDF → document (as-is),
+ *  anything else → downscaled JPEG image block. The proxy maps `document` to an
+ *  OpenAI input_file and `image` to an input_image. */
 export const fileToClaudeBlock = async (file: Blob) => {
   if (file.type === "application/pdf") {
     const base64 = await fileToBase64(file);

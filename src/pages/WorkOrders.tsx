@@ -498,8 +498,8 @@ export default function WorkOrders() {
   };
 
   // Convert an uploaded Excel file (.xlsx / .xls) into a plain-text CSV-like dump
-  // of every sheet. This is what we send to Claude when the rate list is a spreadsheet
-  // (Anthropic doesn't accept Excel directly as a document/image content block).
+  // of every sheet. This is what we send to the model when the rate list is a spreadsheet
+  // (the API doesn't accept Excel directly as a document/image content block).
   const excelToText = async (file: File): Promise<string> => {
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, { type: "array" });
@@ -514,7 +514,7 @@ export default function WorkOrders() {
     return out.join("\n\n");
   };
 
-  // Send the uploaded vendor rate list (PDF / image / Excel) to Claude and get back
+  // Send the uploaded vendor rate list (PDF / image / Excel) to the model and get back
   // structured line items, then pre-populate the line items table. User can still edit.
   const parseRateListWithAi = async () => {
     if (!w_rateListFile) {
@@ -559,7 +559,7 @@ export default function WorkOrders() {
 
       const { data, error } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-haiku-4-5-20251001",
+          model: "gpt-5.6-luna",
           max_tokens: 50000,
           messages: [
             {

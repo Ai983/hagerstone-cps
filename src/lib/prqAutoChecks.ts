@@ -72,7 +72,7 @@ export async function runAutoChecks(opts: {
   try {
     const block = await fileToClaudeBlock(file);
     const res = await callClaude({
-      model: "claude-haiku-4-5-20251001",
+      model: "gpt-5.6-luna",
       max_tokens: 1200,
       messages: [{ role: "user", content: [block, { type: "text", text: PROMPT }] }],
     });

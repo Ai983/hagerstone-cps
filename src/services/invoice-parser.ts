@@ -110,7 +110,7 @@ export async function parseInvoiceWithClaude(
   } else if (isImage) {
     // Downscale to ≤1568px JPEG before sending — callers hand us raw base64
     // (e.g. Google Drive downloads), which for scans/photos is multi-MB.
-    // Claude discards pixels beyond 1568px anyway; we'd just pay for them.
+    // The model discards pixels beyond 1568px anyway; we'd just pay for them.
     const { downscaleImageToJpegBase64 } = await import("@/lib/imageForClaude");
     const blob = await (await fetch(`data:${mimeType};base64,${base64Data}`)).blob();
     const { data: jpegData, mediaType } = await downscaleImageToJpegBase64(blob);
@@ -134,13 +134,13 @@ export async function parseInvoiceWithClaude(
   const { supabase } = await import("@/integrations/supabase/client");
   const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
     body: {
-      model: "claude-haiku-4-5-20251001",
+      model: "gpt-5.6-luna",
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content }],
     },
   });
-  if (fnError) throw new Error("Claude proxy error: " + fnError.message);
+  if (fnError) throw new Error("AI proxy error: " + fnError.message);
 
   const text =
     ((data?.content ?? []) as Array<{ type: string; text?: string }>)
@@ -153,6 +153,6 @@ export async function parseInvoiceWithClaude(
   try {
     return JSON.parse(cleaned) as ParsedInvoice;
   } catch {
-    throw new Error(`Failed to parse Claude response as JSON: ${cleaned.slice(0, 200)}`);
+    throw new Error(`Failed to parse AI response as JSON: ${cleaned.slice(0, 200)}`);
   }
 }

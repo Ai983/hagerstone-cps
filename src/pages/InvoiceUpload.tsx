@@ -56,7 +56,7 @@ type Stage = "upload" | "parsing" | "review";
 
 const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/jpg"];
 const MAX_BYTES = 10 * 1024 * 1024;
-const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
+const CLAUDE_MODEL = "gpt-5.6-luna";
 
 // ---------------------------------------------------------------------------
 // Utility
@@ -135,7 +135,7 @@ export default function InvoiceUpload() {
   }
 
   // -------------------------------------------------------------------------
-  // Parse via Claude
+  // Parse via the AI proxy
   // -------------------------------------------------------------------------
 
   const parseInvoice = async (selectedFile: File) => {
@@ -206,15 +206,15 @@ export default function InvoiceUpload() {
         },
       });
 
-      if (fnError) throw new Error(`Claude proxy error: ${fnError.message}`);
+      if (fnError) throw new Error(`AI proxy error: ${fnError.message}`);
 
       const rawText = result?.content?.[0]?.text ?? "";
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("Claude did not return valid JSON");
+      if (!jsonMatch) throw new Error("AI did not return valid JSON");
 
       const parsed: ParsedInvoice = JSON.parse(jsonMatch[0]);
 
-      // Deduplicate line items — same description + rate = likely duplicate row from Claude
+      // Deduplicate line items — same description + rate = likely duplicate row from the model
       const deduped: ParsedLineItem[] = [];
       const seenItems = new Set<string>();
       for (const item of parsed.line_items ?? []) {
@@ -539,7 +539,7 @@ export default function InvoiceUpload() {
       {stage === "parsing" && (
         <div className="flex flex-col items-center justify-center py-24 gap-4">
           <Loader2 className="h-10 w-10 animate-spin text-primary" />
-          <p className="text-lg font-medium text-foreground">Analysing invoice with Claude AI…</p>
+          <p className="text-lg font-medium text-foreground">Analysing invoice with AI…</p>
           <p className="text-sm text-muted-foreground">Extracting vendor, items, and rates</p>
         </div>
       )}

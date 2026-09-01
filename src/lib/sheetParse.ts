@@ -112,7 +112,7 @@ export async function parsePaymentSheetFile(file: File): Promise<ParsedSheet> {
 
   const { data, error } = await supabase.functions.invoke("claude-proxy", {
     body: {
-      model: "claude-haiku-4-5-20251001",
+      model: "gpt-5.6-luna",
       max_tokens: 8000,
       messages: [{ role: "user", content }],
     },

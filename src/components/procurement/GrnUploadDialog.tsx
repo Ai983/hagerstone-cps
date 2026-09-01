@@ -69,9 +69,9 @@ export default function GrnUploadDialog({
       // Downscaled to ≤1568px JPEG — GRN photos from site phones are multi-MB.
       const imageBlock = await fileToClaudeBlock(file);
 
-      // Call Claude proxy to extract GRN details
+      // Call the AI proxy to extract GRN details
       const result = await callClaude({
-        model: "claude-haiku-4-5-20251001",
+        model: "gpt-5.6-luna",
         max_tokens: 800,
         messages: [
           {

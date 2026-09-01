@@ -1133,23 +1133,23 @@ Rules:
 - CRITICAL JSON RULE: Indian plumbing/electrical quotes use inch marks (") in item names like 1" CPVC Pipe, 3/4" Elbow. In your JSON output you MUST escape them as \" (e.g. "1\" CPVC Pipe") OR replace with 'in' (e.g. "1in CPVC Pipe"). Never output a bare " inside a JSON string value — it will break parsing.`,
       });
 
-      // Step 5: Call Claude API via Edge Function (server-side key)
+      // Step 5: Call the AI API via Edge Function (server-side key)
       const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-haiku-4-5-20251001",
+          model: "gpt-5.6-luna",
           max_tokens: 6000,
           messages: [{ role: "user", content }],
         },
       });
-      if (fnError) throw new Error("Claude proxy error: " + fnError.message);
-      if (data?.error) throw new Error("Claude API error: " + data.error);
+      if (fnError) throw new Error("AI proxy error: " + fnError.message);
+      if (data?.error) throw new Error("AI error: " + data.error);
 
       const text = data?.content?.[0]?.text ?? "";
       const clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
       try {
         return JSON.parse(clean);
       } catch {
-        // Repair unescaped inch marks that Claude may have missed: e.g. 1" CPVC → 1in CPVC
+        // Repair unescaped inch marks that the model may have missed: e.g. 1" CPVC → 1in CPVC
         const repaired = clean.replace(/(\d)\s*"(\s*[A-Za-z(])/g, '$1in$2');
         return JSON.parse(repaired);
       }
@@ -2398,7 +2398,7 @@ Rules:
                   {aiParsing && (
                     <div className="flex flex-col items-center justify-center py-12 gap-3">
                       <Loader2 className="h-10 w-10 animate-spin text-primary" />
-                      <p className="text-sm text-muted-foreground">Claude is reading the document…</p>
+                      <p className="text-sm text-muted-foreground">AI is reading the document…</p>
                     </div>
                   )}
 

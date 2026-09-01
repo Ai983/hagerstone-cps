@@ -320,7 +320,7 @@ export default function BulkInvoiceIngestion() {
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Selected files</CardTitle>
-            <CardDescription>Review file list, then run Claude extraction.</CardDescription>
+            <CardDescription>Review file list, then run AI extraction.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-md border overflow-hidden">
@@ -367,7 +367,7 @@ export default function BulkInvoiceIngestion() {
             {isParsing && (
               <div className="space-y-2">
                 <Progress value={parseProgress} className="h-2" />
-                <p className="text-sm text-muted-foreground">Parsing with Claude… {parseProgress}%</p>
+                <p className="text-sm text-muted-foreground">Parsing with AI… {parseProgress}%</p>
               </div>
             )}
             <Button

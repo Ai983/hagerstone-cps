@@ -11,9 +11,9 @@
  * gst_filings_timely check as a suggestion (the human can override).
  *
  * Runs as service_role after confirming the caller is a CPS user. Deliberately
- * NOT routed through claude-proxy: that proxy remaps everything to Haiku for
- * cost, but reading dense filing tables needs a capable vision model. Onboarding
- * volume is low, so this uses Sonnet directly.
+ * NOT routed through claude-proxy: that proxy caps and remaps every model for
+ * cost, but reading dense filing tables needs the full vision model. Onboarding
+ * volume is low, so this calls OpenAI directly.
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { encodeBase64 } from "https://deno.land/std@0.224.0/encoding/base64.ts";
@@ -23,11 +23,15 @@ const CORS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Haiku 4.5 is the model this project's Anthropic key can call (sonnet-4 is
-// rejected by the key; the shared claude-proxy only ever remapped it to Haiku,
-// so it was never actually reachable). Haiku 4.5 has vision and reads a clear
-// filing-table screenshot fine at onboarding volume.
-const MODEL = "claude-haiku-4-5-20251001";
+// CPS runs on OpenAI (2026-09-01). gpt-5.6-luna is the model this org's key is
+// proven to serve — see the benchmark note in market-rate-search/index.ts — and
+// it has the vision needed to read a filing-table screenshot. Overridable per
+// environment so the model can be changed without a redeploy.
+const MODEL = Deno.env.get("OPENAI_MODEL") || "gpt-5.6-luna";
+// A screenshot-reading call emits ~1.5k tokens of JSON, but a reasoning model
+// spends output budget thinking first — leave room or the JSON arrives truncated
+// and the whole (already billed) call is wasted.
+const MAX_OUTPUT_TOKENS = 6000;
 const BUCKET = "cps-vendor-documents";
 
 // The GST screenshots, in the order they are presented to the model.
@@ -59,8 +63,8 @@ Deno.serve(async (req) => {
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
     const SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-    if (!apiKey) return json({ error: "ANTHROPIC_API_KEY not configured" }, 500);
+    const apiKey = Deno.env.get("OPENAI_API_KEY");
+    if (!apiKey) return json({ error: "OPENAI_API_KEY not configured" }, 500);
 
     const authHeader = req.headers.get("Authorization") ?? "";
     const { supplierId } = await req.json().catch(() => ({}));
@@ -103,8 +107,11 @@ Deno.serve(async (req) => {
       const b64 = encodeBase64(bytes);
       const label = GST_DOC_TYPES[d.document_type] ?? d.document_type;
       captions.push(label);
-      imageBlocks.push({ type: "text", text: `Screenshot: ${label}` });
-      imageBlocks.push({ type: "image", source: { type: "base64", media_type: mediaType(d.file_url, blob.type), data: b64 } });
+      imageBlocks.push({ type: "input_text", text: `Screenshot: ${label}` });
+      imageBlocks.push({
+        type: "input_image",
+        image_url: `data:${mediaType(d.file_url, blob.type)};base64,${b64}`,
+      });
     }
     if (imageBlocks.length === 0) return json({ error: "Could not read the uploaded screenshots." }, 400);
 
@@ -129,20 +136,27 @@ Return STRICT JSON ONLY, no explanation, exactly this shape:
 }
 Count each month you can see. Only include a year object if that year's filing table is visible in a screenshot.`;
 
-    const anthropic = await fetch("https://api.anthropic.com/v1/messages", {
+    const openai = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 1500,
-        messages: [{ role: "user", content: [{ type: "text", text: instructions }, ...imageBlocks] }],
+        max_output_tokens: MAX_OUTPUT_TOKENS,
+        input: [{ role: "user", content: [{ type: "input_text", text: instructions }, ...imageBlocks] }],
       }),
     });
-    const ai = await anthropic.json();
-    if (!anthropic.ok) {
-      return json({ error: `Agent error: ${ai?.error?.message ?? anthropic.status}` }, 502);
+    const ai = await openai.json();
+    if (!openai.ok || ai?.error) {
+      return json({ error: `Agent error: ${ai?.error?.message ?? openai.status}` }, 502);
     }
-    const text: string = (ai?.content ?? []).filter((b: { type: string }) => b.type === "text").map((b: { text: string }) => b.text).join("\n");
+    // Responses returns an `output` array; only the message item carries the answer.
+    let text: string = typeof ai?.output_text === "string" ? ai.output_text : "";
+    if (!text) {
+      for (const item of ai?.output ?? []) {
+        if (item?.type !== "message") continue;
+        for (const c of item?.content ?? []) if (c?.type === "output_text") text += c.text ?? "";
+      }
+    }
     let parsed: Record<string, unknown> = {};
     try {
       const s = text.indexOf("{"), e = text.lastIndexOf("}");

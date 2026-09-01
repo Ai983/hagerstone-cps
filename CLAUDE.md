@@ -110,7 +110,7 @@ There is **no test runner configured** — no Vitest/Jest. `CPS_TEST_GUIDE.md` i
 | Excel | `xlsx` (BOQ / vendor / stock imports) |
 | Icons | Lucide React |
 | Toasts | Sonner |
-| AI parsing | Claude `claude-haiku-4-5-20251001` — all calls routed through `supabase/functions/claude-proxy` which remaps every model name to Haiku and caps tokens per call |
+| AI parsing | **OpenAI `gpt-5.6-luna`** (env `OPENAI_MODEL`) — all calls routed through `supabase/functions/claude-proxy`, which despite its name calls OpenAI, remaps every model name to the one target and caps tokens per call. Secret: `OPENAI_API_KEY` |
 | Image prep | `src/lib/imageForClaude.ts` — shared utility; downscales images to ≤1568 px long edge, JPEG re-encode at q=0.85, white background under transparent PNGs; PDFs passed as-is |
 
 **Supabase URL:** `https://tpfvnerrjhqwipyonngf.supabase.co`
@@ -315,7 +315,7 @@ Extra charges may be `is_charge=true` line items (new) or `ai_parsed_data.extra_
 2. Page shows RFQ line items from `cps_rfq_line_items_for_dispatch`
 3. Vendor can upload a file (PDF/Excel/Image), fill per-item rates manually, or both
 4. On submit: upload to `cps-quotes` storage bucket → insert `cps_quotes` header → insert `cps_quote_line_items` → mark token used → update `cps_rfq_suppliers.response_status` → audit log
-5. File-only (no manual lines) → webhook to n8n: `cps_config` key `webhook_quote_parse`, POST `{event:"quote_uploaded", quote_id, file_path, file_type, ...}` for AI parsing (Haiku 4.5 / Sonnet 4.6)
+5. File-only (no manual lines) → webhook to n8n: `cps_config` key `webhook_quote_parse`, POST `{event:"quote_uploaded", quote_id, file_path, file_type, ...}` for AI parsing (OpenAI `gpt-5.6-luna`)
 6. `parse_status` = `parsed` (manual data) or `pending` (file-only, awaiting AI parse)
 
 ## Vendor Scout (`/vendor-scout`, `VendorScout.tsx`)
@@ -377,7 +377,7 @@ Accountability loop ensuring invoices are collected after payment:
 
 **Migration:** `supabase/migrations/20260702_delivery_invoice_deadline.sql` — additive; new `cps_invoice_delivery_schedules` table, `pr_blocked*` columns on `cps_users`, config keys, RLS (incl. `users_update_pr_block` so procurement roles can UPDATE other users' block state).
 
-## Image Encoding for Claude (`src/lib/imageForClaude.ts`)
+## Image Encoding for the AI (`src/lib/imageForClaude.ts`)
 
 Shared utility used by **all** document-parse flows (quotes, invoices, GRN, WO, vendor upload). Previously each flow had its own encoder; now all share this.
 
@@ -385,23 +385,38 @@ Shared utility used by **all** document-parse flows (quotes, invoices, GRN, WO, 
 - `downscaleImageToJpegBase64(file)` — long edge capped at `MAX_IMAGE_EDGE = 1568 px`, JPEG q=0.85, **white background painted before draw** (JPEG has no alpha; without this, transparent PNG regions go black)
 - `fileToBase64(file)` — raw base64 for PDFs only
 
-Why 1568 px: Anthropic's vision API rejects >5 MB or >8000 px; internally downsamples past ~1568 px. Sending a 4000 px phone photo → 1568 px saves ~85% image tokens. Everything past 1568 px was thrown away server-side after we paid to upload it.
+The block shape is the Anthropic message shape and the file/function names still say "Claude". Both are **historical, and deliberately kept** — see the proxy section below. The blocks are translated to OpenAI parts inside `claude-proxy`; do not "modernise" the shape in one call site.
 
-## `claude-proxy` Edge Function — Model Allowlist & Usage Logging
+Why 1568 px: a vision API rejects >5 MB or >8000 px and internally downsamples past ~1568 px. Sending a 4000 px phone photo → 1568 px saves ~85% image tokens. Everything past 1568 px was thrown away server-side after we paid to upload it.
 
-`supabase/functions/claude-proxy/index.ts` now enforces a `MODEL_ALLOW` allowlist instead of forwarding `body` verbatim:
+## `claude-proxy` Edge Function — OpenAI adapter, allowlist, usage logging
+
+**CPS runs on OpenAI (2026-09-01).** `supabase/functions/claude-proxy/index.ts` calls `https://api.openai.com/v1/responses` with `OPENAI_API_KEY` (the same edge secret `market-rate-search` already used). `ANTHROPIC_API_KEY` is no longer read anywhere in the repo.
+
+The **function name and the `callClaude` / `fileToClaudeBlock` / `imageForClaude.ts` identifiers were deliberately kept** — renaming them would have meant re-deploying under a new URL and editing ~15 parse flows for no functional gain.
+
+It is an **adapter, not a pass-through**. Callers still send and parse the Anthropic message shape; the proxy translates both directions:
 
 ```
-MODEL_ALLOW maps:
-  claude-haiku-4-5-20251001  → Haiku, maxTokens: 50 000
-  claude-haiku-4-5           → Haiku, maxTokens: 50 000
-  claude-sonnet-4-6          → Haiku, maxTokens: 50 000  (deprecated alias)
-  claude-sonnet-4-5          → Haiku, maxTokens: 50 000
-  claude-opus-4              → Haiku, maxTokens: 50 000
-  claude-sonnet-4-20250514   → Haiku, maxTokens: 16 000  (ProjectBOQ.tsx legacy call)
+in :  { model, max_tokens, system?, messages:[{role, content: string | Block[]}] }
+out:  { content:[{type:"text",text}], stop_reason, usage:{input_tokens,output_tokens} }
+
+block → OpenAI part          response → envelope
+  text     → input_text        output[].content[].output_text  → content[0].text
+  image    → input_image       incomplete_details.reason
+  document → input_file          === "max_output_tokens"       → stop_reason "max_tokens"
 ```
 
-Any model not in the table is **rejected (HTTP 400)** and logged. Callers cannot name Opus/Sonnet and accidentally charge against the key. Every successful call logs `{model, input_tokens, output_tokens}` to edge function console for attribution.
+Model handling:
+- Target model: `OPENAI_MODEL` env, default **`gpt-5.6-luna`** — the one model this org's key is benchmark-proven to serve (see the note in `market-rate-search/index.ts`). Every allowlisted name maps to it.
+- `MODEL_ALLOW`: `gpt-5.6-luna` (50 000) plus the legacy `claude-*` ids (50 000; `claude-sonnet-4-20250514` 16 000) so a browser on a stale JS bundle keeps working after deploy. Anything else is **rejected (HTTP 400)** and logged.
+- `max_tokens` → `max_output_tokens`, floored at **4 000** (`MIN_OUTPUT_TOKENS`). A reasoning model spends output budget thinking first, so a caller's tight cap (AdvanceRequests asks 400) could be consumed entirely by reasoning and return nothing parseable — a fully billed call for no result. Billing is on tokens used, not the cap, so the floor is free.
+- Only a whitelist of params is forwarded. Callers still pass Anthropic-era knobs (`ProjectBOQ` sends `temperature: 0.2`) that a reasoning model rejects, so the outbound body is rebuilt rather than spread.
+- Errors come back as an `error` **string** (not the provider's object), so callers can toast it directly.
+
+Every successful call logs `{model, input_tokens, output_tokens, truncated}` to the edge function console for attribution.
+
+`vendor-gst-eval` calls OpenAI directly (not via the proxy) for the same reason it always bypassed it — dense filing-table screenshots need the full model, and onboarding volume is low.
 
 ## Comparison Sheet — Repeat-Order Exemption
 

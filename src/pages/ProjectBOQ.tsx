@@ -753,7 +753,7 @@ The "boq_item" string must be copy-paste recognisable from the BOQ line title ab
 
         const { data: fnData, error: fnErr } = await supabase.functions.invoke("claude-proxy", {
           body: {
-            model: "claude-sonnet-4-20250514",
+            model: "gpt-5.6-luna",
             max_tokens: 12000,
             temperature: 0.2,
             messages: [{ role: "user", content: userPrompt }],

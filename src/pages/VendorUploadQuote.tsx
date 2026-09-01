@@ -81,14 +81,14 @@ const parseWarrantyMonths = (s: string): number | null => {
 // ---------- AI extraction ----------
 
 const extractQuoteWithAI = async (files: File[], rfqItems: LineItem[]) => {
-  // PDFs pass through; images are downscaled to ≤1568px JPEG (Anthropic-safe,
+  // PDFs pass through; images are downscaled to ≤1568px JPEG (vision-API-safe,
   // sharper OCR, far fewer input tokens on multi-MB vendor phone photos).
   const fileBlocks = await Promise.all(files.map((file) => fileToClaudeBlock(file)));
 
   const { supabase } = await import("@/integrations/supabase/client");
   const { data, error } = await supabase.functions.invoke("claude-proxy", {
     body: {
-      model: "claude-haiku-4-5-20251001",
+      model: "gpt-5.6-luna",
       max_tokens: 50000,
       messages: [{
         role: "user",

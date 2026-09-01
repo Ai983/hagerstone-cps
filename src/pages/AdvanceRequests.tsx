@@ -1,6 +1,6 @@
 // src/pages/AdvanceRequests.tsx
 // SPEC-PAY-01 — Emergency pre-PO cash advance. Procurement raises → founder
-// (director) approves on WhatsApp → procurement records cash + voucher (Claude OCR)
+// (director) approves on WhatsApp → procurement records cash + voucher (AI OCR)
 // → must reconcile to a PO within `advance_reconcile_days` (else escalated by cron).
 import { useEffect, useState } from "react";
 import { AlertCircle } from "lucide-react";
@@ -279,7 +279,7 @@ function RaiseAdvanceDialog({ onClose, onDone, userId }: { onClose: () => void; 
   );
 }
 
-// ── Record cash paid (voucher + Claude OCR) ─────────────────────────────────
+// ── Record cash paid (voucher + AI OCR) ─────────────────────────────────
 function RecordCashDialog({ advance, onClose, onDone }: { advance: Advance; onClose: () => void; onDone: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [ocr, setOcr] = useState<any>(null);
@@ -291,11 +291,11 @@ function RecordCashDialog({ advance, onClose, onDone }: { advance: Advance; onCl
     setOcrLoading(true); setOcr(null);
     try {
       // Downscale to ≤1568px JPEG before sending — phone photos of vouchers are
-      // 3-8 MB raw; Claude throws those pixels away anyway, we just paid for them.
+      // 3-8 MB raw; the model throws those pixels away anyway, we just paid for them.
       const imageBlock = await fileToClaudeBlock(f);
       const prompt = `This is a cash payment voucher for an advance. Extract JSON only: {"amount": number|null, "paid_to": string|null, "date": "YYYY-MM-DD"|null, "matches_request": boolean, "confidence": 0-100, "note": string}. The advance request is for ₹${advance.amount} to "${advance.supplier?.name ?? ""}". Set matches_request true only if the voucher amount and payee plausibly match.`;
       const resp = await callClaude({
-        model: "claude-haiku-4-5-20251001", max_tokens: 400,
+        model: "gpt-5.6-luna", max_tokens: 400,
         messages: [{ role: "user", content: [
           { type: "text", text: prompt },
           imageBlock,

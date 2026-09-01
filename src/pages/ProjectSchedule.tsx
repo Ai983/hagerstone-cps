@@ -233,7 +233,7 @@ export default function ProjectSchedule() {
   const runAiExtract = async (contentBlock: unknown): Promise<ParsedActivity[]> => {
     const { data, error } = await supabase.functions.invoke("claude-proxy", {
       body: {
-        model: "claude-haiku-4-5-20251001",
+        model: "gpt-5.6-luna",
         max_tokens: 50000,
         messages: [{ role: "user", content: [contentBlock, { type: "text", text: EXTRACT_PROMPT }] }],
       },

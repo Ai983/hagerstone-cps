@@ -2032,7 +2032,7 @@ export default function PurchaseOrders() {
     setRevisedQuoteParsing(true);
     try {
       // 1. Encode — PDFs pass through, images are downscaled to ≤1568px JPEG
-      // (Anthropic-safe, sharper OCR, far fewer input tokens).
+      // (vision-API-safe, sharper OCR, far fewer input tokens).
       const contentBlock = await fileToClaudeBlock(revisedQuoteFile);
 
       const itemDescriptions = editLineItems.map((li, i) => `${i + 1}. ${li.description ?? ""}`).join("\n");
@@ -2040,7 +2040,7 @@ export default function PurchaseOrders() {
       // 2. Call claude-proxy edge function
       const { data, error: fnErr } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-haiku-4-5-20251001",
+          model: "gpt-5.6-luna",
           max_tokens: 1500,
           messages: [{
             role: "user",

@@ -1942,7 +1942,7 @@ export default function ComparisonSheetPage() {
 
   // Fan out market-rate searches for every PR line item that doesn't already
   // have a fresh benchmark, then persist the results to cps_market_benchmarks.
-  // Hits Claude with web_search through the market-rate-search edge function.
+  // Hits OpenAI with web_search through the market-rate-search edge function.
   const runMarketRateSearch = async (force = false) => {
     if (!rfqId || prLineItems.length === 0) return;
     setMarketLoading(true);
@@ -1961,7 +1961,7 @@ export default function ComparisonSheetPage() {
         return;
       }
 
-      // Throttle to fit Anthropic's 10K input-tokens-per-minute cap on the
+      // Throttle to fit the search model's input-tokens-per-minute rate limit on the
       // secondary $5 account. Edge function is now on Haiku 4.5 with a
       // trimmed prompt — each call is ~1-1.5K input tokens after web_search
       // results, so 3 concurrent + 1s gap keeps us under 6K TPM with room.
@@ -1972,7 +1972,7 @@ export default function ComparisonSheetPage() {
         try {
           // Send only the description — adding the unit (e.g. "SQF" for paint)
           // poisons the web_search since most platforms don't price that way.
-          // The edge function's system prompt lets Claude pick the right unit.
+          // The edge function's system prompt lets the model pick the right unit.
           const itemQuery = pli.description.trim();
           const { data, error } = await supabase.functions.invoke("market-rate-search", {
             body: { item: itemQuery, address: projectSite ?? "", force_refresh: force },
@@ -1992,7 +1992,7 @@ export default function ComparisonSheetPage() {
             };
           }
           const result = data as any;
-          // Trust the lowest_rate field — Claude often finds a market price band
+          // Trust the lowest_rate field — the model often finds a market price band
           // (e.g. "Rs 140-280/Liter") and reports it via lowest_rate + verdict
           // even when it can't surface specific suppliers with URLs. The supplier
           // list is a bonus, not a precondition for showing the rate.
@@ -3080,7 +3080,7 @@ export default function ComparisonSheetPage() {
     if (!sheet || !rfq || suppliers.length === 0) return;
     setAiLoading(true);
     try {
-      // Build comprehensive context for Claude: PR, all quote items, extras, terms, benchmarks
+      // Build comprehensive context for the model: PR, all quote items, extras, terms, benchmarks
       const comparisonData = {
         rfq: {
           number: rfq.rfq_number,
@@ -3237,7 +3237,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
 
       const { data: result, error: fnError } = await supabase.functions.invoke("claude-proxy", {
         body: {
-          model: "claude-haiku-4-5-20251001",
+          model: "gpt-5.6-luna",
           max_tokens: 8000,
           system: systemPrompt,
           messages: [{ role: "user", content: userPrompt }],
@@ -3247,8 +3247,10 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
         // FunctionsHttpError exposes the raw Response on .context — use its status
         // code for accurate error routing rather than the generic message string.
         const httpStatus = (fnError as any).context?.status as number | undefined;
-        if (httpStatus === 529) {
-          throw new Error("Anthropic API is temporarily overloaded — please wait a moment and click Run AI again.");
+        // 429 = OpenAI rate limit, 529 = the old Anthropic overload code (kept
+        // harmlessly); both mean "retry in a moment", not "your data is wrong".
+        if (httpStatus === 429 || httpStatus === 529 || httpStatus === 503) {
+          throw new Error("OpenAI API is temporarily overloaded — please wait a moment and click Run AI again.");
         }
         if (httpStatus === 401 || httpStatus === 403) {
           throw new Error("AI proxy auth error — check Supabase Edge Function JWT settings.");
@@ -3256,18 +3258,18 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
         if (httpStatus === 500) {
           throw new Error("AI proxy returned 500 — OPENAI_API_KEY may be missing from Edge Function secrets.");
         }
-        throw new Error(`Claude proxy error (HTTP ${httpStatus ?? "?"}): ${fnError.message}`);
+        throw new Error(`AI proxy error (HTTP ${httpStatus ?? "?"}): ${fnError.message}`);
       }
 
-      // Pass-through proxy hands back the Anthropic error object verbatim when
-      // the request fails (bad model, content too large, etc). Surface it.
+      // The proxy hands back the OpenAI failure as an `error` string when the
+      // request fails (bad model, content too large, etc). Surface it.
       if ((result as any)?.error) {
         const err = (result as any).error;
         const rawMsg = typeof err === "string" ? err : err?.message ?? JSON.stringify(err);
-        if (String(err?.status ?? err?.status_code ?? "").includes("529") || rawMsg.includes("529") || rawMsg.toLowerCase().includes("overloaded")) {
-          throw new Error("Anthropic API is temporarily overloaded — please wait a moment and click Run AI again.");
+        if (rawMsg.toLowerCase().includes("rate limit") || rawMsg.includes("529") || rawMsg.toLowerCase().includes("overloaded")) {
+          throw new Error("OpenAI API is temporarily overloaded — please wait a moment and click Run AI again.");
         }
-        throw new Error("Anthropic API: " + rawMsg);
+        throw new Error("OpenAI API: " + rawMsg);
       }
 
       const content = result?.content?.[0]?.text ?? "";
@@ -3285,7 +3287,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
       }
       setAiRecommendation(parsed);
 
-      // Persist so subsequent loads show the same analysis without re-billing Claude
+      // Persist so subsequent loads show the same analysis without re-billing the model
       if (sheet?.id) {
         await supabase.from("cps_comparison_sheets")
           .update({ ai_recommendation: parsed })
