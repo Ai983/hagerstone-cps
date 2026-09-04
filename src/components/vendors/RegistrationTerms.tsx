@@ -15,15 +15,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Download, Loader2, Send } from "lucide-react";
+import { Download, Loader2, Send, ShieldCheck } from "lucide-react";
 import {
   type RegistrationSnapshot, type SupplierRow,
-  acceptTermsInternally, fetchTerms, submitRegistration,
+  acceptTermsInternally, fetchTerms, selfApproveRegistration, submitRegistration,
 } from "@/lib/vendorRegistration";
 
 export default function RegistrationTerms({
-  supplier, snapshot, onChanged,
-}: { supplier: SupplierRow; snapshot: RegistrationSnapshot; onChanged: () => void }) {
+  supplier, snapshot, onChanged, fastPath, onApproved,
+}: { supplier: SupplierRow; snapshot: RegistrationSnapshot; onChanged: () => void; fastPath?: boolean; onApproved?: () => void }) {
   const [terms, setTerms] = useState<{ text: string; version: string } | null>(null);
   const [acceptedBy, setAcceptedBy] = useState("");
   const [busy, setBusy] = useState(false);
@@ -49,6 +49,18 @@ export default function RegistrationTerms({
       toast.success("Sent to the verifier");
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Could not submit");
+    } finally { setBusy(false); }
+  };
+
+  const selfApprove = async () => {
+    setBusy(true);
+    try {
+      await selfApproveRegistration(supplier.id);
+      toast.success("Vendor registered and approved");
+      onChanged();
+      onApproved?.();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Could not complete registration");
     } finally { setBusy(false); }
   };
 
@@ -113,12 +125,21 @@ export default function RegistrationTerms({
 
         {editable && (
           <div className="flex items-center gap-3 flex-wrap border-t border-border pt-4">
-            <Button disabled={!snapshot.ready_to_submit || busy} onClick={submit}>
-              {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-              Submit for verification
-            </Button>
+            {fastPath ? (
+              <Button disabled={!snapshot.ready_to_submit || busy} onClick={selfApprove}>
+                {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-2" />}
+                Complete registration &amp; approve
+              </Button>
+            ) : (
+              <Button disabled={!snapshot.ready_to_submit || busy} onClick={submit}>
+                {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+                Submit for verification
+              </Button>
+            )}
             <span className="text-xs text-muted-foreground">
-              {snapshot.ready_to_submit ? "Ready to submit" : `Still needed: ${blockers.join(", ")}`}
+              {snapshot.ready_to_submit
+                ? (fastPath ? "Ready — will register &amp; approve now" : "Ready to submit")
+                : `Still needed: ${blockers.join(", ")}`}
             </span>
           </div>
         )}

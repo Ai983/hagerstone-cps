@@ -3,7 +3,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { fileToClaudeBlock } from "@/lib/imageForClaude";
-import { useNavigate } from "react-router-dom";
+import { startRegistration, type VendorType } from "@/lib/vendorRegistration";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -284,7 +284,6 @@ export function LegacyQuoteUploadModal({
   preselectedRfqId,
 }: Props) {
   const { user } = useAuth();
-  const navigate = useNavigate();
 
   // Steps: 1 = RFQ selection, 2 = vendor, 3 = upload + review
   const [step, setStep] = useState(1);
@@ -304,6 +303,9 @@ export function LegacyQuoteUploadModal({
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
   const [rfqVendors, setRfqVendors] = useState<Supplier[]>([]);
   const [rfqVendorsLoading, setRfqVendorsLoading] = useState(false);
+  const [newVendorName, setNewVendorName] = useState("");
+  const [newVendorType, setNewVendorType] = useState<VendorType>("company");
+  const [addingVendor, setAddingVendor] = useState(false);
 
 
   // Step 3
@@ -569,6 +571,25 @@ export function LegacyQuoteUploadModal({
   };
 
   // ── Submit quote ────────────────────────────────────────────────────────────
+  // Add a brand-new vendor without leaving the quote flow. Vendors can only be
+  // minted through the registration RPC (direct cps_suppliers INSERT is revoked),
+  // so this creates a 'draft' supplier and selects it; full registration is
+  // completed later (on the Comparison fast-path when the PO is raised).
+  const addNewVendor = async () => {
+    const name = newVendorName.trim();
+    if (!name) return;
+    setAddingVendor(true);
+    try {
+      const id = await startRegistration(name, newVendorType);
+      setSelectedSupplier({ id, name, categories: null, profile_complete: false,
+                            phone: null, email: null, gstin: null, address_text: null });
+      setNewVendorName("");
+      toast.success(`${name} added — complete registration when the PO is raised`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Could not add vendor");
+    } finally { setAddingVendor(false); }
+  };
+
   const handleSubmitQuote = async () => {
     if (!editedExtracted || !selectedSupplier || !selectedRfqId || !user) return;
     const selectedRfq = rfqs.find((r) => r.id === selectedRfqId);
@@ -1005,19 +1026,29 @@ export function LegacyQuoteUploadModal({
                     Selected: <strong>{selectedSupplier.name}</strong>
                   </div>
                 )}
-                <div className="flex items-center justify-between gap-2 rounded-md border border-dashed border-border px-3 py-2">
+                <div className="rounded-md border border-dashed border-border px-3 py-3 space-y-2">
                   <p className="text-xs text-muted-foreground">
-                    Vendor not in the system yet?
+                    Vendor not in the system yet? Add them here — you'll complete full registration when the PO is raised.
                   </p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => navigate("/vendor-registration")}
-                  >
-                    <Plus className="h-3.5 w-3.5 mr-1" />
-                    Register a new vendor
-                  </Button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input
+                      value={newVendorName}
+                      onChange={(e) => setNewVendorName(e.target.value)}
+                      placeholder="New vendor name"
+                      className="flex-1 min-w-[180px] rounded-md border border-border px-3 py-1.5 text-sm bg-background" />
+                    <select
+                      value={newVendorType}
+                      onChange={(e) => setNewVendorType(e.target.value as VendorType)}
+                      className="rounded-md border border-border px-2 py-1.5 text-sm bg-background">
+                      <option value="company">Company / LLP</option>
+                      <option value="proprietor">Proprietor</option>
+                      <option value="individual">Individual</option>
+                    </select>
+                    <Button type="button" variant="outline" size="sm"
+                            disabled={addingVendor || !newVendorName.trim()} onClick={addNewVendor}>
+                      <Plus className="h-3.5 w-3.5 mr-1" />{addingVendor ? "Adding…" : "Add & select"}
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>

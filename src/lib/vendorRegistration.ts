@@ -351,6 +351,13 @@ export const submitRegistration = (id: string) =>
 export const approveRegistration = (id: string) =>
   callRpc("cps_approve_vendor_registration", { p_supplier_id: id });
 
+/** Comparison fast-path: complete + approve a new vendor in one step, allowing
+ *  self-approval and skipping the separate verifier. Still requires all
+ *  mandatory documents (incl. the signed policy), bank details and current-
+ *  version terms — the server enforces ready_to_submit. */
+export const selfApproveRegistration = (id: string) =>
+  callRpc("cps_selfapprove_vendor_registration", { p_supplier_id: id });
+
 export const rejectRegistration = (id: string, reason: string) =>
   callRpc("cps_reject_vendor_registration", { p_supplier_id: id, p_reason: reason });
 

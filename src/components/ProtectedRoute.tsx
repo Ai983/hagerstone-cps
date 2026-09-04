@@ -11,9 +11,10 @@ const adminOnlyRoutes = ['/rfqs', '/quotes', '/comparison', '/purchase-orders', 
 const coordinatorRoutes = ['/dashboard', '/schedule', '/tasks', '/my-work', '/stock', '/stock-overview', '/requisitions'];
 
 // A vendor registrar exists only to onboard vendors. Allowlisted to the
-// registration portal (+ dashboard) and nothing else — approval is the
-// verifier's job (maker-checker), so /vendor-verification is intentionally out.
-const vendorRegistrarRoutes = ['/dashboard', '/vendor-registration'];
+// registration portal, the verification queue, and the dashboard. They verify
+// others' registrations in the queue and self-approve new vendors on the
+// comparison fast-path; everything else stays out.
+const vendorRegistrarRoutes = ['/dashboard', '/vendor-registration', '/vendor-verification'];
 
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();

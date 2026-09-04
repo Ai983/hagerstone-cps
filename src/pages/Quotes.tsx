@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { headerTotalsFromLines, extraChargeToLineRow } from "@/lib/quoteTotals";
+import { startRegistration, type VendorType } from "@/lib/vendorRegistration";
 import { downscaleImageToJpegBase64, fileToBase64 } from "@/lib/imageForClaude";
 
 import { Badge } from "@/components/ui/badge";
@@ -264,6 +265,27 @@ export default function Quotes() {
   const [suppliersLoading, setSuppliersLoading] = useState(false);
   const [supplierSearch, setSupplierSearch] = useState("");
   const [supplierPopOpen, setSupplierPopOpen] = useState(false);
+  const [newVendorName, setNewVendorName] = useState("");
+  const [newVendorType, setNewVendorType] = useState<VendorType>("company");
+  const [addingVendor, setAddingVendor] = useState(false);
+  // Add a brand-new vendor inline (only the registration RPC can mint a supplier
+  // row — direct INSERT is revoked). Creates a 'draft' and selects it; full
+  // registration is completed on the Comparison fast-path when the PO is raised.
+  const addNewVendor = async () => {
+    const name = newVendorName.trim();
+    if (!name) return;
+    setAddingVendor(true);
+    try {
+      const id = await startRegistration(name, newVendorType);
+      setSuppliers((prev) => prev.some((s) => s.id === id) ? prev : [...prev, { id, name }]);
+      setLogForm((p) => ({ ...p, supplierId: id }));
+      setNewVendorName("");
+      setSupplierPopOpen(false);
+      toast.success(`${name} added — complete registration when the PO is raised`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Could not add vendor");
+    } finally { setAddingVendor(false); }
+  };
 
   const [logForm, setLogForm] = useState({
     rfqId: "",
@@ -2096,10 +2118,25 @@ Rules:
                       </Command>
                     </PopoverContent>
                   </Popover>
-                  <button type="button" onClick={() => navigate("/vendor-registration")}
-                    className="flex items-center gap-1.5 text-xs text-primary hover:underline mt-1">
-                    <UserPlus className="h-3.5 w-3.5" /> Register a new vendor
-                  </button>
+                  <div className="mt-2 rounded-md border border-dashed border-border px-3 py-2 space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      Vendor not in the system yet? Add them here — complete full registration when the PO is raised.
+                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Input value={newVendorName} onChange={(e) => setNewVendorName(e.target.value)}
+                             placeholder="New vendor name" className="flex-1 min-w-[160px]" />
+                      <select value={newVendorType} onChange={(e) => setNewVendorType(e.target.value as VendorType)}
+                              className="rounded-md border border-border px-2 py-1.5 text-sm bg-background">
+                        <option value="company">Company / LLP</option>
+                        <option value="proprietor">Proprietor</option>
+                        <option value="individual">Individual</option>
+                      </select>
+                      <Button type="button" variant="outline" size="sm"
+                              disabled={addingVendor || !newVendorName.trim()} onClick={addNewVendor}>
+                        <UserPlus className="h-3.5 w-3.5 mr-1" />{addingVendor ? "Adding…" : "Add & select"}
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
 

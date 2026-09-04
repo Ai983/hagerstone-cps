@@ -28,7 +28,7 @@ const NAV = [
   { title: "Budget List", url: "/budget-list", icon: BarChart3, roles: ["procurement_executive","procurement_head","it_head","management","finance","auditor","accounts_team","design_team"] },
   { title: "Site Stock", url: "/stock", icon: Boxes, roles: ["procurement_executive","procurement_head","it_head","management","design_team","accounts_team","project_coordinator"] },
   { title: "Vendor Registration", url: "/vendor-registration", icon: UserPlus, roles: ["procurement_executive","procurement_head","it_head","management"] },
-  { title: "Vendor Verification", url: "/vendor-verification", icon: ShieldCheck, roles: ["procurement_head","it_head","management"] },
+  { title: "Vendor Verification", url: "/vendor-verification", icon: ShieldCheck, roles: ["procurement_head","it_head","management","vendor_registrar"] },
   { title: "Suppliers", url: "/suppliers", icon: Users, roles: ["procurement_executive","procurement_head","it_head","management","auditor","design_team"] },
   // Phase 2 payment compliance. Site reaches /payment-sheets via EMPLOYEE_NAV instead.
   { title: "Payment Sheets", url: "/payment-sheets", icon: Receipt, roles: ["procurement_executive","procurement_head","it_head","management","finance","accounts_team"] },
@@ -63,7 +63,7 @@ export function AppSidebar() {
   const visible = isEmployee
     ? EMPLOYEE_NAV
     : isVendorRegistrar
-    ? NAV.filter(n => n.url === '/dashboard' || n.url === '/vendor-registration')
+    ? NAV.filter(n => n.url === '/dashboard' || n.url === '/vendor-registration' || n.url === '/vendor-verification')
     : NAV.filter(n => n.roles.includes("all") || n.roles.includes(user?.role ?? ""));
 
   return (

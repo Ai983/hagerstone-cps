@@ -32,6 +32,7 @@ import { TranchePlanEditor, computeAmounts, type Tranche } from "@/components/pr
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { resolveToSignedUrl } from "@/lib/storageUrl";
+import NewVendorRegistrationDialog from "@/components/vendors/NewVendorRegistrationDialog";
 
 // cps-quotes is a private bucket — resolve stored path or legacy public URL to a
 // signed URL. Moved to @/lib/storageUrl so KanbanBoard's invoice viewer, which hit
@@ -3316,6 +3317,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
     }
     await getAIRecommendation();
   };
+  const [regDialogSupplierId, setRegDialogSupplierId] = useState<string | null>(null);
 
   const createPO = async () => {
     if (!sheet || !rfq || !user) return;
@@ -3347,6 +3349,16 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
       const quote = quoteBySupplierId[supplierId];
       if (!quote) {
         toast.error("No quote found for recommended supplier");
+        return;
+      }
+
+      // A new / not-yet-approved vendor cannot receive a PO (the DB gate blocks
+      // it). Open the fast-path registration dialog; on approval we re-run createPO.
+      const { data: regRow } = await supabase
+        .from("cps_suppliers").select("registration_status").eq("id", supplierId).maybeSingle();
+      const regStatus = (regRow as { registration_status: string } | null)?.registration_status;
+      if (regStatus && regStatus !== "approved") {
+        setRegDialogSupplierId(supplierId);
         return;
       }
 
@@ -5206,6 +5218,12 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <NewVendorRegistrationDialog
+        supplierId={regDialogSupplierId}
+        open={!!regDialogSupplierId}
+        onOpenChange={(o) => { if (!o) setRegDialogSupplierId(null); }}
+        onApproved={() => { setRegDialogSupplierId(null); void createPO(); }}
+      />
     </div>
   );
 }
