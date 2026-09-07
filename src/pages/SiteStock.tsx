@@ -61,7 +61,10 @@ type Assignment = { project_code: string; assigned_to_user_id: string };
 type EngineerLite = { id: string; name: string | null; email: string };
 
 const norm = (s: string) => s.trim().toLowerCase();
-const PROCUREMENT_ROLES = ["procurement_executive", "procurement_head", "it_head", "management", "design_team"];
+// vendor_registrar is here deliberately: the registrars also own site-stock
+// upkeep, so they edit any project's stock and review what site engineers submit
+// — they are not restricted to a cps_project_assignments row like an engineer.
+const PROCUREMENT_ROLES = ["procurement_executive", "procurement_head", "it_head", "management", "design_team", "vendor_registrar"];
 
 export default function SiteStock() {
   const { user } = useAuth();
