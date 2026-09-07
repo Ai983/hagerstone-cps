@@ -84,6 +84,9 @@ type PoRow = {
   bank_name?: string | null;
   bank_ifsc?: string | null;
   bank_account_number?: string | null;
+  /* PO validity window. Null means the PDF derives it from delivery_date (+5 / +13). */
+  po_upto?: string | null;
+  valid_upto?: string | null;
   // Payment terms fields (SPEC-01)
   payment_terms_type?: string | null;
   payment_terms_source?: string | null;
@@ -167,6 +170,20 @@ const formatDate = (d: string | null | undefined) => {
   if (!d) return "—";
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return "—";
+  return dt.toLocaleDateString("en-IN");
+};
+
+/* Mirrors the fallback in generatePoPdf.ts: when "Po upto" / "Valid Upto" are left
+   blank on the PO, the PDF derives them from the delivery date (+5 / +13 calendar
+   days). Used only to preview that default under the inputs, so whoever leaves a
+   field blank can see what will actually print. */
+const DERIVED_PO_UPTO_DAYS = 5;
+const DERIVED_VALID_UPTO_DAYS = 13;
+const derivedFromDelivery = (deliveryDate: string | null | undefined, days: number) => {
+  if (!deliveryDate) return null;
+  const dt = new Date(deliveryDate);
+  if (Number.isNaN(dt.getTime())) return null;
+  dt.setDate(dt.getDate() + days);
   return dt.toLocaleDateString("en-IN");
 };
 
@@ -531,6 +548,10 @@ export default function PurchaseOrders() {
   const [createBankName, setCreateBankName] = useState<string>("");
   const [createBankIfsc, setCreateBankIfsc] = useState<string>("");
   const [createBankAccountNumber, setCreateBankAccountNumber] = useState<string>("");
+  // PO validity window. Both optional — left blank, the PDF derives them from the
+  // delivery date (+5 / +13 days) exactly as it always has.
+  const [createPoUpto, setCreatePoUpto] = useState<string>("");
+  const [createValidUpto, setCreateValidUpto] = useState<string>("");
 
   const [lineItems, setLineItems] = useState<CreateLine[]>([]);
 
@@ -616,6 +637,9 @@ export default function PurchaseOrders() {
   const [editBankName, setEditBankName] = useState("");
   const [editBankIfsc, setEditBankIfsc] = useState("");
   const [editBankAccountNumber, setEditBankAccountNumber] = useState("");
+  // PO validity window — blank falls back to delivery date +5 / +13 on the PDF.
+  const [editPoUpto, setEditPoUpto] = useState("");
+  const [editValidUpto, setEditValidUpto] = useState("");
   const [editAdvancePayments, setEditAdvancePayments] = useState<Array<{ id: string; amount: string; method: string; date: string; paid_to_name: string; reference_number: string; notes: string }>>([]);
   const [createHagerstoneGstin, setCreateHagerstoneGstin] = useState("09AAECH3768B1ZM");
   const [createAdvancePayments, setCreateAdvancePayments] = useState<Array<{ id: string; amount: string; method: string; date: string; paid_to_name: string; reference_number: string; notes: string }>>([]);
@@ -690,7 +714,7 @@ export default function PurchaseOrders() {
       const { data, error } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,finance_payment_status,finance_balance_due,finance_payment_reference,finance_payment_note,finance_payment_history,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin,tranches:cps_po_payment_schedules(status,amount,trigger_type,milestone_name,milestone_order)",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,po_upto,valid_upto,penalty_clause,total_value,gst_amount,grand_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,founder_approval_reason,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_terms_source,payment_terms_confidence,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,finance_payment_status,finance_balance_due,finance_payment_reference,finance_payment_note,finance_payment_history,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin,tranches:cps_po_payment_schedules(status,amount,trigger_type,milestone_name,milestone_order)",
         )
         .order("created_at", { ascending: false });
 
@@ -804,6 +828,8 @@ export default function PurchaseOrders() {
     setCreateBankName("");
     setCreateBankIfsc("");
     setCreateBankAccountNumber("");
+    setCreatePoUpto("");
+    setCreateValidUpto("");
     setLineItems([]);
     setRejectReason("");
     setIsSingleVendor(false);
@@ -1172,6 +1198,8 @@ export default function PurchaseOrders() {
             bill_to_address: createBillTo,
             payment_terms: createPaymentTerms,
             delivery_date: createDeliveryDate,
+            po_upto: createPoUpto || null,
+            valid_upto: createValidUpto || null,
             penalty_clause: createPenaltyClause,
             total_value: subTotal,
             gst_amount: gstTotal,
@@ -1381,7 +1409,7 @@ export default function PurchaseOrders() {
       const { data: poRow, error: poErr } = await supabase
         .from("cps_purchase_orders")
         .select(
-          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,penalty_clause,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,finance_payment_status,finance_balance_due,finance_payment_reference,finance_payment_note,finance_payment_history,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
+          "id,po_number,rfq_id,pr_id,supplier_id,comparison_sheet_id,status,version,project_code,ship_to_address,bill_to_address,payment_terms,delivery_terms,delivery_date,po_upto,valid_upto,penalty_clause,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,approved_by,approved_at,sent_at,site_supervisor_id,created_at,created_by,source,supplier_name_text,founder_approval_status,legacy_po_number,po_pdf_url,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,payment_terms_type,payment_due_date,finance_dispatch_status,finance_dispatch_sent_at,finance_paid_at,finance_paid_amount,finance_payment_status,finance_balance_due,finance_payment_reference,finance_payment_note,finance_payment_history,revision_reason,cancel_reason,parent_po_id,hagerstone_gstin",
         )
         .eq("id", poId)
         .single();
@@ -2001,6 +2029,8 @@ export default function PurchaseOrders() {
     setEditBankName(viewPo.bank_name ?? "");
     setEditBankIfsc(viewPo.bank_ifsc ?? "");
     setEditBankAccountNumber(viewPo.bank_account_number ?? "");
+    setEditPoUpto(viewPo.po_upto ?? "");
+    setEditValidUpto(viewPo.valid_upto ?? "");
     // Pre-fill supplier details so head can fill missing info inline
     setEditSupplierName(viewSupplier?.name ?? viewPo.supplier_name_text ?? "");
     setEditSupplierGstin(viewSupplier?.gstin ?? "");
@@ -2252,6 +2282,8 @@ export default function PurchaseOrders() {
         ship_to_address: editShipTo.trim(),
         bill_to_address: editBillTo.trim(),
         delivery_date: editDeliveryDate,
+        po_upto: editPoUpto || null,
+        valid_upto: editValidUpto || null,
         payment_terms: editPaymentTerms.trim(),
         penalty_clause: editPenaltyClause.trim(),
         total_value: subTotal,
@@ -2962,6 +2994,45 @@ export default function PurchaseOrders() {
                       ⚠ Bank details are incomplete — founder will receive a PDF without bank details. You can add them later via the PO Edit page.
                     </div>
                   )}
+
+                  {/* PO validity window — optional; blank derives from the delivery date */}
+                  <div className="mt-4 border-t pt-3">
+                    <div className="text-xs font-medium text-foreground mb-2">
+                      PO Validity
+                      <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+                        (optional — leave blank to derive from the delivery date)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Po upto</Label>
+                        <Input type="date" value={createPoUpto} onChange={(e) => setCreatePoUpto(e.target.value)} className="h-9" />
+                        {!createPoUpto && (
+                          <div className="text-[10px] text-muted-foreground">
+                            {derivedFromDelivery(createDeliveryDate, DERIVED_PO_UPTO_DAYS)
+                              ? `Will print as ${derivedFromDelivery(createDeliveryDate, DERIVED_PO_UPTO_DAYS)} (delivery +${DERIVED_PO_UPTO_DAYS} days)`
+                              : "Set a delivery date to see the derived default"}
+                          </div>
+                        )}
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Valid Upto</Label>
+                        <Input type="date" value={createValidUpto} onChange={(e) => setCreateValidUpto(e.target.value)} className="h-9" />
+                        {!createValidUpto && (
+                          <div className="text-[10px] text-muted-foreground">
+                            {derivedFromDelivery(createDeliveryDate, DERIVED_VALID_UPTO_DAYS)
+                              ? `Will print as ${derivedFromDelivery(createDeliveryDate, DERIVED_VALID_UPTO_DAYS)} (delivery +${DERIVED_VALID_UPTO_DAYS} days)`
+                              : "Set a delivery date to see the derived default"}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {createPoUpto && createValidUpto && createValidUpto < createPoUpto && (
+                      <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        ⚠ "Valid Upto" is earlier than "Po upto" — check these dates.
+                      </div>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
 
@@ -3154,6 +3225,48 @@ export default function PurchaseOrders() {
                         <Input type="date" value={editDeliveryDate} onChange={(e) => setEditDeliveryDate(e.target.value)} className="mt-1 w-48 inline-block" />
                       ) : (
                         <span className="font-medium">{formatDate(viewPo.delivery_date)}</span>
+                      )}
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-muted-foreground">Po upto: </span>
+                      {editMode ? (
+                        <>
+                          <Input type="date" value={editPoUpto} onChange={(e) => setEditPoUpto(e.target.value)} className="mt-1 w-48 inline-block" />
+                          {!editPoUpto && (
+                            <div className="text-[10px] text-muted-foreground mt-0.5">
+                              {derivedFromDelivery(editDeliveryDate, DERIVED_PO_UPTO_DAYS)
+                                ? `Blank — will print as ${derivedFromDelivery(editDeliveryDate, DERIVED_PO_UPTO_DAYS)} (delivery +${DERIVED_PO_UPTO_DAYS} days)`
+                                : "Blank — derived from the delivery date"}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span className="font-medium">
+                          {viewPo.po_upto
+                            ? formatDate(viewPo.po_upto)
+                            : `${derivedFromDelivery(viewPo.delivery_date, DERIVED_PO_UPTO_DAYS) ?? "—"} (derived)`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-sm">
+                      <span className="text-muted-foreground">Valid Upto: </span>
+                      {editMode ? (
+                        <>
+                          <Input type="date" value={editValidUpto} onChange={(e) => setEditValidUpto(e.target.value)} className="mt-1 w-48 inline-block" />
+                          {!editValidUpto && (
+                            <div className="text-[10px] text-muted-foreground mt-0.5">
+                              {derivedFromDelivery(editDeliveryDate, DERIVED_VALID_UPTO_DAYS)
+                                ? `Blank — will print as ${derivedFromDelivery(editDeliveryDate, DERIVED_VALID_UPTO_DAYS)} (delivery +${DERIVED_VALID_UPTO_DAYS} days)`
+                                : "Blank — derived from the delivery date"}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span className="font-medium">
+                          {viewPo.valid_upto
+                            ? formatDate(viewPo.valid_upto)
+                            : `${derivedFromDelivery(viewPo.delivery_date, DERIVED_VALID_UPTO_DAYS) ?? "—"} (derived)`}
+                        </span>
                       )}
                     </div>
                     <div className="text-sm">
