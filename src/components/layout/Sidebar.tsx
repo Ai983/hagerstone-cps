@@ -63,7 +63,7 @@ export function AppSidebar() {
   const visible = isEmployee
     ? EMPLOYEE_NAV
     : isVendorRegistrar
-    ? NAV.filter(n => n.url === '/dashboard' || n.url === '/vendor-registration' || n.url === '/vendor-verification')
+    ? NAV.filter(n => n.url === '/dashboard' || n.url === '/vendor-registration' || n.url === '/vendor-verification' || n.url === '/stock' || n.url === '/stock-overview')
     : NAV.filter(n => n.roles.includes("all") || n.roles.includes(user?.role ?? ""));
 
   return (

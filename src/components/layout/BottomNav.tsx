@@ -51,12 +51,21 @@ const COORDINATOR_PRIMARY = [
   { title: "Stock", url: "/stock", icon: Boxes },
 ];
 
+// A vendor registrar is allowlisted to onboarding + stock, so ADMIN_PRIMARY's
+// PR/RFQ/PO tabs would all bounce them back to /vendor-registration.
+const REGISTRAR_PRIMARY = [
+  { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Register", url: "/vendor-registration", icon: UserCircle },
+  { title: "Verify", url: "/vendor-verification", icon: ShieldCheck },
+  { title: "Stock", url: "/stock", icon: Boxes },
+];
+
 const ROLE_LABELS: Record<string, string> = {
   requestor: "Requestor", procurement_executive: "Proc. Executive",
   procurement_head: "Proc. Head", it_head: "IT Head", management: "Management",
   finance: "Finance", site_receiver: "Site Receiver", auditor: "Auditor",
   accounts_team: "Accounts Team", design_team: "Design Team",
-  project_coordinator: "Project Coordinator",
+  project_coordinator: "Project Coordinator", vendor_registrar: "Vendor Registrar",
 };
 
 export function BottomNav() {
@@ -127,8 +136,12 @@ export function BottomNav() {
     );
   }
 
-  const visibleMore = ADMIN_MORE.filter(item => item.roles.includes(user.role));
-  const primary = user.role === 'project_coordinator' ? COORDINATOR_PRIMARY : ADMIN_PRIMARY;
+  const visibleMore = user.role === 'vendor_registrar'
+    ? ADMIN_MORE.filter(item => item.url === '/stock-overview')
+    : ADMIN_MORE.filter(item => item.roles.includes(user.role));
+  const primary = user.role === 'project_coordinator'
+    ? COORDINATOR_PRIMARY
+    : user.role === 'vendor_registrar' ? REGISTRAR_PRIMARY : ADMIN_PRIMARY;
 
   return (
     <>

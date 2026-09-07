@@ -144,8 +144,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       canViewStock: !!role,
       // design_team has a deliberate stock-write exception (otherwise view-only):
       // she manages Site Stock + Stock Overview after reviewing sites.
-      canIssueStock: role === "site_receiver" || role === "requestor" || role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team" || role === "project_coordinator",
-      canAdjustStock: role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team" || role === "project_coordinator",
+      canIssueStock: role === "site_receiver" || role === "requestor" || role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team" || role === "project_coordinator" || role === "vendor_registrar",
+      canAdjustStock: role === "procurement_executive" || role === "procurement_head" || role === "it_head" || role === "design_team" || role === "project_coordinator" || role === "vendor_registrar",
       isProcurementHead: role === "procurement_head" || role === "it_head" || role === "procurement_executive",
       isManagement: role === "management",
       isEmployee: role === "requestor" || role === "site_receiver",

@@ -10,11 +10,11 @@ const adminOnlyRoutes = ['/rfqs', '/quotes', '/comparison', '/purchase-orders', 
 // than a blocklist, because everything outside its own surface is off-limits.
 const coordinatorRoutes = ['/dashboard', '/schedule', '/tasks', '/my-work', '/stock', '/stock-overview', '/requisitions'];
 
-// A vendor registrar exists only to onboard vendors. Allowlisted to the
-// registration portal, the verification queue, and the dashboard. They verify
-// others' registrations in the queue and self-approve new vendors on the
-// comparison fast-path; everything else stays out.
-const vendorRegistrarRoutes = ['/dashboard', '/vendor-registration', '/vendor-verification'];
+// A vendor registrar onboards vendors and keeps site stock. Allowlisted to the
+// registration portal, the verification queue, the two stock surfaces, and the
+// dashboard. They verify others' registrations in the queue and self-approve new
+// vendors on the comparison fast-path; everything else stays out.
+const vendorRegistrarRoutes = ['/dashboard', '/vendor-registration', '/vendor-verification', '/stock', '/stock-overview'];
 
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
