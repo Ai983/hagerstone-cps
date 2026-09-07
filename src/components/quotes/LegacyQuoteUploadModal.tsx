@@ -81,6 +81,15 @@ type ExtractedData = {
   total_value: number;
   total_with_gst: number;
   special_notes: string;
+  // Lump-sum quotes (common for LT panels, fabrication, turnkey scopes) list the
+  // scope line by line with the Rate / Amount columns BLANK and print one price
+  // at the bottom. The totals-from-lines rule then yields ₹0 and the quote shows
+  // "NO DATA". These carry the printed figures so the amount is never lost —
+  // they are informational only; the saved totals still come from the lines +
+  // charges, and the printed amount is materialised as a charge row below.
+  is_lump_sum?: boolean;
+  printed_total_value?: number;
+  printed_total_with_gst?: number;
   // Flat add-on charges the vendor lists separately from line items (cartage,
   // freight, loading, packing, installation…). AI-extracted, then editable.
   extra_charges?: Array<{ name: string; amount: number; taxable: boolean }>;
@@ -142,13 +151,13 @@ const extractQuoteDetails = async (
   const contentBlocks: any[] = [];
   for (const file of files) {
     // PDFs pass through as documents; images are downscaled + re-encoded to
-    // JPEG so they never exceed Anthropic's 5 MB / 8000 px limits.
+    // JPEG so they never exceed the vision API's size limits.
     contentBlocks.push(await fileToClaudeBlock(file));
   }
 
   const { data, error: fnError } = await supabase.functions.invoke("claude-proxy", {
     body: {
-      model: "claude-haiku-4-5-20251001",
+      model: "gpt-5.6-luna",
       max_tokens: 8000,
       messages: [
         {
@@ -192,6 +201,7 @@ Return ONLY a valid JSON object (no markdown):
   ],
   "total_value": number,
   "total_with_gst": number,
+  "is_lump_sum": boolean,
   "extra_charges": [
     { "name": "string — e.g. Cartage, Freight, Loading, Packing, Installation, Labour", "amount": number, "taxable": boolean }
   ],
@@ -210,6 +220,19 @@ Rules:
   If the quote already shows only the net amount, derive rate from
   amount / quantity and put list_rate = rate, discount_pct = 0, special_discount_pct = 0.
 - total is line amount including GST (rate × quantity × (1 + gst_percent/100)).
+- ALWAYS read the totals printed at the bottom of the quote and return them in
+  total_value (the printed pre-tax subtotal / "TOTAL") and total_with_gst (the
+  printed "G.TOTAL" / "GRAND TOTAL" after tax). Report them EXACTLY as printed —
+  never recompute them, and never return 0 when a total is printed, even if the
+  vendor's own arithmetic does not add up.
+- LUMP-SUM QUOTES: some quotes (LT panels, fabrication, turnkey scopes) list the
+  scope line by line with the RATE and AMOUNT columns BLANK, and price it as one
+  amount per panel/package at the bottom. In that case still return every scope
+  line with rate 0, set "is_lump_sum": true, and put the printed amounts in
+  total_value / total_with_gst. If the quote prices SEVERAL packages separately
+  (e.g. "PANEL - 1  AMOUNT 5,55,000" then "PANEL - 2  AMOUNT 2,08,000"), return
+  one entry per package in extra_charges, named as printed, with that amount.
+  Set "is_lump_sum": false for a normal quote that rates each line.
 - hsn_code is the HSN/SAC code printed against the item (8-digit string or empty).
 - extra_charges are flat add-on charges the quote lists SEPARATELY from the item
   rows — e.g. Cartage, Freight/Transport (when shown as an amount), Loading,
@@ -229,7 +252,7 @@ Rules:
   if (fnError) {
     // supabase-js throws a generic FunctionsHttpError whose message is the fixed
     // string "Edge Function returned a non-2xx status code" and does NOT read the
-    // body — so the real Anthropic reason (e.g. "image exceeds 5 MB maximum") is
+    // body — so the real OpenAI reason (e.g. "image exceeds 5 MB maximum") is
     // hidden. It is carried on `.context` (the raw Response); read it so the toast
     // tells the user what actually went wrong instead of a meaningless status note.
     let detail = fnError.message;
@@ -243,18 +266,18 @@ Rules:
         /* body wasn't JSON — keep the generic message */
       }
     }
-    throw new Error("Claude proxy error: " + detail);
+    throw new Error("AI proxy error: " + detail);
   }
-  // The proxy is a thin pass-through. When Anthropic rejects the request (bad
-  // model id, content too large, etc) the response has an `error` field instead
-  // of `content`. Surface it instead of silently treating it as empty JSON.
+  // When OpenAI rejects the request (bad model id, content too large, etc) the
+  // proxy answers with an `error` string instead of `content`. Surface it
+  // instead of silently treating it as empty JSON.
   if ((data as any)?.error) {
     const err = (data as any).error;
     const msg = typeof err === "string" ? err : err?.message ?? JSON.stringify(err);
-    throw new Error("Anthropic API: " + msg);
+    throw new Error("OpenAI API: " + msg);
   }
   const raw = data?.content?.[0]?.text;
-  if (!raw) throw new Error("Empty response from Claude — try again or fill manually");
+  if (!raw) throw new Error("Empty response from AI — try again or fill manually");
   const clean = raw.replace(/```json|```/g, "").trim();
   try {
     return JSON.parse(clean) as ExtractedData;
@@ -485,7 +508,7 @@ export function LegacyQuoteUploadModal({
     setAiParsing(true);
     try {
       const result = await extractQuoteDetails(uploadFiles, itemDescriptions);
-      // Older Claude responses (and very simple quotes) may skip the new discount /
+      // Older AI responses (and very simple quotes) may skip the new discount /
       // hsn fields entirely. Normalize each line item so the form always has every
       // field, then re-derive net rate + total off the discount fields when list_rate
       // is present.
@@ -515,9 +538,16 @@ export function LegacyQuoteUploadModal({
           notes: String(li.notes ?? ""),
         };
       };
+      const printedSubtotal = Number(result.total_value ?? 0) || 0;
+      const printedGrand = Number(result.total_with_gst ?? 0) || 0;
       const normalised: ExtractedData = {
         ...result,
         line_items: (result.line_items ?? []).map(normaliseItem),
+        // Keep what the document actually printed. `total_value`/`total_with_gst`
+        // get overwritten with the derived totals on submit, so without this the
+        // vendor's own grand total would be lost.
+        printed_total_value: printedSubtotal,
+        printed_total_with_gst: printedGrand,
         // Always overwrite AI-guessed vendor identity fields with the supplier the
         // procurement team explicitly selected in step 2. The AI often misreads the
         // vendor name from a quote scan, and we already know who it is.
@@ -534,16 +564,42 @@ export function LegacyQuoteUploadModal({
       // freight, loading…). The rows stay fully editable so procurement can fix a
       // misread name/amount or toggle GST before submitting.
       const aiCharges = Array.isArray(result.extra_charges) ? result.extra_charges : [];
-      setExtraCharges(
-        aiCharges
-          .filter((c) => c && String(c.name ?? "").trim() && Number(c.amount) > 0)
-          .map((c, idx) => ({
-            id: `ai-${idx}-${Date.now()}`,
-            name: String(c.name).trim(),
-            amount: String(Number(c.amount)),
-            taxable: !!c.taxable,
-          })),
-      );
+      const chargeRows = aiCharges
+        .filter((c) => c && String(c.name ?? "").trim() && Number(c.amount) > 0)
+        .map((c, idx) => ({
+          id: `ai-${idx}-${Date.now()}`,
+          name: String(c.name).trim(),
+          amount: String(Number(c.amount)),
+          taxable: !!c.taxable,
+        }));
+
+      // Lump-sum rescue. Every total in CPS is summed from the lines (so quote ===
+      // comparison === PO), which silently yields ₹0 when the vendor left the rate
+      // column blank and priced the job as one amount at the bottom. Rather than
+      // write a header-only total — which would break that reconciliation — carry
+      // the printed amount in as a charge row, so it flows through the same math.
+      // It is pre-filled, fully editable, and the banner shows what was printed.
+      const itemsMoney = normalised.line_items.reduce(
+        (s, li) => s + Number(li.quantity ?? 0) * Number(li.rate ?? 0), 0);
+      const chargesMoney = chargeRows.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+      const isLumpSum = itemsMoney === 0 && (printedSubtotal > 0 || printedGrand > 0);
+      if (isLumpSum && chargesMoney === 0) {
+        // Prefer the printed PRE-TAX subtotal and let GST compute on top; fall back
+        // to the printed grand total as a non-taxable amount when that is all we have.
+        const useSubtotal = printedSubtotal > 0;
+        chargeRows.push({
+          id: `lump-${Date.now()}`,
+          name: "Lump sum as per quote (items not rated)",
+          amount: String(useSubtotal ? printedSubtotal : printedGrand),
+          taxable: useSubtotal,
+        });
+      }
+      setExtraCharges(chargeRows);
+      if (isLumpSum) {
+        toast.warning(
+          "This quote prices a lump sum — the item rows have no rates. The printed total has been added as a charge line; check it against the document before submitting.",
+        );
+      }
     } catch (e: any) {
       const detail = e?.message ? ` (${e.message})` : "";
       toast.error(`AI extraction failed${detail} — you can still fill details manually`);
@@ -831,6 +887,19 @@ export function LegacyQuoteUploadModal({
       .map((c) => ({ amount: parseFloat(c.amount) || 0, taxable: !!c.taxable })),
     parseFloat(overallDiscount) || 0,
   );
+
+  // The figures printed at the foot of the document, surfaced only when they
+  // disagree with what the lines add up to (₹1 tolerance for rounding).
+  const printedGrandTotal = Number(editedExtracted?.printed_total_with_gst ?? 0) || 0;
+  const printedSubTotal = Number(editedExtracted?.printed_total_value ?? 0) || 0;
+  const printedMismatch =
+    printedGrandTotal > 0 && Math.abs(printedGrandTotal - totals.grandTotal) > 1
+      ? {
+          grand: printedGrandTotal,
+          subtotal: printedSubTotal,
+          lumpSum: totals.itemsExclGst === 0,
+        }
+      : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1374,6 +1443,31 @@ export function LegacyQuoteUploadModal({
                       </div>
                     ))}
                   </div>
+
+                  {/* What the document itself printed at the bottom. Shown only when
+                       it disagrees with our derived total — that gap is either a
+                       lump-sum quote (no line rates), a misread rate, or the vendor's
+                       own arithmetic being wrong. All three need a human's eyes. */}
+                  {printedMismatch && (
+                    <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 space-y-2 text-sm">
+                      <div className="font-semibold text-amber-900">
+                        Printed on the quote — does not match the total below
+                      </div>
+                      <div className="flex justify-between text-amber-900">
+                        <span>Subtotal printed on quote</span>
+                        <span className="font-medium">{formatCurrency(printedMismatch.subtotal)}</span>
+                      </div>
+                      <div className="flex justify-between text-amber-900">
+                        <span>Grand total printed on quote</span>
+                        <span className="font-medium">{formatCurrency(printedMismatch.grand)}</span>
+                      </div>
+                      <p className="text-xs text-amber-800">
+                        {printedMismatch.lumpSum
+                          ? "The item rows carry no rates — this vendor priced the job as a lump sum. The printed amount has been added as a charge line so it flows into the comparison and PO. Edit it if the split should be per line."
+                          : "Check the line rates and charges against the document. Vendors' own totals are sometimes wrong, so do not copy this figure without verifying it."}
+                      </p>
+                    </div>
+                  )}
 
                   {/* Totals — derived from line items + extra charges (single
                        source of truth; matches the value saved on submit). */}
