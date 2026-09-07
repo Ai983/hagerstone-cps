@@ -43,6 +43,19 @@ import NewVendorRegistrationDialog from "@/components/vendors/NewVendorRegistrat
 // material shows up with minor spelling/wording drift ("Tiger lorex safety
 // shoes" vs "safety shoes", "PVC pipe 110mm" vs "110 mm pvc pipe"). Exact text
 // equality was rejecting genuine repeats, so we match tolerantly instead.
+/* Mirrors the fallback in generatePoPdf.ts: when "Po upto" / "Valid Upto" are left
+   blank, the PDF derives them from the delivery date (+5 / +13 calendar days).
+   Used only to preview that default under the inputs. */
+const DERIVED_PO_UPTO_DAYS = 5;
+const DERIVED_VALID_UPTO_DAYS = 13;
+const derivedFromDelivery = (deliveryDate: string | null | undefined, days: number): string | null => {
+  if (!deliveryDate) return null;
+  const dt = new Date(deliveryDate);
+  if (Number.isNaN(dt.getTime())) return null;
+  dt.setDate(dt.getDate() + days);
+  return dt.toLocaleDateString("en-IN");
+};
+
 const normalizeItemText = (s: string): string =>
   (s ?? "")
     .toLowerCase()
@@ -505,6 +518,10 @@ export default function ComparisonSheetPage() {
   const [bankName, setBankName] = useState("");
   const [bankIfsc, setBankIfsc] = useState("");
   const [bankAccountNumber, setBankAccountNumber] = useState("");
+  // PO validity window, collected in the same dialog. Both optional — left blank
+  // they save as NULL and the PDF derives them from the delivery date (+5 / +13).
+  const [poUptoDate, setPoUptoDate] = useState("");
+  const [validUptoDate, setValidUptoDate] = useState("");
 
   // PO preview dialog — shows the PDF that will be sent to the founder for
   // approval. User must click "View PO" before "Send to Founder" enables, so
@@ -550,6 +567,9 @@ export default function ComparisonSheetPage() {
     setBankName(src?.bank_name ?? "");
     setBankIfsc(src?.bank_ifsc ?? "");
     setBankAccountNumber(src?.bank_account_number ?? "");
+    // Validity dates are per-PO — never carried over from a previous one.
+    setPoUptoDate("");
+    setValidUptoDate("");
     setBankDialogOpen(true);
   };
 
@@ -770,6 +790,8 @@ export default function ComparisonSheetPage() {
         inspAt: (prData as any)?.project_site ?? null,
         paymentTerms: quote.payment_terms ?? null,
         deliveryDate: (prData as any)?.required_by ?? null,
+        poUpto: poUptoDate || null,
+        validUpto: validUptoDate || null,
         // buildPoPdfFromDb uses pr.project_code as both code and name fallback.
         projectCode: (prData as any)?.project_code ?? null,
         projectName: (prData as any)?.project_code ?? null,
@@ -3563,6 +3585,8 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           bill_to_address: "HAGERSTONE INTERNATIONAL (P) LTD\nGST: 09AAECH3768B1ZM\nD-107, 91 Springboard Hub, Red FM Road\nSector-2, Noida, UP\nPh: +91 8448992353\nprocurement@hagerstone.com",
           payment_terms: quote.payment_terms ?? null,
           delivery_date: prData?.required_by ?? null,
+          po_upto: poUptoDate || null,
+          valid_upto: validUptoDate || null,
           warranty_months: quote.warranty_months ?? null,
           created_by: user.id,
           total_value: poSubTotal,
@@ -3794,6 +3818,8 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               inspAt: (prData as any)?.project_site ?? shipToAddress?.split("\n")[0] ?? undefined,
               paymentTerms: _paymentTerms,
               deliveryDate: _deliveryDate,
+              poUpto: poUptoDate || null,
+              validUpto: validUptoDate || null,
               projectCode: (prData as any)?.project_code ?? null,
               projectName: (prData as any)?.project_code ?? null,
               subTotal,
@@ -5118,6 +5144,39 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               <Label className="text-xs">Account Number</Label>
               <Input value={bankAccountNumber} onChange={(e) => setBankAccountNumber(e.target.value)} placeholder="Account number (optional)" className="h-9 font-mono" />
             </div>
+
+            {/* PO validity window — optional; blank derives from the delivery date */}
+            <div className="sm:col-span-2 border-t pt-3 mt-1">
+              <div className="text-xs font-medium text-foreground">
+                PO Validity
+                <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+                  (optional — leave blank to derive from the delivery date)
+                </span>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Po upto</Label>
+              <Input type="date" value={poUptoDate} onChange={(e) => setPoUptoDate(e.target.value)} className="h-9" />
+              {!poUptoDate && (
+                <div className="text-[10px] text-muted-foreground">
+                  Blank → delivery date + {DERIVED_PO_UPTO_DAYS} days
+                </div>
+              )}
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Valid Upto</Label>
+              <Input type="date" value={validUptoDate} onChange={(e) => setValidUptoDate(e.target.value)} className="h-9" />
+              {!validUptoDate && (
+                <div className="text-[10px] text-muted-foreground">
+                  Blank → delivery date + {DERIVED_VALID_UPTO_DAYS} days
+                </div>
+              )}
+            </div>
+            {poUptoDate && validUptoDate && validUptoDate < poUptoDate && (
+              <div className="sm:col-span-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                ⚠ "Valid Upto" is earlier than "Po upto" — check these dates.
+              </div>
+            )}
           </div>
           {(!bankHolderName.trim() || !bankName.trim() || !bankIfsc.trim() || !bankAccountNumber.trim()) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
