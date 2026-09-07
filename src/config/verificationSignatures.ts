@@ -31,6 +31,10 @@ export const PROCUREMENT_SIGNATURES: Record<string, SignatureEntry> = {
   "dba88795@gmail.com":         { name: "Deepak B", signatureUrl: "/signatures/deepak.png" },
   // Saksham's signature was not on the provided sheet — add when available:
   // "sakshamkaloya109@gmail.com": { name: "Saksham", signatureUrl: "/signatures/saksham.png" },
+  // Vishal Jain (Procurement Manager) — signature image to be supplied. Until the
+  // file is dropped into public/signatures/ and this line uncommented, his
+  // acknowledgement stamps the "signature pending" placeholder, which is fine.
+  // "vishalj665@gmail.com":       { name: "Vishal Jain", signatureUrl: "/signatures/vishal.png" },
 };
 
 /** Resolve a procurement member's signature by email (case-insensitive). */

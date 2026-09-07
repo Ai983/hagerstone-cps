@@ -823,6 +823,7 @@ export default function PurchaseRequisitions() {
   // Limited dropdown of procurement contacts the site engineer can route the PR to.
   // Restricted by email so it stays stable across environments.
   const PR_ASSIGNEE_EMAILS = [
+    "vishalj665@gmail.com",          // Vishal Jain — Procurement Manager
     "procurement@hagerstone.com",   // Avisha
     "ajitreddy916@gmail.com",        // Ajit
     "dba88795@gmail.com",            // Deepak Bansal (shown as "Deepak B")
@@ -832,6 +833,7 @@ export default function PurchaseRequisitions() {
   // Display-label overrides for the PR assignee pills (stored name may differ).
   const PR_ASSIGNEE_LABELS: Record<string, string> = {
     "dba88795@gmail.com": "Deepak B",
+    "vishalj665@gmail.com": "Vishal Jain",
   };
   const [wizAssignees, setWizAssignees] = useState<Array<{ id: string; name: string; email: string; role: string; department: string | null }>>([]);
   const [wizLineItems, setWizLineItems] = useState<LineItem[]>([]);
