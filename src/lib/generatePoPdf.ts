@@ -233,6 +233,30 @@ const TERMS: string[] = [
   "Anything found varying from final design will be replaced by supplier at no cost.",
 ];
 
+/* ── HSIPL Purchase Policy — printed as an annexure page on every PO. ──
+   Wording mirrors cps_config `vendor_registration_terms_text` v1.1; this is the
+   placeholder to be finalised before rollout. Acceptance of the PO = acceptance
+   of this policy (no separate signature). */
+const PURCHASE_POLICY = {
+  version: "1.1",
+  clauses: [
+    { t: "Registration & approval", d: "Onboarding is only through HSIPL's registration process. Purchase Orders are placed and supply begins only after the registration is verified and approved." },
+    { t: "Documents & accuracy", d: "Provide the required documents, true and current. PAN, GST certificate and bank proof are mandatory (GST not applicable to individuals). False or expired documents are grounds for rejection." },
+    { t: "GST compliance", d: "GSTIN must be active and GSTR-3B and GSTR-1/IFF returns filed and up to date. HSIPL verifies this from the Government GST portal." },
+    { t: "Pricing & PO", d: "Rates are as per the approved PO; no supply without a valid PO. Prices remain firm for the full PO / delivery schedule." },
+    { t: "Payment", d: "Credit basis only (no advance). Credit period 30, 45 or 60 days as stated in the PO, from GRN + valid invoice. TDS and statutory deductions apply; MSME vendors per statute." },
+    { t: "Invoicing & dispatch", d: "Two hard copies of the invoice + e-way bill where applicable; invoice must carry the PO number and site address and be signed; dispatch signed by the dispatcher." },
+    { t: "Quality & rejection", d: "Goods must meet PO specifications; short/damaged/rejected material is replaced at the vendor's cost within 7 days." },
+    { t: "Delivery & delay", d: "Delivery on or before the PO date/time. If delayed beyond the issued time, the order is open to rejection and/or a penalty, as mutually decided at that time." },
+    { t: "Warranty", d: "As per the manufacturer / PO specification." },
+    { t: "Bank-account changes", d: "Accepted only in writing on the vendor's letterhead with fresh bank proof. Verbal or email-only requests are not honoured." },
+    { t: "Compliance & conduct", d: "Comply with all applicable laws (GST, labour, environment, health & safety at site); no gifts or inducements to HSIPL staff." },
+    { t: "Confidentiality", d: "Drawings, BOQs, rates, designs and site information remain confidential." },
+    { t: "Suspension / termination / blacklisting", d: "For repeated failures of quality, delivery, compliance or integrity." },
+    { t: "Governing law", d: "Laws of India; courts at New Delhi have exclusive jurisdiction." },
+  ],
+};
+
 /* ─────────────────────────────────────────────────────── builder ── */
 
 export function buildPoPdf(data: PoPdfData): Blob {
@@ -839,6 +863,70 @@ export function buildPoPdf(data: PoPdfData): Blob {
   doc.text(
     "This is a Computer Generated Digitally Signed/Approved P.O. and does not require manual Signature.",
     W / 2, y, { align: "center" }
+  );
+
+  /* ── 9. Annexure page — HSIPL Purchase Policy ── */
+  doc.addPage();
+  let ay = ML;
+  const A_LOGO_W = 60, A_LOGO_H = 18;
+  if (data.logoBase64) {
+    try { doc.addImage(data.logoBase64, "JPEG", W - MR - A_LOGO_W, ay, A_LOGO_W, A_LOGO_H, "pollogo", "FAST"); } catch { /* logo optional */ }
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12);
+  doc.setTextColor(18, 40, 76);
+  doc.text("ANNEXURE - HSIPL PURCHASE POLICY", ML, ay + 7);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(90, 90, 90);
+  doc.text(`Hagerstone International Pvt. Ltd.   -   Centralised Procurement   -   Policy v${PURCHASE_POLICY.version}`, ML, ay + 12);
+  ay += A_LOGO_H + 3;
+  doc.setDrawColor(18, 40, 76);
+  doc.setLineWidth(0.5);
+  doc.line(ML, ay, W - MR, ay);
+  ay += 4;
+
+  /* acceptance statement */
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  const polStmt = "By accepting this Purchase Order, the vendor accepts the Purchase Policy terms below and agrees to abide by them. If you have any doubt about these terms, please contact the HSIPL procurement team BEFORE sending the material.";
+  const polStmtLines = doc.splitTextToSize(polStmt, CW - 6);
+  const polBoxH = polStmtLines.length * 3.6 + 4;
+  doc.setFillColor(248, 250, 254);
+  doc.setDrawColor(185, 194, 208);
+  doc.setLineWidth(0.2);
+  doc.rect(ML, ay, CW, polBoxH, "FD");
+  doc.setTextColor(18, 40, 76);
+  doc.text(polStmtLines, ML + 3, ay + 4.2);
+  ay += polBoxH + 5;
+
+  /* the 14 policy terms — no signature block */
+  for (let i = 0; i < PURCHASE_POLICY.clauses.length; i++) {
+    const c = PURCHASE_POLICY.clauses[i];
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(7.8);
+    doc.setTextColor(18, 40, 76);
+    doc.text(`${i + 1}.  ${c.t}`, ML, ay);
+    ay += 3.4;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.4);
+    doc.setTextColor(45, 45, 45);
+    const clLines = doc.splitTextToSize(c.d, CW - 6);
+    doc.text(clLines, ML + 6, ay);
+    ay += clLines.length * 3.05 + 2.2;
+  }
+
+  ay += 1;
+  doc.setDrawColor(150);
+  doc.setLineWidth(0.2);
+  doc.line(ML, ay, W - MR, ay);
+  ay += 4;
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(7);
+  doc.setTextColor(122, 95, 16);
+  doc.text(
+    doc.splitTextToSize("No signature is required - acceptance of this Purchase Order is acceptance of this Purchase Policy. For any clarification, contact the Hagerstone procurement team before dispatch.", CW - 6),
+    ML, ay
   );
 
   /* Use arraybuffer → Blob — reliable across all jsPDF versions */
