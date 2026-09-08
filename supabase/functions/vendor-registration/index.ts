@@ -195,7 +195,6 @@ Deno.serve(async (req) => {
   // ---- submit: stamp terms, mark used, move to pending_verification -----
   if (action === "submit") {
     const acceptedBy = (body.accepted_by_name ?? "").trim();
-    if (!acceptedBy) return json({ error: "Please enter the name of the person accepting the terms." }, 400);
 
     // Claim the token FIRST and atomically — the UPDATE...WHERE used_at IS NULL
     // only succeeds for one concurrent caller, so two racing submits cannot
@@ -210,17 +209,20 @@ Deno.serve(async (req) => {
 
     if (!claimed) return json({ error: "This form has already been submitted." }, 410);
 
-    const { data: ver } = await admin
-      .from("cps_config").select("value")
-      .eq("key", "vendor_registration_terms_version").maybeSingle();
+    // The HSIPL Purchase Policy was removed from registration, so terms
+    // acceptance is optional here. Stamp it only if a name was actually given.
+    const upd: Record<string, unknown> = { registration_intake: "vendor_token" };
+    if (acceptedBy) {
+      const { data: ver } = await admin
+        .from("cps_config").select("value")
+        .eq("key", "vendor_registration_terms_version").maybeSingle();
+      upd.terms_version = ver?.value ?? "v1";
+      upd.terms_accepted_by_name = acceptedBy;
+      upd.terms_accepted_mode = "vendor_token";
+      upd.terms_accepted_at = new Date().toISOString();
+    }
 
-    await admin.from("cps_suppliers").update({
-      terms_version: ver?.value ?? "v1",
-      terms_accepted_by_name: acceptedBy,
-      terms_accepted_mode: "vendor_token",
-      terms_accepted_at: new Date().toISOString(),
-      registration_intake: "vendor_token",
-    }).eq("id", supplierId);
+    await admin.from("cps_suppliers").update(upd).eq("id", supplierId);
 
     // The vendor's half is done. Procurement still owes the diligence evidence,
     // so this does NOT move the record to pending_verification — that stays a
