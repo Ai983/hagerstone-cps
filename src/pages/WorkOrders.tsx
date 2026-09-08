@@ -1285,15 +1285,15 @@ Rules:
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 border-t pt-4">
                 <div className="space-y-1 sm:col-span-2">
                   <Label>Vendor / Contractor Name *</Label>
-                  <Input value={w_supplierName} readOnly className="bg-muted" placeholder="Select an existing vendor above" />
+                  <Input value={w_supplierName} onChange={(e) => setSupplierName(e.target.value)} placeholder="Vendor / contractor name" />
                 </div>
                 <div className="space-y-1">
                   <Label>GSTIN</Label>
-                  <Input value={w_supplierGstin} readOnly className="bg-muted" placeholder="—" />
+                  <Input value={w_supplierGstin} onChange={(e) => setSupplierGstin(e.target.value.toUpperCase())} placeholder="Enter GSTIN" />
                 </div>
                 <div className="space-y-1">
                   <Label>State</Label>
-                  <Input value={w_supplierState} readOnly className="bg-muted" placeholder="—" />
+                  <Input value={w_supplierState} onChange={(e) => setSupplierState(e.target.value)} placeholder="State" />
                 </div>
                 <div className="space-y-1">
                   <Label>Kind Attn</Label>
@@ -1301,15 +1301,15 @@ Rules:
                 </div>
                 <div className="space-y-1">
                   <Label>Phone</Label>
-                  <Input value={w_supplierContact} readOnly className="bg-muted" placeholder="—" />
+                  <Input value={w_supplierContact} onChange={(e) => setSupplierContact(e.target.value)} placeholder="Phone" />
                 </div>
                 <div className="space-y-1">
                   <Label>Email</Label>
-                  <Input value={w_supplierEmail} readOnly className="bg-muted" placeholder="—" />
+                  <Input value={w_supplierEmail} onChange={(e) => setSupplierEmail(e.target.value)} placeholder="Email" />
                 </div>
                 <div className="space-y-1 sm:col-span-2">
                   <Label>Address</Label>
-                  <Textarea value={w_supplierAddress} readOnly className="bg-muted" rows={2} placeholder="—" />
+                  <Textarea value={w_supplierAddress} onChange={(e) => setSupplierAddress(e.target.value)} rows={2} placeholder="Address" />
                 </div>
               </div>
 
