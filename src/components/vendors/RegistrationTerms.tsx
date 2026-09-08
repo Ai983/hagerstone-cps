@@ -1,37 +1,52 @@
 /**
- * Submit for verification — and, on the Comparison fast-path, register+approve.
+ * Terms acceptance and submit.
  *
- * The HSIPL Purchase Policy was removed from vendor registration: it is revised
- * separately and attached to the PO as an annexure. Registration now only
- * collects identity, contacts, bank details and the mandatory documents, so this
- * card is just the submit action.
+ * The terms text and version come from cps_config, so a wording change needs
+ * no deploy — and the accepted version is stamped on the supplier, so a bill
+ * rejected months later cites the terms THAT vendor agreed to.
+ *
+ * Submit calls the RPC, which re-checks the whole checklist server-side. The
+ * button's disabled state is a courtesy; the database is the authority.
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, Send, ShieldCheck } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Download, Loader2, Send, ShieldCheck } from "lucide-react";
 import {
   type RegistrationSnapshot, type SupplierRow,
-  selfApproveRegistration, submitRegistration,
+  acceptTermsInternally, fetchTerms, selfApproveRegistration, submitRegistration,
 } from "@/lib/vendorRegistration";
 
 export default function RegistrationTerms({
   supplier, snapshot, onChanged, fastPath, onApproved,
-}: {
-  supplier: SupplierRow; snapshot: RegistrationSnapshot; onChanged: () => void;
-  fastPath?: boolean; onApproved?: () => void;
-}) {
+}: { supplier: SupplierRow; snapshot: RegistrationSnapshot; onChanged: () => void; fastPath?: boolean; onApproved?: () => void }) {
+  const [terms, setTerms] = useState<{ text: string; version: string } | null>(null);
+  const [acceptedBy, setAcceptedBy] = useState("");
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => { fetchTerms().then(setTerms).catch((e) => toast.error(e.message)); }, []);
+
   const editable = supplier.registration_status === "draft" || supplier.registration_status === "rejected";
+
+  const record = async () => {
+    if (!acceptedBy.trim()) { toast.error("Name of the person who accepted is required"); return; }
+    try {
+      await acceptTermsInternally(supplier.id, acceptedBy, terms?.version ?? "v1");
+      onChanged();
+      toast.success("Terms acceptance recorded");
+    } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Could not record acceptance"); }
+  };
 
   const submit = async () => {
     setBusy(true);
     try {
       await submitRegistration(supplier.id);
-      toast.success("Sent for verification");
       onChanged();
+      toast.success("Sent to the verifier");
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Could not submit");
     } finally { setBusy(false); }
@@ -50,35 +65,84 @@ export default function RegistrationTerms({
   };
 
   const blockers: string[] = [];
-  if (snapshot.missing_documents.length) blockers.push(`${snapshot.missing_documents.length} document(s)`);
+  if (snapshot.missing_documents.length)
+    blockers.push(`${snapshot.missing_documents.length} document(s)`);
   if (!snapshot.bank_complete) blockers.push("bank details");
-
-  if (!editable) return null;
+  if (!snapshot.terms_accepted) blockers.push("terms acceptance");
 
   return (
     <Card>
-      <CardContent className="pt-6 space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          {fastPath ? "Register & approve" : "Submit for verification"}
-        </h2>
+      <CardContent className="pt-6 space-y-4">
         <div className="flex items-center gap-3 flex-wrap">
-          {fastPath ? (
-            <Button disabled={!snapshot.ready_to_submit || busy} onClick={selfApprove}>
-              {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-2" />}
-              Complete registration &amp; approve
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            HSIPL Purchase Policy
+          </h2>
+          {terms && <Badge variant="outline">version {terms.version}</Badge>}
+        </div>
+
+        <pre className="whitespace-pre-wrap text-sm text-foreground bg-muted/40 rounded-lg p-3 font-sans">
+          {terms?.text ?? "Loading…"}
+        </pre>
+
+        <div className="flex items-center gap-3 flex-wrap -mt-1">
+          <a href="/HSIPL-Purchase-Policy-v1.1.pdf" target="_blank" rel="noreferrer">
+            <Button variant="outline" size="sm">
+              <Download className="h-4 w-4 mr-1.5" />View / print the policy (v1.1)
             </Button>
-          ) : (
-            <Button disabled={!snapshot.ready_to_submit || busy} onClick={submit}>
-              {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-              Submit for verification
-            </Button>
-          )}
+          </a>
           <span className="text-xs text-muted-foreground">
-            {snapshot.ready_to_submit
-              ? (fastPath ? "Ready — will register & approve now" : "Ready to submit")
-              : `Still needed: ${blockers.join(", ")}`}
+            Download it, get the vendor to sign it, then upload the signed copy under
+            <b> &ldquo;Signed HSIPL Purchase Policy&rdquo; </b> in the Documents section above.
           </span>
         </div>
+
+        {supplier.terms_accepted_at && !snapshot.terms_accepted && (
+          <div className="text-sm rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-800 p-3">
+            <b>Policy updated to version {terms?.version ?? "1.1"}.</b> This vendor's earlier
+            acceptance{supplier.terms_version ? ` (version ${supplier.terms_version})` : ""} is no longer valid.
+            Please share the new policy, get it re-signed, upload the signed copy, and record acceptance again below.
+          </div>
+        )}
+
+        {snapshot.terms_accepted ? (
+          <p className="text-sm text-muted-foreground">
+            Accepted by <b className="text-foreground">{supplier.terms_accepted_by_name}</b>
+            {supplier.terms_accepted_at && ` on ${new Date(supplier.terms_accepted_at).toLocaleDateString()}`}
+            {supplier.terms_version && ` · version ${supplier.terms_version}`}
+          </p>
+        ) : editable && (
+          <div className="flex gap-2 items-end flex-wrap">
+            <div className="grid gap-1.5">
+              <Label className="text-xs text-muted-foreground">
+                Name of the person at the vendor who accepted
+              </Label>
+              <Input className="w-64" value={acceptedBy}
+                     onChange={(e) => setAcceptedBy(e.target.value)} />
+            </div>
+            <Button variant="outline" onClick={record}>Record acceptance</Button>
+          </div>
+        )}
+
+        {editable && (
+          <div className="flex items-center gap-3 flex-wrap border-t border-border pt-4">
+            {fastPath ? (
+              <Button disabled={!snapshot.ready_to_submit || busy} onClick={selfApprove}>
+                {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-2" />}
+                Complete registration &amp; approve
+              </Button>
+            ) : (
+              <Button disabled={!snapshot.ready_to_submit || busy} onClick={submit}>
+                {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+                Submit for verification
+              </Button>
+            )}
+            <span className="text-xs text-muted-foreground">
+              {snapshot.ready_to_submit
+                ? (fastPath ? "Ready — will register &amp; approve now" : "Ready to submit")
+                : `Still needed: ${blockers.join(", ")}`}
+            </span>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

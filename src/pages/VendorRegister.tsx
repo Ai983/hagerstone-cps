@@ -19,7 +19,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, Loader2, Upload, XCircle } from "lucide-react";
+import { CheckCircle2, Download, Loader2, Upload, XCircle } from "lucide-react";
 import { DOCUMENT_LABELS, VENDOR_TYPE_LABELS } from "@/lib/vendorRegistration";
 import {
   type PublicVendorField, type VendorTokenPrefill,
@@ -44,6 +44,7 @@ export default function VendorRegister() {
   const [errorMsg, setErrorMsg] = useState("");
   const [prefill, setPrefill] = useState<VendorTokenPrefill | null>(null);
   const [busyDoc, setBusyDoc] = useState<string | null>(null);
+  const [acceptedBy, setAcceptedBy] = useState("");
   const [submitting, setSubmitting] = useState(false);
   // Baseline of what is already saved, so an unchanged blur does not re-POST.
   const savedRef = useRef<Record<string, string>>({});
@@ -87,9 +88,10 @@ export default function VendorRegister() {
   };
 
   const submit = async () => {
+    if (!acceptedBy.trim()) { toast.error("Please type your name to accept the terms"); return; }
     setSubmitting(true);
     try {
-      await submitVendorForm(token, "");
+      await submitVendorForm(token, acceptedBy.trim());
       setStatus("submitted");
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Could not submit");
@@ -123,7 +125,7 @@ export default function VendorRegister() {
   }
 
   if (!prefill) return null;
-  const { supplier, documents, rules } = prefill;
+  const { supplier, documents, rules, terms } = prefill;
   const docByType = (t: string) => documents.find((d) => d.document_type === t);
   const missingMandatory = rules.filter((r) => r.is_mandatory && !docByType(r.document_type)?.file_url);
 
@@ -146,7 +148,7 @@ export default function VendorRegister() {
           )}
         </div>
         <p className="text-xs text-muted-foreground text-center">
-          Your entries save as you go. Attach the documents below, then submit.
+          Your entries save as you go. Attach the documents below, accept the terms, then submit.
         </p>
 
         <Card><CardContent className="pt-6 space-y-4">
@@ -215,14 +217,36 @@ export default function VendorRegister() {
         </CardContent></Card>
 
         <Card><CardContent className="pt-6 space-y-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Submit</h2>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              HSIPL Purchase Policy
+            </h2>
+            {terms.vendor_registration_terms_version && (
+              <Badge variant="outline">version {terms.vendor_registration_terms_version}</Badge>
+            )}
+          </div>
+          <pre className="whitespace-pre-wrap text-sm text-foreground bg-muted/40 rounded-lg p-3 font-sans">
+            {terms.vendor_registration_terms_text ?? ""}
+          </pre>
+          <a href="/HSIPL-Purchase-Policy-v1.1.pdf" target="_blank" rel="noreferrer"
+             className="inline-flex items-center gap-1.5 text-sm text-primary underline">
+            <Download className="h-4 w-4" />View / print the full policy (v1.1), sign it, and upload it below
+          </a>
+          <div className="grid gap-1.5 max-w-sm">
+            <Label className="text-xs text-muted-foreground">
+              Type your name to accept these terms on behalf of the vendor
+            </Label>
+            <Input value={acceptedBy} onChange={(e) => setAcceptedBy(e.target.value)} />
+          </div>
+
           {missingMandatory.length > 0 && (
             <p className="text-xs text-muted-foreground">
               Still to attach: {missingMandatory.map((r) => DOCUMENT_LABELS[r.document_type] ?? r.document_type).join(", ")}.
               You can submit now and send the rest to procurement, or attach them first.
             </p>
           )}
-          <Button disabled={submitting} onClick={submit}>
+
+          <Button disabled={submitting || !acceptedBy.trim()} onClick={submit}>
             {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}Submit registration
           </Button>
         </CardContent></Card>
