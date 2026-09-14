@@ -843,48 +843,17 @@ export default function ComparisonSheetPage() {
     }
     // Root-cause guard (defect: terms-less founder approval). A PO with no payment plan
     // produces no tranches → no advance release → it silently never reaches Finance and
-    // gets stranded at "Founder Approved". Block the send before we lock the comparison.
+    // gets stranded at "Founder Approved". Block the send before anything else.
     if (paymentPlan.length === 0) {
       toast.error("Payment plan zaroori hai — founder ko bhejne se pehle kam se kam ek installment add karein.");
       return;
     }
     setSendingToFounder(true);
     try {
-      // 1. Freeze the snapshot first — captures every number the user just
-      //    saw in the PDF preview / on screen, in case PO creation fails.
-      await freezeSnapshot(sheet.id);
-
-      const now = new Date().toISOString();
-      const { error: updErr } = await supabase.from("cps_comparison_sheets").update({
-        manual_review_status: "sent_for_approval",
-        status: "approved",
-        approved_by: user.id,
-        approved_at: now,
-        is_locked: true,
-        frozen_at: now,
-        frozen_by: user.id,
-      } as any).eq("id", sheet.id);
-      if (updErr) throw updErr;
-
-      // 2. Audit log entry (best-effort).
-      try {
-        await supabase.from("cps_audit_log").insert({
-          user_id: user.id,
-          user_name: user.name,
-          user_role: user.role,
-          action_type: "COMPARISON_SENT_TO_FOUNDER",
-          entity_type: "cps_comparison_sheets",
-          entity_id: sheet.id,
-          entity_number: rfq?.rfq_number ?? null,
-          description: `Comparison frozen and PO dispatched to founder for ${rfq?.rfq_number ?? ""}`,
-          severity: "info",
-          logged_at: now,
-        } as any);
-      } catch {}
-
-      // 3. Create the real PO + upload PDF + fire founder webhook.
-      //    createPO handles all of these and navigates to /purchase-orders
-      //    on success.
+      // The comparison is frozen + marked "sent_for_approval" ONLY after the PO row is
+      // actually created — that now lives inside createPO. Previously the flip happened
+      // here FIRST, so an unregistered recommended vendor (PO blocked → registration
+      // dialog) left the sheet falsely showing "sent to founder" with no PO created.
       await createPO();
     } catch (e: any) {
       toast.error(e?.message || "Failed to send to founder");
@@ -3686,6 +3655,35 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
         },
       ]);
 
+      // Freeze + flip the comparison to "sent_for_approval" ONLY now that the PO row
+      // exists. An unregistered vendor bails to the registration dialog above with no PO,
+      // so the sheet can never falsely show "sent to founder" without one.
+      await freezeSnapshot(sheet.id);
+      const sentAt = new Date().toISOString();
+      const { error: flipErr } = await supabase.from("cps_comparison_sheets").update({
+        manual_review_status: "sent_for_approval",
+        status: "approved",
+        approved_by: user.id,
+        approved_at: sentAt,
+        is_locked: true,
+        frozen_at: sentAt,
+        frozen_by: user.id,
+      } as any).eq("id", sheet.id);
+      if (flipErr) throw flipErr;
+      try {
+        await supabase.from("cps_audit_log").insert({
+          user_id: user.id,
+          user_name: user.name,
+          user_role: user.role,
+          action_type: "COMPARISON_SENT_TO_FOUNDER",
+          entity_type: "cps_comparison_sheets",
+          entity_id: sheet.id,
+          entity_number: rfq?.rfq_number ?? null,
+          description: `Comparison frozen and PO ${poNumber} dispatched to founder for ${rfq?.rfq_number ?? ""}`,
+          severity: "info",
+          logged_at: sentAt,
+        } as any);
+      } catch {}
       toast.success(`${poNumber} created successfully — sending to founders for approval`);
       navigate("/purchase-orders");
 
