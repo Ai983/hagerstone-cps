@@ -522,6 +522,9 @@ export default function ComparisonSheetPage() {
   // they save as NULL and the PDF derives them from the delivery date (+5 / +13).
   const [poUptoDate, setPoUptoDate] = useState("");
   const [validUptoDate, setValidUptoDate] = useState("");
+  // Delivery schedule for this PO — mandatory. Prefilled from the PR's required-by
+  // date but editable; prints as "Delivery Sch" and drives the PO validity dates.
+  const [deliveryDate, setDeliveryDate] = useState("");
 
   // PO preview dialog — shows the PDF that will be sent to the founder for
   // approval. User must click "View PO" before "Send to Founder" enables, so
@@ -570,6 +573,12 @@ export default function ComparisonSheetPage() {
     // Validity dates are per-PO — never carried over from a previous one.
     setPoUptoDate("");
     setValidUptoDate("");
+    const { data: prReq } = await supabase
+      .from("cps_purchase_requisitions")
+      .select("required_by")
+      .eq("id", rfq.pr_id)
+      .maybeSingle();
+    setDeliveryDate(String((prReq as any)?.required_by ?? "").slice(0, 10));
     setBankDialogOpen(true);
   };
 
@@ -577,6 +586,10 @@ export default function ComparisonSheetPage() {
     // Bank details are optional — but IF IFSC is entered, it must be valid
     if (bankIfsc.trim() && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(bankIfsc.trim().toUpperCase())) {
       toast.error("Invalid IFSC code — must be 11 characters (e.g. HDFC0001234) or leave blank");
+      return;
+    }
+    if (!deliveryDate) {
+      toast.error("Delivery date is required — please set it before continuing.");
       return;
     }
     setBankDialogOpen(false);
@@ -789,7 +802,7 @@ export default function ComparisonSheetPage() {
         shipToAddress: (prData as any)?.ship_to_address ?? (prData as any)?.project_site ?? "—",
         inspAt: (prData as any)?.project_site ?? null,
         paymentTerms: quote.payment_terms ?? null,
-        deliveryDate: (prData as any)?.required_by ?? null,
+        deliveryDate: deliveryDate || ((prData as any)?.required_by ?? null),
         poUpto: poUptoDate || null,
         validUpto: validUptoDate || null,
         // buildPoPdfFromDb uses pr.project_code as both code and name fallback.
@@ -3553,7 +3566,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           ship_to_address: prData?.project_site ?? "—",
           bill_to_address: "HAGERSTONE INTERNATIONAL (P) LTD\nGST: 09AAECH3768B1ZM\nD-107, 91 Springboard Hub, Red FM Road\nSector-2, Noida, UP\nPh: +91 8448992353\nprocurement@hagerstone.com",
           payment_terms: quote.payment_terms ?? null,
-          delivery_date: prData?.required_by ?? null,
+          delivery_date: deliveryDate || (prData?.required_by ?? null),
           po_upto: poUptoDate || null,
           valid_upto: validUptoDate || null,
           warranty_months: quote.warranty_months ?? null,
@@ -3689,7 +3702,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
 
       /* ── fire-and-forget: approval tokens + n8n webhook (PDF optional) ── */
       const _paymentTerms = quote.payment_terms ?? null;
-      const _deliveryDate = prData?.required_by ?? null;
+      const _deliveryDate = deliveryDate || (prData?.required_by ?? null);
       (async () => {
         try {
           const origin = window.location.origin;
@@ -5143,6 +5156,16 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               <Input value={bankAccountNumber} onChange={(e) => setBankAccountNumber(e.target.value)} placeholder="Account number (optional)" className="h-9 font-mono" />
             </div>
 
+            {/* Delivery schedule — mandatory; drives PO validity and prints on the PO */}
+            <div className="space-y-1 sm:col-span-2 border-t pt-3 mt-1">
+              <Label className="text-xs">Delivery Date <span className="text-red-600">*</span></Label>
+              <Input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} className="h-9" />
+              {!deliveryDate ? (
+                <div className="text-[10px] text-red-600">Required — prints as "Delivery Sch" on the PO.</div>
+              ) : (
+                <div className="text-[10px] text-muted-foreground">Prefilled from the PR's required-by date; edit if needed.</div>
+              )}
+            </div>
             {/* PO validity window — optional; blank derives from the delivery date */}
             <div className="sm:col-span-2 border-t pt-3 mt-1">
               <div className="text-xs font-medium text-foreground">
@@ -5185,7 +5208,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
             <Button variant="outline" onClick={() => setBankDialogOpen(false)} disabled={poPreviewLoading}>
               Cancel
             </Button>
-            <Button onClick={confirmBankAndPreviewPo} disabled={poPreviewLoading} className="bg-blue-600 hover:bg-blue-700 text-white">
+            <Button onClick={confirmBankAndPreviewPo} disabled={poPreviewLoading || !deliveryDate} className="bg-blue-600 hover:bg-blue-700 text-white">
               {poPreviewLoading ? "Generating preview…" : "Continue to PO Preview"}
             </Button>
           </DialogFooter>
