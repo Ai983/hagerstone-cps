@@ -5,6 +5,7 @@ import { SupplierDetailDialog } from "@/components/rfq/SupplierDetailDialog";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
@@ -305,13 +306,13 @@ export default function RFQs() {
 
     const rfqIds = rfqRows.map((r) => r.id);
     if (rfqIds.length) {
-      const { data: quotesData } = await supabase
+      const { data: quotesData } = await inChunks<{ rfq_id: string; parse_status: string }>(rfqIds, (c) => supabase
         .from("cps_quotes")
         .select("rfq_id, parse_status")
-        .in("rfq_id", rfqIds)
+        .in("rfq_id", c)
         // Match the Quotes page: superseded (soft-deleted) quotes are excluded so
         // the "View Quotes (N)" count reflects only live quotes, never a dead-end.
-        .is("superseded_at", null);
+        .is("superseded_at", null));
       const totalMap: Record<string, number> = {};
       const approvedMap: Record<string, number> = {};
       (quotesData ?? []).forEach((q: any) => {
@@ -328,14 +329,14 @@ export default function RFQs() {
     // Precompute linked PR display strings and supplier counts for the RFQ table.
     const prIds = rfqRows.map((r) => r.pr_id);
     if (prIds.length) {
-      const { data: prs } = await supabase
+      const { data: prs } = await inChunks<PurchaseRequisition>(prIds, (c) => supabase
         .from("cps_purchase_requisitions")
         .select("id,pr_number,project_site,project_code,status")
-        .in("id", prIds);
+        .in("id", c));
 
       const prRows = (prs ?? []) as PurchaseRequisition[];
 
-      const { data: lineItems } = await supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", prIds);
+      const { data: lineItems } = await inChunks<{ pr_id: string }>(prIds, (c) => supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", c));
       const counts = (lineItems ?? []) as Array<{ pr_id: string }>;
       const byPr: Record<string, number> = {};
       counts.forEach((li) => {
@@ -367,10 +368,10 @@ export default function RFQs() {
     // Resolve creator names for the new "Created By" column.
     const creatorIds = Array.from(new Set(rfqRows.map((r) => r.created_by).filter(Boolean) as string[]));
     if (creatorIds.length) {
-      const { data: userRows } = await supabase
+      const { data: userRows } = await inChunks<{ id: string; name: string; email: string }>(creatorIds, (c) => supabase
         .from("cps_users")
         .select("id,name,email")
-        .in("id", creatorIds);
+        .in("id", c));
       const nameMap: Record<string, string> = {};
       (userRows ?? []).forEach((u: any) => {
         nameMap[String(u.id)] = (u.name ?? u.email ?? "").trim() || "—";
@@ -402,7 +403,7 @@ export default function RFQs() {
     const prIds = prRows.map((p) => p.id);
     let counts: Record<string, number> = {};
     if (prIds.length) {
-      const { data: lines } = await supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", prIds);
+      const { data: lines } = await inChunks<{ pr_id: string }>(prIds, (c) => supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", c));
       if (lines) {
         counts = (lines as any[]).reduce((acc, l) => {
           const key = String(l.pr_id);
@@ -915,10 +916,10 @@ export default function RFQs() {
     try {
       // Fetch full supplier records so the Select Suppliers list renders
       // phone / categories the same way as category-matched rows.
-      const { data, error } = await supabase
+      const { data, error } = await inChunks<Supplier>(idsToAdd, (c) => supabase
         .from("cps_suppliers")
         .select("id, name, phone, whatsapp, email, city, categories, performance_score, last_awarded_at, status, profile_complete")
-        .in("id", idsToAdd);
+        .in("id", c));
       if (error) throw error;
       const rows = (data ?? []) as Supplier[];
       setMatchedSuppliers((prev) => {
@@ -1001,10 +1002,10 @@ export default function RFQs() {
       const portalBase = (portalRes.data?.value as string | undefined) ?? "https://hagerstone-cps.vercel.app";
 
       // Step 4 — Fetch fresh supplier details (phone/whatsapp may differ from local state)
-      const { data: supplierDetails } = await supabase
+      const { data: supplierDetails } = await inChunks<any>(reviewSelectedIds, (c) => supabase
         .from("cps_suppliers")
         .select("id, name, whatsapp, phone, email, profile_complete")
-        .in("id", reviewSelectedIds);
+        .in("id", c));
 
       // Step 5 — Generate upload tokens via RPC
       const { data: tokens } = await supabase.rpc("cps_generate_upload_tokens", {

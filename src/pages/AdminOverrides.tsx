@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -254,34 +255,30 @@ export default function AdminOverrides() {
       );
 
       // 2) PRs (project info)
-      const { data: prs } = prIds.length
-        ? await supabase
-            .from("cps_purchase_requisitions")
-            .select("id, pr_number, project_site, project_code")
-            .in("id", prIds)
-        : { data: [] as any[] };
+      const { data: prs } = await inChunks<{ id: string; pr_number: string; project_site: string | null; project_code: string | null }>(prIds, (c) => supabase
+        .from("cps_purchase_requisitions")
+        .select("id, pr_number, project_site, project_code")
+        .in("id", c));
 
       // 3) Users (requestor + decider names)
-      const { data: users } = userIds.length
-        ? await supabase.from("cps_users").select("id, name").in("id", userIds)
-        : { data: [] as any[] };
+      const { data: users } = await inChunks<{ id: string; name: string | null }>(userIds, (c) => supabase.from("cps_users").select("id, name").in("id", c));
 
       // 4) Approved quote counts per RFQ
-      const { data: quotes } = await supabase
+      const { data: quotes } = await inChunks<{ rfq_id: string }>(rfqIds, (c) => supabase
         .from("cps_quotes")
         .select("rfq_id")
-        .in("rfq_id", rfqIds)
-        .eq("parse_status", "approved");
+        .in("rfq_id", c)
+        .eq("parse_status", "approved"));
       const approvedByRfq: Record<string, number> = {};
       (quotes ?? []).forEach((q: any) => {
         approvedByRfq[q.rfq_id] = (approvedByRfq[q.rfq_id] ?? 0) + 1;
       });
 
       // 5) Suppliers invited per RFQ
-      const { data: rfqSuppliers } = await supabase
+      const { data: rfqSuppliers } = await inChunks<{ rfq_id: string }>(rfqIds, (c) => supabase
         .from("cps_rfq_suppliers")
         .select("rfq_id")
-        .in("rfq_id", rfqIds);
+        .in("rfq_id", c));
       const invitedByRfq: Record<string, number> = {};
       (rfqSuppliers ?? []).forEach((row: any) => {
         invitedByRfq[row.rfq_id] = (invitedByRfq[row.rfq_id] ?? 0) + 1;
@@ -290,11 +287,11 @@ export default function AdminOverrides() {
       // 6) PR line items (materials) for all relevant PRs
       const lineItemsByPr: Record<string, LineItem[]> = {};
       if (prIds.length) {
-        const { data: lineRows } = await supabase
+        const { data: lineRows } = await inChunks<{ pr_id: string; description: string | null; quantity: number | null; unit: string | null; brand_make: string | null; preferred_brands: string | null; specs: string | null; sort_order: number | null }>(prIds, (c) => supabase
           .from("cps_pr_line_items")
           .select("pr_id,description,quantity,unit,brand_make,preferred_brands,specs,sort_order")
-          .in("pr_id", prIds)
-          .order("sort_order", { ascending: true });
+          .in("pr_id", c)
+          .order("sort_order", { ascending: true }));
         (lineRows ?? []).forEach((li: any) => {
           const key = String(li.pr_id);
           if (!lineItemsByPr[key]) lineItemsByPr[key] = [];

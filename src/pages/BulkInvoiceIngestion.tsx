@@ -11,6 +11,7 @@ import {
 import { parseInvoiceWithClaude, type ParsedInvoice } from "@/services/invoice-parser";
 import { uploadParsedInvoice, type LineMaterialChoice } from "@/services/invoice-uploader";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { ParsedInvoiceReview, type MaterialOption, type ReviewDecision } from "@/components/invoice-import/ParsedInvoiceReview";
 import { Accordion } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
@@ -189,10 +190,10 @@ export default function BulkInvoiceIngestion() {
       setGstinInDb(new Set());
       return;
     }
-    void supabase
+    void inChunks<{ gstin: string | null }>(gstins, (c) => supabase
       .from("vendors")
       .select("gstin")
-      .in("gstin", gstins)
+      .in("gstin", c))
       .then(({ data }) => {
         const s = new Set<string>();
         (data ?? []).forEach((row: { gstin: string | null }) => {

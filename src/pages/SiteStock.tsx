@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { useAuth } from "@/contexts/AuthContext";
 
 import {
@@ -190,7 +191,7 @@ export default function SiteStock() {
       // Resolve updated_by → name for the "edited by" display
       const editorIds = Array.from(new Set(stockRows.map((s) => s.updated_by).filter(Boolean) as string[]));
       if (editorIds.length) {
-        const { data: editors } = await supabase.from("cps_users").select("id,name").in("id", editorIds);
+        const { data: editors } = await inChunks<any>(editorIds, (c) => supabase.from("cps_users").select("id,name").in("id", c));
         const em = new Map<string, string>();
         (editors ?? []).forEach((u: any) => em.set(u.id, u.name));
         setEditorNames(em);

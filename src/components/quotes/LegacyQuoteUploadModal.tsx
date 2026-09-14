@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { fileToClaudeBlock } from "@/lib/imageForClaude";
 import { startRegistration, type VendorType } from "@/lib/vendorRegistration";
 
@@ -385,10 +386,10 @@ export function LegacyQuoteUploadModal({
         // Fetch project names for all linked PRs
         const prIds = Array.from(new Set(rfqRows.map((r) => r.pr_id).filter(Boolean))) as string[];
         if (prIds.length) {
-          const { data: prs } = await supabase
+          const { data: prs } = await inChunks<any>(prIds, (c) => supabase
             .from("cps_purchase_requisitions")
             .select("id,project_code,project_site")
-            .in("id", prIds);
+            .in("id", c));
           const nameMap: Record<string, string> = {};
           (prs ?? []).forEach((p: any) => { nameMap[p.id] = p.project_code ?? p.project_site; });
           // Map rfq.id → project name via pr_id
@@ -427,11 +428,11 @@ export function LegacyQuoteUploadModal({
         .eq("rfq_id", selectedRfqId);
       const supIds = (rfqSups ?? []).map((r: { supplier_id: string }) => r.supplier_id).filter(Boolean);
       if (supIds.length === 0) { setRfqVendors([]); setRfqVendorsLoading(false); return; }
-      const { data: sups } = await supabase
+      const { data: sups } = await inChunks<Supplier>(supIds, (c) => supabase
         .from("cps_suppliers")
         .select("id,name,categories,profile_complete,phone,email,gstin,address_text")
-        .in("id", supIds)
-        .eq("status", "active");
+        .in("id", c)
+        .eq("status", "active"));
       setRfqVendors((sups ?? []) as Supplier[]);
       setRfqVendorsLoading(false);
     })();

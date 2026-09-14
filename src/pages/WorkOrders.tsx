@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { useAuth } from "@/contexts/AuthContext";
 import { fileToBase64, fileToClaudeBlock } from "@/lib/imageForClaude";
 
@@ -217,10 +218,10 @@ export default function WorkOrders() {
 
       const creatorIds = Array.from(new Set(woRows.map((r) => r.created_by).filter(Boolean) as string[]));
       if (creatorIds.length > 0) {
-        const { data: usersData } = await supabase
+        const { data: usersData } = await inChunks<any>(creatorIds, (c) => supabase
           .from("cps_users")
           .select("id, name")
-          .in("id", creatorIds);
+          .in("id", c));
         const map: Record<string, string> = {};
         (usersData ?? []).forEach((u: any) => { map[u.id] = u.name; });
         setUserNameMap(map);

@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { CPS_UNITS, normalizeUnit, isCanonicalUnit } from "@/lib/units";
 
 import { Badge } from "@/components/ui/badge";
@@ -288,7 +289,7 @@ export default function PRReview() {
       ));
       const nameMap: Record<string, string> = {};
       if (userIds.length) {
-        const { data: users } = await supabase.from("cps_users").select("id,name").in("id", userIds);
+        const { data: users } = await inChunks<{ id: string; name: string | null }>(userIds, (c) => supabase.from("cps_users").select("id,name").in("id", c));
         (users ?? []).forEach((u: any) => { nameMap[u.id] = u.name; });
       }
 
@@ -296,10 +297,10 @@ export default function PRReview() {
       const prIds = rows.map((r) => r.id);
       const countMap: Record<string, number> = {};
       if (prIds.length) {
-        const { data: counts } = await supabase
+        const { data: counts } = await inChunks<{ pr_id: string }>(prIds, (c) => supabase
           .from("cps_pr_line_items")
           .select("pr_id")
-          .in("pr_id", prIds);
+          .in("pr_id", c));
         (counts ?? []).forEach((c: any) => { countMap[c.pr_id] = (countMap[c.pr_id] ?? 0) + 1; });
       }
 

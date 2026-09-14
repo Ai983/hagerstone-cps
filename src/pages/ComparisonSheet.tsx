@@ -4,6 +4,7 @@ import { toast } from "sonner";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
 import logoUrl from "@/assets/optimisedlogo.png";
 
@@ -1053,10 +1054,10 @@ export default function ComparisonSheetPage() {
     // "View quote" link keeps working after the sheet is frozen.
     const snapQuoteIds = totalsRows.map((t) => t.quote_id).filter(Boolean) as string[];
     if (snapQuoteIds.length) {
-      const { data: qFiles } = await supabase
+      const { data: qFiles } = await inChunks<any>(snapQuoteIds, (c) => supabase
         .from("cps_quotes")
         .select("supplier_id,raw_file_path,legacy_file_url")
-        .in("id", snapQuoteIds);
+        .in("id", c));
       (qFiles ?? []).forEach((qf: any) => {
         const sId = String(qf.supplier_id);
         if (quoteMap[sId]) {
@@ -1265,8 +1266,8 @@ export default function ComparisonSheetPage() {
           sRow.frozen_by ?? undefined,
         ].filter(Boolean) as string[]));
         if (idsToLoad.length) {
-          const { data: userRows } = await supabase
-            .from("cps_users").select("id,name").in("id", idsToLoad);
+          const { data: userRows } = await inChunks<any>(idsToLoad, (c) =>
+            supabase.from("cps_users").select("id,name").in("id", c));
           const map: Record<string, { id: string; name: string }> = {};
           (userRows ?? []).forEach((u: any) => {
             map[String(u.id)] = { id: String(u.id), name: String(u.name ?? "") };
@@ -1320,10 +1321,10 @@ export default function ComparisonSheetPage() {
 
       const supplierIds = Array.from(new Set(approvedQuotes.map((q) => String(q.supplier_id)).filter(Boolean)));
 
-      const { data: supplierRows, error: supplierErr } = await supabase
+      const { data: supplierRows, error: supplierErr } = await inChunks<SupplierRow>(supplierIds, (c) => supabase
         .from("cps_suppliers")
         .select("id,name,city")
-        .in("id", supplierIds);
+        .in("id", c));
       if (supplierErr) throw supplierErr;
       const suppliersList = (supplierRows ?? []) as SupplierRow[];
       setSuppliers(suppliersList);
@@ -1338,11 +1339,11 @@ export default function ComparisonSheetPage() {
       // should never feed into comparison (prevents stale or non-compliant data skewing analysis).
       const approvedQuoteIds = approvedQuotes.map((q) => q.id).filter(Boolean);
       const { data: quoteLineItemsRows, error: liErr } = approvedQuoteIds.length
-        ? await supabase
+        ? await inChunks(approvedQuoteIds, (c) => supabase
             .from("cps_quote_line_items")
             .select("id,quote_id,pr_line_item_id,item_id,original_description,brand,quantity,unit,rate,gst_percent,freight,packing,total_landed_rate,lead_time_days,hsn_code,confidence_score,human_corrected,correction_log")
-            .in("quote_id", approvedQuoteIds)
-            .eq("is_charge", false) // goods only — charges shown via the extras breakdown, not as PR-line rates
+            .in("quote_id", c)
+            .eq("is_charge", false)) // goods only — charges shown via the extras breakdown, not as PR-line rates
         : { data: [], error: null };
       if (liErr) throw liErr;
 
@@ -1438,10 +1439,10 @@ export default function ComparisonSheetPage() {
       // Extra charges per supplier (read from each APPROVED quote's ai_parsed_data)
       const extraBySupplier: Record<string, Array<{ name: string; amount: number; taxable: boolean }>> = {};
       const { data: quotesAiData } = approvedQuoteIds.length
-        ? await supabase
+        ? await inChunks<any>(approvedQuoteIds, (c) => supabase
             .from("cps_quotes")
             .select("supplier_id, ai_parsed_data")
-            .in("id", approvedQuoteIds)
+            .in("id", c))
         : { data: [] };
       (quotesAiData ?? []).forEach((q: any) => {
         const charges = q?.ai_parsed_data?.extra_charges;
@@ -1480,7 +1481,7 @@ export default function ComparisonSheetPage() {
         new Set([sRow.manual_review_by ?? undefined, sRow.approved_by ?? undefined].filter(Boolean) as string[]),
       );
       if (idsToLoad.length) {
-        const { data: userRows, error: userErr } = await supabase.from("cps_users").select("id,name").in("id", idsToLoad);
+        const { data: userRows, error: userErr } = await inChunks<any>(idsToLoad, (c) => supabase.from("cps_users").select("id,name").in("id", c));
         if (!userErr && userRows) {
           const map: Record<string, { id: string; name: string }> = {};
           (userRows as any[]).forEach((u) => {
@@ -1617,13 +1618,17 @@ export default function ComparisonSheetPage() {
     // key off it. We deliberately do NOT require finance_dispatch_status = 'sent'
     // (dispatch often lags or is completed out-of-band, which was false-failing
     // genuine repeats). Ordered newest-first so the banner reports the latest PO.
-    const { data: pos } = await supabase
+    let { data: pos } = await inChunks<any>(supplierIds, (c) => supabase
       .from("cps_purchase_orders")
       .select("id, po_number, founder_approved_at, finance_dispatch_sent_at, created_at, supplier_id")
       .eq("founder_approval_status", "approved")
       .eq("project_code", projectCode)
-      .in("supplier_id", supplierIds)
-      .order("created_at", { ascending: false });
+      .in("supplier_id", c)
+      .order("created_at", { ascending: false }));
+    // inChunks concatenates per-chunk results, so re-sort globally: the grouping
+    // below relies on newest-first order to report the most recent PO.
+    pos = (pos ?? []).slice().sort((a, b) =>
+      String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
     if (!pos?.length) return null;
 
     // Group POs by supplier: coverage must be satisfied by a SINGLE vendor
@@ -2276,10 +2281,10 @@ export default function ComparisonSheetPage() {
       .filter((x): x is string => Boolean(x))));
     const blindRefByQuoteId: Record<string, string | null> = {};
     if (quoteIds.length) {
-      const { data: blindRows } = await supabase
+      const { data: blindRows } = await inChunks<any>(quoteIds, (c) => supabase
         .from("cps_quotes")
         .select("id, blind_quote_ref")
-        .in("id", quoteIds);
+        .in("id", c));
       (blindRows ?? []).forEach((r: any) => {
         blindRefByQuoteId[String(r.id)] = r?.blind_quote_ref ?? null;
       });

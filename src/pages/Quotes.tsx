@@ -4,6 +4,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { headerTotalsFromLines, extraChargeToLineRow } from "@/lib/quoteTotals";
 import { startRegistration, type VendorType } from "@/lib/vendorRegistration";
 import { downscaleImageToJpegBase64, fileToBase64 } from "@/lib/imageForClaude";
@@ -354,10 +355,10 @@ export default function Quotes() {
 
   const fetchItemsCounts = async (quoteIds: string[]) => {
     if (quoteIds.length === 0) return {};
-    const { data, error } = await supabase
+    const { data, error } = await inChunks<{ quote_id: string }>(quoteIds, (c) => supabase
       .from("cps_quote_line_items")
       .select("quote_id")
-      .in("quote_id", quoteIds);
+      .in("quote_id", c));
     if (error) return {};
     const counts: Record<string, number> = {};
     (data ?? []).forEach((row: any) => {
@@ -377,10 +378,10 @@ export default function Quotes() {
       const rfqCreatorIds = [...new Set(rfqsRowsRaw.map((r) => r.created_by).filter(Boolean))] as string[];
       const rfqCreatorNameMap: Record<string, string> = {};
       if (rfqCreatorIds.length > 0) {
-        const { data: creators } = await supabase
+        const { data: creators } = await inChunks<{ id: string; name: string }>(rfqCreatorIds, (c) => supabase
           .from("cps_users")
           .select("id,name")
-          .in("id", rfqCreatorIds);
+          .in("id", c));
         (creators ?? []).forEach((u: any) => { rfqCreatorNameMap[u.id] = u.name; });
       }
       const rfqsRows = rfqsRowsRaw.map((r) => ({
@@ -410,10 +411,10 @@ export default function Quotes() {
       // Fetch supplier profile_complete for NEW VENDOR badge
       const supplierIds = [...new Set(quoteRows.map((q) => q.supplier_id).filter(Boolean))] as string[];
       if (supplierIds.length > 0) {
-        const { data: supData } = await supabase
+        const { data: supData } = await inChunks<{ id: string; profile_complete: boolean }>(supplierIds, (c) => supabase
           .from("cps_suppliers")
           .select("id,profile_complete")
-          .in("id", supplierIds);
+          .in("id", c));
         const profileMap: Record<string, boolean> = {};
         (supData ?? []).forEach((s: any) => {
           profileMap[s.id] = s.profile_complete ?? true;
@@ -424,17 +425,17 @@ export default function Quotes() {
       // Fetch PRs linked to these RFQs + requestor names (for grouped view)
       const prIds = [...new Set(rfqsRows.map((r) => r.pr_id).filter(Boolean))] as string[];
       if (prIds.length > 0) {
-        const { data: prData } = await supabase
+        const { data: prData } = await inChunks<any>(prIds, (c) => supabase
           .from("cps_purchase_requisitions")
           .select("id,pr_number,project_code,project_site,requested_by,created_at")
-          .in("id", prIds);
+          .in("id", c));
         const requestorIds = [...new Set(((prData ?? []) as any[]).map((p) => p.requested_by).filter(Boolean))] as string[];
         const nameMap: Record<string, string> = {};
         if (requestorIds.length > 0) {
-          const { data: userData } = await supabase
+          const { data: userData } = await inChunks<{ id: string; name: string }>(requestorIds, (c) => supabase
             .from("cps_users")
             .select("id,name")
-            .in("id", requestorIds);
+            .in("id", c));
           (userData ?? []).forEach((u: any) => { nameMap[u.id] = u.name; });
         }
         const prMap: Record<string, PrInfo> = {};

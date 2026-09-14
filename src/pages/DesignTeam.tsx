@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,12 +66,12 @@ export default function DesignTeam() {
 
     const userIds = [...new Set(rows.map((r: any) => r.requested_by))];
     let userMap: Record<string, string> = {};
-    const { data: users } = await supabase.from("cps_users").select("id, name").in("id", userIds);
+    const { data: users } = await inChunks<{ id: string; name: string | null }>(userIds, (c) => supabase.from("cps_users").select("id, name").in("id", c));
     if (users) userMap = Object.fromEntries((users as any[]).map(u => [u.id, u.name]));
 
     const prIds = rows.map((r: any) => r.id);
     let counts: Record<string, number> = {};
-    const { data: lines } = await supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", prIds);
+    const { data: lines } = await inChunks<{ pr_id: string }>(prIds, (c) => supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", c));
     if (lines) lines.forEach((l: any) => { counts[l.pr_id] = (counts[l.pr_id] ?? 0) + 1; });
 
     setPrs(rows.map((r: any) => ({

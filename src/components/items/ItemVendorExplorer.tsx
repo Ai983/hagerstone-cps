@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -211,10 +212,10 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
           .neq("id", item.id);
         const catItemIds = (catItems ?? []).map((r: any) => r.id);
         if (catItemIds.length > 0) {
-          const { data: catSi } = await supabase
+          const { data: catSi } = await inChunks<any>(catItemIds, (c) => supabase
             .from("cps_supplier_items")
             .select("supplier_id, item_id")
-            .in("item_id", catItemIds);
+            .in("item_id", c));
           (catSi ?? []).forEach((r: any) => {
             if (!r.supplier_id || exactIds.includes(r.supplier_id)) return;
             categoryCounts.set(r.supplier_id, (categoryCounts.get(r.supplier_id) ?? 0) + 1);
@@ -230,10 +231,10 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
         return;
       }
 
-      const { data: suppliers } = await supabase
+      const { data: suppliers } = await inChunks<any>(allSupplierIds, (c) => supabase
         .from("cps_suppliers")
         .select("id, name, city, state, phone, whatsapp")
-        .in("id", allSupplierIds);
+        .in("id", c));
       const supplierMap = new Map<string, any>((suppliers ?? []).map((s: any) => [s.id, s]));
 
       const exact: VendorRow[] = (siRows ?? [])
@@ -318,10 +319,10 @@ export default function ItemVendorExplorer({ item, onClose }: { item: ExplorerIt
       const poList = (pos ?? []) as SupplierPO[];
       let matched = new Set<string>();
       if (item && poList.length > 0) {
-        const { data: lines } = await supabase
+        const { data: lines } = await inChunks<any>(poList.map((p) => p.id), (c) => supabase
           .from("cps_po_line_items")
           .select("po_id,item_id,description")
-          .in("po_id", poList.map((p) => p.id));
+          .in("po_id", c));
         (lines ?? []).forEach((l: any) => {
           if (itemLineMatches(item, l.item_id, l.description)) matched.add(l.po_id);
         });

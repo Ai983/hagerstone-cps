@@ -4,6 +4,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -244,13 +245,13 @@ export default function DeliveryTracker() {
         }
       }
 
-      let poQuery = supabase
+      const basePoQuery = () => supabase
         .from("cps_purchase_orders")
         .select("id,po_number,supplier_id,status,delivery_date,ship_to_address,grand_total,project_code,pr_id,sent_at,acknowledged_at,created_at")
         .order("created_at", { ascending: false });
-      if (userPrIds) poQuery = poQuery.in("pr_id", userPrIds);
-
-      const { data: poData, error: poErr } = await poQuery;
+      const { data: poData, error: poErr } = userPrIds
+        ? await inChunks<PoRow>(userPrIds, (c) => basePoQuery().in("pr_id", c))
+        : await basePoQuery();
       if (poErr) throw poErr;
 
       const allPos = (poData ?? []) as PoRow[];
@@ -267,16 +268,18 @@ export default function DeliveryTracker() {
       const prIds = Array.from(new Set(visiblePos.map((p) => p.pr_id).filter(Boolean) as string[]));
 
       const [eventsRes, grnsRes, suppliersRes, prsRes] = await Promise.all([
-        supabase.from("cps_delivery_events").select("id,po_id,event_type,event_at,expected_date,actual_date,tracking_number,transporter,eway_bill,quantity_dispatched,quantity_received,notes,logged_by").in("po_id", poIds).order("event_at", { ascending: true }),
-        supabase.from("cps_grns").select("id,grn_number,po_id,status").in("po_id", poIds),
-        supplierIds.length ? supabase.from("cps_suppliers").select("id,name").in("id", supplierIds) : Promise.resolve({ data: [], error: null }),
-        prIds.length ? supabase.from("cps_purchase_requisitions").select("id,project_site,project_code").in("id", prIds) : Promise.resolve({ data: [], error: null }),
+        inChunks<DeliveryEvent>(poIds, (c) => supabase.from("cps_delivery_events").select("id,po_id,event_type,event_at,expected_date,actual_date,tracking_number,transporter,eway_bill,quantity_dispatched,quantity_received,notes,logged_by").in("po_id", c).order("event_at", { ascending: true })),
+        inChunks<GrnRow>(poIds, (c) => supabase.from("cps_grns").select("id,grn_number,po_id,status").in("po_id", c)),
+        supplierIds.length ? inChunks<SupplierRow>(supplierIds, (c) => supabase.from("cps_suppliers").select("id,name").in("id", c)) : Promise.resolve({ data: [], error: null }),
+        prIds.length ? inChunks<PrRow>(prIds, (c) => supabase.from("cps_purchase_requisitions").select("id,project_site,project_code").in("id", c)) : Promise.resolve({ data: [], error: null }),
       ]);
 
       if (eventsRes.error) throw eventsRes.error;
       if (grnsRes.error) throw grnsRes.error;
 
-      const events = (eventsRes.data ?? []) as DeliveryEvent[];
+      const events = ((eventsRes.data ?? []) as DeliveryEvent[])
+        .slice()
+        .sort((a, b) => String(a.event_at ?? "").localeCompare(String(b.event_at ?? "")));
       const grns = (grnsRes.data ?? []) as GrnRow[];
       const suppliers = ((suppliersRes as any).data ?? []) as SupplierRow[];
       const prs = ((prsRes as any).data ?? []) as PrRow[];

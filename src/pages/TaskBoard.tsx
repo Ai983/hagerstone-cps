@@ -16,6 +16,7 @@ import {
   Plus, RefreshCw, RotateCcw, Search, XCircle,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -80,7 +81,7 @@ export default function TaskBoard() {
 
       const ids = Array.from(new Set(rows.flatMap(t => [t.assigned_to, t.assigned_by]).filter(Boolean))) as string[];
       if (ids.length) {
-        const { data: users } = await supabase.from("cps_users").select("id,name,email").in("id", ids);
+        const { data: users } = await inChunks<{ id: string; name: string | null; email: string }>(ids, (c) => supabase.from("cps_users").select("id,name,email").in("id", c));
         const map: Record<string, string> = {};
         (users ?? []).forEach((u: { id: string; name: string | null; email: string }) => {
           map[u.id] = u.name ?? u.email;

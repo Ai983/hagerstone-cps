@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -193,10 +194,10 @@ export default function Dashboard() {
         // Resolve supplier names
         const supplierIds = Array.from(new Set(poRows.map((r) => r.supplier_id).filter(Boolean))) as string[];
         if (supplierIds.length > 0) {
-          const { data: suppliers } = await supabase
+          const { data: suppliers } = await inChunks<{ id: string; name: string | null }>(supplierIds, (c) => supabase
             .from("cps_suppliers")
             .select("id, name")
-            .in("id", supplierIds);
+            .in("id", c));
           const nameMap: Record<string, string> = {};
           (suppliers ?? []).forEach((s: any) => { nameMap[s.id] = s.name; });
           poRows.forEach((po) => { po.supplier_name = po.supplier_id ? nameMap[po.supplier_id] : undefined; });
@@ -222,7 +223,7 @@ export default function Dashboard() {
         const requesterIds = Array.from(new Set((recentPRs ?? []).map((p: any) => p.requested_by).filter(Boolean)));
         const requesterMap: Record<string, string> = {};
         if (requesterIds.length) {
-          const { data: uData } = await supabase.from("cps_users").select("id, name").in("id", requesterIds);
+          const { data: uData } = await inChunks<{ id: string; name: string | null }>(requesterIds, (c) => supabase.from("cps_users").select("id, name").in("id", c));
           (uData ?? []).forEach((u: any) => { requesterMap[u.id] = u.name; });
         }
 

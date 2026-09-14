@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
 import { CPS_UNITS, normalizeUnit, isCanonicalUnit } from "@/lib/units";
 import { fileToClaudeBlock } from "@/lib/imageForClaude";
@@ -762,10 +763,10 @@ export default function PurchaseOrders() {
         return;
       }
 
-      const { data: rfqData, error: rfqErr } = await supabase
+      const { data: rfqData, error: rfqErr } = await inChunks<any>(rfqIds, (c) => supabase
         .from("cps_rfqs")
         .select("id,rfq_number,title,pr_id,payment_terms")
-        .in("id", rfqIds);
+        .in("id", c));
       if (rfqErr) throw rfqErr;
 
       setEligibleRfqs((rfqData ?? []) as any);
@@ -794,10 +795,10 @@ export default function PurchaseOrders() {
     }
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase
+      const { data, error } = await inChunks<{ id: string; name: string }>(supplierIds, (c) => supabase
         .from("cps_suppliers")
         .select("id,name")
-        .in("id", supplierIds);
+        .in("id", c));
       if (cancelled || error) return;
       const map: Record<string, string> = {};
       for (const s of (data ?? []) as Array<{ id: string; name: string }>) {
@@ -2308,7 +2309,7 @@ export default function PurchaseOrders() {
       const editIds = new Set(editLineItems.map((li) => li.id).filter((id) => !id.startsWith("new-")));
       const deletedIds = viewPoLineItems.map((li) => li.id).filter((id) => !editIds.has(id));
       if (deletedIds.length > 0) {
-        const { error: delErr } = await supabase.from("cps_po_line_items").delete().in("id", deletedIds);
+        const { error: delErr } = await inChunks<any>(deletedIds, (c) => supabase.from("cps_po_line_items").delete().in("id", c));
         if (delErr) throw delErr;
       }
 
@@ -4388,11 +4389,11 @@ function PoTableRows({
 
         const [supRes, rfqRes, prRes, userRes] = await Promise.all([
           supplierIds.length
-            ? supabase.from("cps_suppliers").select("id,name,gstin,phone,email,address_text,city,state").in("id", supplierIds)
+            ? inChunks<any>(supplierIds, (c) => supabase.from("cps_suppliers").select("id,name,gstin,phone,email,address_text,city,state").in("id", c))
             : Promise.resolve({ data: [], error: null }),
-          rfqIds.length ? supabase.from("cps_rfqs").select("id,rfq_number").in("id", rfqIds) : Promise.resolve({ data: [], error: null }),
-          prIds.length ? supabase.from("cps_purchase_requisitions").select("id,pr_number,project_site,project_code").in("id", prIds) : Promise.resolve({ data: [], error: null }),
-          createdByIds.length ? supabase.from("cps_users").select("id,name").in("id", createdByIds) : Promise.resolve({ data: [], error: null }),
+          rfqIds.length ? inChunks<any>(rfqIds, (c) => supabase.from("cps_rfqs").select("id,rfq_number").in("id", c)) : Promise.resolve({ data: [], error: null }),
+          prIds.length ? inChunks<any>(prIds, (c) => supabase.from("cps_purchase_requisitions").select("id,pr_number,project_site,project_code").in("id", c)) : Promise.resolve({ data: [], error: null }),
+          createdByIds.length ? inChunks<any>(createdByIds, (c) => supabase.from("cps_users").select("id,name").in("id", c)) : Promise.resolve({ data: [], error: null }),
         ]);
 
         if (!mounted) return;

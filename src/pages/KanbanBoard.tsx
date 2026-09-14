@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { useAuth } from "@/contexts/AuthContext";
 
 import { Badge } from "@/components/ui/badge";
@@ -546,8 +547,8 @@ export default function KanbanBoard() {
         { data: grnsData },
         { data: suppliersData },
       ] = await Promise.all([
-        supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", prIds),
-        supabase.from("cps_rfqs").select("id, rfq_number, pr_id, status, created_by").in("pr_id", prIds),
+        inChunks<any>(prIds, (c) => supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", c)),
+        inChunks<any>(prIds, (c) => supabase.from("cps_rfqs").select("id, rfq_number, pr_id, status, created_by").in("pr_id", c)),
         supabase.from("cps_quotes").select("id, rfq_id, parse_status"),
         supabase.from("cps_comparison_sheets").select("rfq_id, manual_review_status"),
         supabase.from("cps_purchase_orders").select("id, po_number, pr_id, supplier_id, status, grand_total, founder_approval_status, finance_dispatch_sent_at, sent_at, finance_paid_at"),
@@ -560,7 +561,7 @@ export default function KanbanBoard() {
       prRows.forEach((p) => { if (p.requested_by) userIdsToFetch.add(p.requested_by); });
       ((rfqsData ?? []) as any[]).forEach((r) => { if (r.created_by) userIdsToFetch.add(r.created_by); });
       const { data: usersData } = userIdsToFetch.size > 0
-        ? await supabase.from("cps_users").select("id, name, email").in("id", Array.from(userIdsToFetch))
+        ? await inChunks<any>(Array.from(userIdsToFetch), (c) => supabase.from("cps_users").select("id, name, email").in("id", c))
         : { data: [] };
 
       // Fetch payment schedules + invoices per PO
@@ -571,9 +572,9 @@ export default function KanbanBoard() {
         { data: invoicesData },
         { data: deliverySchedulesData },
       ] = await Promise.all([
-        poIdList.length ? supabase.from("cps_po_payment_schedules").select("po_id, status, amount").in("po_id", poIdList) : Promise.resolve({ data: [] }),
-        poNumberList.length ? supabase.from("invoices").select("id, invoice_number, invoice_date, total_amount, file_path, po_reference, created_at, status, rejection_reason").in("po_reference", poNumberList).order("created_at", { ascending: false }) : Promise.resolve({ data: [] }),
-        poIdList.length ? supabase.from("cps_invoice_delivery_schedules").select("po_id, delivery_date, invoice_deadline, status").in("po_id", poIdList) : Promise.resolve({ data: [] }),
+        poIdList.length ? inChunks<any>(poIdList, (c) => supabase.from("cps_po_payment_schedules").select("po_id, status, amount").in("po_id", c)) : Promise.resolve({ data: [] }),
+        poNumberList.length ? inChunks<any>(poNumberList, (c) => supabase.from("invoices").select("id, invoice_number, invoice_date, total_amount, file_path, po_reference, created_at, status, rejection_reason").in("po_reference", c).order("created_at", { ascending: false })) : Promise.resolve({ data: [] }),
+        poIdList.length ? inChunks<any>(poIdList, (c) => supabase.from("cps_invoice_delivery_schedules").select("po_id, delivery_date, invoice_deadline, status").in("po_id", c)) : Promise.resolve({ data: [] }),
       ]);
 
       // Build maps
@@ -884,7 +885,7 @@ export default function KanbanBoard() {
           const supIds = Array.from(new Set(quoteRows.map((q: any) => q.supplier_id).filter(Boolean)));
           const supMap: Record<string, string> = {};
           if (supIds.length > 0) {
-            const { data: sups } = await supabase.from("cps_suppliers").select("id, name").in("id", supIds);
+            const { data: sups } = await inChunks<any>(supIds as string[], (c) => supabase.from("cps_suppliers").select("id, name").in("id", c));
             (sups ?? []).forEach((s: any) => { supMap[s.id] = s.name; });
           }
           setDetailQuotesReceived(
@@ -913,10 +914,10 @@ export default function KanbanBoard() {
       // 4. Stage timeline from audit log (PR + PO entity events)
       const ids = [c.pr_id, c.po_id].filter(Boolean) as string[];
       if (ids.length > 0) {
-        const { data: events } = await supabase
+        const { data: events } = await inChunks<StageEvent>(ids, (c) => supabase
           .from("cps_audit_log")
           .select("action_type, logged_at, user_name, description, entity_number, entity_id")
-          .in("entity_id", ids)
+          .in("entity_id", c)
           .in("action_type", [
             "PR_CREATED", "PR_VALIDATED", "RFQ_DISPATCHED", "QUOTE_REVIEWED",
             "QUOTE_SUBMITTED_VIA_PORTAL", "COMPARISON_SENT_FOR_APPROVAL",
@@ -924,8 +925,11 @@ export default function KanbanBoard() {
             "PO_PAYMENT_TERMS_SET", "INVOICE_UPLOADED", "INVOICE_VERIFIED_PR_CLOSED",
             "PR_CANCELLED", "PO_REJECTED",
           ])
-          .order("logged_at", { ascending: true });
-        setDetailStageEvents((events ?? []) as StageEvent[]);
+          .order("logged_at", { ascending: true }));
+        const sortedEvents = ((events ?? []) as StageEvent[]).slice().sort(
+          (a, b) => new Date(a.logged_at).getTime() - new Date(b.logged_at).getTime()
+        );
+        setDetailStageEvents(sortedEvents);
       }
     } catch (e: any) {
       toast.error(e?.message || "Failed to load PR details");

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { useAuth } from "@/contexts/AuthContext";
 
 import { Badge } from "@/components/ui/badge";
@@ -93,10 +94,10 @@ export default function SiteQuotes() {
       const prIds = (prRows ?? []).map((p: any) => p.id);
       const rfqMap = new Map<string, { id: string; rfq_number: string }>();
       if (prIds.length > 0) {
-        const { data: rfqRows } = await supabase
+        const { data: rfqRows } = await inChunks<any>(prIds, (c) => supabase
           .from("cps_rfqs")
           .select("id, rfq_number, pr_id")
-          .in("pr_id", prIds);
+          .in("pr_id", c));
         (rfqRows ?? []).forEach((r: any) => { if (r.pr_id) rfqMap.set(r.pr_id, { id: r.id, rfq_number: r.rfq_number }); });
       }
 
@@ -106,10 +107,10 @@ export default function SiteQuotes() {
       const rfqIds = Array.from(rfqMap.values()).map((r) => r.id);
       const lockedRfqIds = new Set<string>();
       if (rfqIds.length > 0) {
-        const { data: compRows } = await supabase
+        const { data: compRows } = await inChunks<any>(rfqIds, (c) => supabase
           .from("cps_comparison_sheets")
           .select("rfq_id")
-          .in("rfq_id", rfqIds);
+          .in("rfq_id", c));
         (compRows ?? []).forEach((c: any) => { if (c.rfq_id) lockedRfqIds.add(c.rfq_id); });
       }
 
@@ -156,20 +157,20 @@ export default function SiteQuotes() {
       if (quoteKeys.length > 0) {
         const rfqIds = Array.from(new Set(quotesList.map((q) => q.rfq_id))).filter(Boolean) as string[];
         const supIds = Array.from(new Set(quotesList.map((q) => q.supplier_id).filter(Boolean))) as string[];
-        const { data: poRows } = await supabase
+        const { data: poRows } = await inChunks<{ po_number: string; rfq_id: string; supplier_id: string }>(rfqIds, (c) => supabase
           .from("cps_purchase_orders")
           .select("po_number, rfq_id, supplier_id")
-          .in("rfq_id", rfqIds)
-          .in("supplier_id", supIds);
+          .in("rfq_id", c)
+          .in("supplier_id", supIds));
         const winningPos = ((poRows ?? []) as Array<{ po_number: string; rfq_id: string; supplier_id: string }>)
           .filter((p) => quoteKeys.includes(`${p.rfq_id}::${p.supplier_id}`));
         if (winningPos.length > 0) {
           const winningPoNumbers = winningPos.map((p) => p.po_number).filter(Boolean);
-          const { data: invRows } = await supabase
+          const { data: invRows } = await inChunks<{ po_reference: string; status: string }>(winningPoNumbers, (c) => supabase
             .from("invoices")
             .select("po_reference, status")
-            .in("po_reference", winningPoNumbers)
-            .eq("status", "verified");
+            .in("po_reference", c)
+            .eq("status", "verified"));
           const verifiedPoNumbers = new Set(((invRows ?? []) as Array<{ po_reference: string }>).map((i) => i.po_reference));
           wins = winningPos.filter((p) => verifiedPoNumbers.has(p.po_number)).length;
         }
@@ -198,10 +199,10 @@ export default function SiteQuotes() {
     const supIds = [...new Set(((data ?? []) as any[]).map((q) => q.supplier_id).filter(Boolean))] as string[];
     const supMap: Record<string, string> = {};
     if (supIds.length > 0) {
-      const { data: sData } = await supabase
+      const { data: sData } = await inChunks<any>(supIds, (c) => supabase
         .from("cps_suppliers")
         .select("id, name")
-        .in("id", supIds);
+        .in("id", c));
       (sData ?? []).forEach((s: any) => { supMap[s.id] = s.name; });
     }
 
