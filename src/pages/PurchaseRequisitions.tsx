@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
+import { inChunks } from "@/lib/inChunks";
 import { toast } from "sonner";
 import { useDebounce } from "@/hooks/useDebounce";
 import { CPS_UNITS } from "@/lib/units";
@@ -926,10 +927,9 @@ export default function PurchaseRequisitions() {
     const prIds = prRows.map((p) => p.id);
     let counts: Record<string, number> = {};
     if (prIds.length) {
-      const { data: lines, error: lineErr } = await supabase
-        .from("cps_pr_line_items")
-        .select("pr_id")
-        .in("pr_id", prIds);
+      const { data: lines, error: lineErr } = await inChunks<{ pr_id: string }>(
+        prIds, (c) => supabase.from("cps_pr_line_items").select("pr_id").in("pr_id", c),
+      );
       if (!lineErr && lines) {
         counts = lines.reduce((acc: Record<string, number>, l: any) => {
           const key = String(l.pr_id);
@@ -950,7 +950,9 @@ export default function PurchaseRequisitions() {
     ];
     let userMap: Record<string, string> = {};
     if (userIds.length) {
-      const { data: users } = await supabase.from("cps_users").select("id, name").in("id", userIds);
+      const { data: users } = await inChunks<{ id: string; name: string }>(
+        userIds, (c) => supabase.from("cps_users").select("id, name").in("id", c),
+      );
       if (users) userMap = Object.fromEntries((users as any[]).map((u) => [u.id, u.name]));
     }
 
