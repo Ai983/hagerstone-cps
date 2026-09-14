@@ -399,6 +399,26 @@ export async function fetchPendingVerification(): Promise<PendingVerificationRow
   return (data ?? []) as never;
 }
 
+/** Approved vendors — the "completed registrations" list on the verifier screen. */
+export type ApprovedVendorRow = {
+  id: string;
+  name: string;
+  vendor_type: VendorType | null;
+  gstin: string | null;
+  city: string | null;
+  registration_approved_at: string | null;
+};
+
+export async function fetchApprovedVendors(): Promise<ApprovedVendorRow[]> {
+  const { data, error } = await supabase
+    .from("cps_suppliers")
+    .select("id,name,vendor_type,gstin,city,registration_approved_at")
+    .eq("registration_status", "approved")
+    .order("registration_approved_at", { ascending: false, nullsFirst: false });
+  if (error) throw error;
+  return (data ?? []) as ApprovedVendorRow[];
+}
+
 /** Existing vendors the portal can top up. Excludes approved ones — those are
  *  refused by cps_start_vendor_registration anyway, so offering them misleads. */
 export async function fetchRegistrableSuppliers(search: string) {
