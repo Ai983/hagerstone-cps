@@ -941,27 +941,32 @@ export default function PurchaseOrders() {
       setRecommendedSupplierId(recSupplierId);
       setCreateSupplierId(recSupplierId);
 
-      // Fetch supplier name for preview
-      const { data: supRow } = await supabase.from("cps_suppliers").select("name").eq("id", recSupplierId).maybeSingle();
+      // Pre-fill bank details from the supplier MASTER first — a registered vendor's
+      // bank is entered once at registration and must never be asked for again. Fall
+      // back to the supplier's most recent PO only if the master has no account number.
+      const { data: supRow } = await supabase
+        .from("cps_suppliers")
+        .select("name,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number")
+        .eq("id", recSupplierId)
+        .maybeSingle();
       setCreateSupplierName((supRow as any)?.name ?? "");
 
-      // Pre-fill bank details from supplier's most recent PO (if any previous PO has bank details saved)
-      const { data: prevPo } = await supabase
-        .from("cps_purchase_orders")
-        .select("bank_account_holder_name,bank_name,bank_ifsc,bank_account_number")
-        .eq("supplier_id", recSupplierId)
-        .not("bank_account_number", "is", null)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (prevPo) {
-        setCreateBankHolderName((prevPo as any).bank_account_holder_name ?? (supRow as any)?.name ?? "");
-        setCreateBankName((prevPo as any).bank_name ?? "");
-        setCreateBankIfsc((prevPo as any).bank_ifsc ?? "");
-        setCreateBankAccountNumber((prevPo as any).bank_account_number ?? "");
-      } else {
-        setCreateBankHolderName((supRow as any)?.name ?? "");
+      let bankSrc: any = supRow;
+      if (!(supRow as any)?.bank_account_number) {
+        const { data: prevPo } = await supabase
+          .from("cps_purchase_orders")
+          .select("bank_account_holder_name,bank_name,bank_ifsc,bank_account_number")
+          .eq("supplier_id", recSupplierId)
+          .not("bank_account_number", "is", null)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (prevPo) bankSrc = prevPo;
       }
+      setCreateBankHolderName((bankSrc as any)?.bank_account_holder_name ?? (supRow as any)?.name ?? "");
+      setCreateBankName((bankSrc as any)?.bank_name ?? "");
+      setCreateBankIfsc((bankSrc as any)?.bank_ifsc ?? "");
+      setCreateBankAccountNumber((bankSrc as any)?.bank_account_number ?? "");
 
       const { data: prLineRows, error: prLinesErr } = await supabase
         .from("cps_pr_line_items")
