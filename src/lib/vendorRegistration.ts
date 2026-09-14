@@ -419,6 +419,39 @@ export async function fetchApprovedVendors(): Promise<ApprovedVendorRow[]> {
   return (data ?? []) as ApprovedVendorRow[];
 }
 
+/** Extra profile + activity for the full supplier card on the verifier screen. */
+export type SupplierProfile = {
+  registration_approved_at: string | null;
+  registration_submitted_at: string | null;
+  created_at: string | null;
+  categories: string[] | null;
+  performance_score: number | null;
+  profile_complete: boolean | null;
+  po_count: number;
+  wo_count: number;
+};
+
+export async function fetchSupplierProfile(id: string): Promise<SupplierProfile> {
+  const [sup, poRes, woRes] = await Promise.all([
+    supabase.from("cps_suppliers")
+      .select("registration_approved_at,registration_submitted_at,created_at,categories,performance_score,profile_complete")
+      .eq("id", id).maybeSingle(),
+    supabase.from("cps_purchase_orders").select("id", { count: "exact", head: true }).eq("supplier_id", id),
+    supabase.from("cps_work_orders").select("id", { count: "exact", head: true }).eq("supplier_id", id),
+  ]);
+  const r = (sup.data ?? {}) as Record<string, unknown>;
+  return {
+    registration_approved_at: (r.registration_approved_at as string) ?? null,
+    registration_submitted_at: (r.registration_submitted_at as string) ?? null,
+    created_at: (r.created_at as string) ?? null,
+    categories: (r.categories as string[]) ?? null,
+    performance_score: (r.performance_score as number) ?? null,
+    profile_complete: (r.profile_complete as boolean) ?? null,
+    po_count: poRes.count ?? 0,
+    wo_count: woRes.count ?? 0,
+  };
+}
+
 /** Existing vendors the portal can top up. Excludes approved ones — those are
  *  refused by cps_start_vendor_registration anyway, so offering them misleads. */
 export async function fetchRegistrableSuppliers(search: string) {

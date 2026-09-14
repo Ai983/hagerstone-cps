@@ -1,18 +1,16 @@
 /**
- * The designated verifier's queue — and a record of completed registrations.
+ * The designated verifier's queue — and a searchable record of completed
+ * registrations with a full supplier card.
  *
  * "Awaiting verification" lists submissions the verifier must action. The detail
- * panel now shows everything the vendor submitted (identity, bank, contacts,
- * documents, GST screenshots) so the verifier reviews the actual evidence before
- * signing the checks — approval is no longer blind.
+ * panel shows everything the vendor submitted (identity, bank, contacts, profile,
+ * documents, GST screenshots) so checks are signed against real evidence.
  *
- * "Completed" lists approved vendors, read-only, with the same submitted-data
- * panel so anyone can look back at what was accepted.
+ * "Completed" lists approved vendors (searchable), read-only card, but the
+ * document checklist stays editable so a vendor that was approved with documents
+ * still pending can have the remaining ones uploaded here.
  *
- * Approve is guarded four ways in the database — caller is in
- * cps_config.vendor_registration_approvers, caller is NOT the filler, status is
- * pending_verification, and every mandatory document and all checks are satisfied.
- * This screen mirrors those rules for usability, but the RPC is the authority.
+ * Approve is guarded four ways in the database; the RPC is the authority.
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -20,28 +18,31 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Check, Eye, FileText, Loader2, ShieldCheck, X } from "lucide-react";
+import { Check, Eye, FileText, Loader2, Search, ShieldCheck, X } from "lucide-react";
+import RegistrationDocuments from "@/components/vendors/RegistrationDocuments";
 import {
   type ApprovedVendorRow, type GstEvaluation, type PendingVerificationRow,
   type RegistrationCheck, type RegistrationSnapshot, type SupplierContact,
-  type SupplierDocument, type SupplierRow,
-  CHECK_LABELS, CONTACT_ROLE_LABELS, DOCUMENT_LABELS, GST_SS_LABELS, GST_SS_TYPES,
+  type SupplierDocument, type SupplierProfile, type SupplierRow, type VendorType,
+  CHECK_LABELS, CONTACT_ROLE_LABELS, GST_SS_LABELS, GST_SS_TYPES,
   VENDOR_DOC_BUCKET, VENDOR_TYPE_LABELS,
   approveRegistration, fetchApprovedVendors, fetchChecks, fetchContacts, fetchDocuments,
   fetchLatestGstEvaluation, fetchPendingVerification, fetchRegistrationStatus,
-  fetchSupplier, rejectRegistration, saveCheck,
+  fetchSupplier, fetchSupplierProfile, rejectRegistration, saveCheck,
 } from "@/lib/vendorRegistration";
 import { openSignedFile } from "@/lib/storageUrl";
 
 type Row = PendingVerificationRow;
 
 const GST_SS_SET = GST_SS_TYPES as readonly string[];
+const fmtDate = (d: string | null | undefined) => (d ? new Date(d).toLocaleDateString() : "—");
 
 const GST_VERDICT: Record<string, { label: string; cls: string }> = {
   compliant:     { label: "Filings look in order", cls: "bg-emerald-500/15 text-emerald-700 border border-emerald-500/30" },
@@ -54,7 +55,7 @@ function Field({ label, value }: { label: string; value: string | null | undefin
   return (
     <div className="space-y-0.5">
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="text-sm text-foreground break-words">{value?.trim() ? value : "—"}</div>
+      <div className="text-sm text-foreground break-words">{value?.toString().trim() ? value : "—"}</div>
     </div>
   );
 }
@@ -64,12 +65,11 @@ export default function VendorVerification() {
   const [tab, setTab] = useState<"pending" | "completed">("pending");
   const [rows, setRows] = useState<Row[] | null>(null);
   const [approved, setApproved] = useState<ApprovedVendorRow[] | null>(null);
+  const [search, setSearch] = useState("");
 
-  // selection + loaded detail
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedName, setSelectedName] = useState<string>("");
   const [mode, setMode] = useState<"verify" | "view">("verify");
-  const [approvedAt, setApprovedAt] = useState<string | null>(null);
 
   const [checks, setChecks] = useState<RegistrationCheck[]>([]);
   const [snapshot, setSnapshot] = useState<RegistrationSnapshot | null>(null);
@@ -77,6 +77,7 @@ export default function VendorVerification() {
   const [supplier, setSupplier] = useState<SupplierRow | null>(null);
   const [contacts, setContacts] = useState<SupplierContact[]>([]);
   const [documents, setDocuments] = useState<SupplierDocument[]>([]);
+  const [profile, setProfile] = useState<SupplierProfile | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   const [busy, setBusy] = useState(false);
@@ -95,14 +96,28 @@ export default function VendorVerification() {
 
   const clearSelection = () => { setSelectedId(null); setSelectedName(""); };
 
-  const openDetail = async (id: string, name: string, m: "verify" | "view", approvedTs?: string | null) => {
-    setSelectedId(id); setSelectedName(name); setMode(m); setApprovedAt(approvedTs ?? null);
-    setLoadingDetail(true);
-    setChecks([]); setSnapshot(null); setGstEval(null); setSupplier(null); setContacts([]); setDocuments([]);
+  /** Light re-fetch of the moving parts (no full skeleton) — after a check
+   *  toggle or a document upload. */
+  const reloadMeta = useCallback(async (id: string) => {
     try {
-      const [c, s, g, sup, con, docs] = await Promise.all([
+      const [s, docs, prof] = await Promise.all([
+        fetchRegistrationStatus(id), fetchDocuments(id), fetchSupplierProfile(id),
+      ]);
+      setSnapshot(s.ok ? s.snapshot : null);
+      setDocuments(docs);
+      setProfile(prof);
+    } catch { /* non-fatal refresh */ }
+  }, []);
+
+  const openDetail = async (id: string, name: string, m: "verify" | "view") => {
+    setSelectedId(id); setSelectedName(name); setMode(m);
+    setLoadingDetail(true);
+    setChecks([]); setSnapshot(null); setGstEval(null); setSupplier(null);
+    setContacts([]); setDocuments([]); setProfile(null);
+    try {
+      const [c, s, g, sup, con, docs, prof] = await Promise.all([
         fetchChecks(id), fetchRegistrationStatus(id), fetchLatestGstEvaluation(id),
-        fetchSupplier(id), fetchContacts(id), fetchDocuments(id),
+        fetchSupplier(id), fetchContacts(id), fetchDocuments(id), fetchSupplierProfile(id),
       ]);
       setChecks(c);
       setSnapshot(s.ok ? s.snapshot : null);
@@ -110,6 +125,7 @@ export default function VendorVerification() {
       setSupplier(sup);
       setContacts(con);
       setDocuments(docs);
+      setProfile(prof);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Could not load the registration");
     } finally { setLoadingDetail(false); }
@@ -160,9 +176,25 @@ export default function VendorVerification() {
     </CardContent></Card></div>;
   }
 
-  const regularDocs = documents.filter((d) => !GST_SS_SET.includes(d.document_type));
+  const q = search.trim().toLowerCase();
+  const filteredApproved = (approved ?? []).filter((r) =>
+    !q || r.name.toLowerCase().includes(q) || (r.gstin ?? "").toLowerCase().includes(q)
+    || (r.city ?? "").toLowerCase().includes(q));
+
   const gstDocs = documents.filter((d) => GST_SS_SET.includes(d.document_type));
   const unsigned = checks.filter((c) => c.status !== "pass").length;
+
+  const renderRow = (id: string, name: string, subtitle: string, badge: React.ReactNode, m: "verify" | "view") => (
+    <button key={id} type="button" onClick={() => openDetail(id, name, m)}
+            className={`w-full text-left p-3 hover:bg-muted/40 flex items-center gap-3
+                        ${selectedId === id ? "bg-muted/50" : ""}`}>
+      <div className="flex-1 min-w-0">
+        <div className="font-medium truncate text-foreground">{name}</div>
+        <div className="text-xs text-muted-foreground truncate">{subtitle}</div>
+      </div>
+      {badge}
+    </button>
+  );
 
   return (
     <div className="p-4 lg:p-6 space-y-5 max-w-5xl">
@@ -175,94 +207,67 @@ export default function VendorVerification() {
 
       <Tabs value={tab} onValueChange={(v) => { setTab(v as "pending" | "completed"); clearSelection(); }}>
         <TabsList>
-          <TabsTrigger value="pending">
-            Awaiting verification{rows ? ` (${rows.length})` : ""}
-          </TabsTrigger>
-          <TabsTrigger value="completed">
-            Completed{approved ? ` (${approved.length})` : ""}
-          </TabsTrigger>
+          <TabsTrigger value="pending">Awaiting verification{rows ? ` (${rows.length})` : ""}</TabsTrigger>
+          <TabsTrigger value="completed">Completed{approved ? ` (${approved.length})` : ""}</TabsTrigger>
         </TabsList>
 
         {/* ── Awaiting verification ── */}
         <TabsContent value="pending" className="space-y-5">
           {!rows && <Card><CardContent className="py-6"><Skeleton className="h-5 w-52" /></CardContent></Card>}
           {rows && rows.length === 0 && (
-            <Card><CardContent className="py-10 text-center text-muted-foreground">
-              Nothing awaiting verification.
-            </CardContent></Card>
+            <Card><CardContent className="py-10 text-center text-muted-foreground">Nothing awaiting verification.</CardContent></Card>
           )}
           {rows && rows.length > 0 && (
-            <Card><CardContent className="p-0">
-              <div className="divide-y divide-border">
-                {rows.map((r) => (
-                  <button key={r.id} type="button" onClick={() => openDetail(r.id, r.name, "verify")}
-                          className={`w-full text-left p-3 hover:bg-muted/40 flex items-center gap-3
-                                      ${selectedId === r.id ? "bg-muted/50" : ""}`}>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate text-foreground">{r.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {r.vendor_type ? VENDOR_TYPE_LABELS[r.vendor_type] : "—"}
-                        {r.registration_submitted_at &&
-                          ` · submitted ${new Date(r.registration_submitted_at).toLocaleDateString()}`}
-                      </div>
-                    </div>
-                    <Badge variant="secondary">awaiting</Badge>
-                  </button>
-                ))}
-              </div>
-            </CardContent></Card>
+            <Card><CardContent className="p-0"><div className="divide-y divide-border">
+              {rows.map((r) => renderRow(
+                r.id, r.name,
+                `${r.vendor_type ? VENDOR_TYPE_LABELS[r.vendor_type] : "—"}${r.registration_submitted_at ? ` · submitted ${fmtDate(r.registration_submitted_at)}` : ""}`,
+                <Badge variant="secondary">awaiting</Badge>, "verify",
+              ))}
+            </div></CardContent></Card>
           )}
         </TabsContent>
 
         {/* ── Completed registrations ── */}
-        <TabsContent value="completed" className="space-y-5">
+        <TabsContent value="completed" className="space-y-4">
+          <div className="relative">
+            <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input className="pl-9" placeholder="Search approved vendors by name, GSTIN or city…"
+                   value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
           {!approved && <Card><CardContent className="py-6"><Skeleton className="h-5 w-52" /></CardContent></Card>}
           {approved && approved.length === 0 && (
-            <Card><CardContent className="py-10 text-center text-muted-foreground">
-              No approved vendors yet.
-            </CardContent></Card>
+            <Card><CardContent className="py-10 text-center text-muted-foreground">No approved vendors yet.</CardContent></Card>
           )}
-          {approved && approved.length > 0 && (
-            <Card><CardContent className="p-0">
-              <div className="divide-y divide-border">
-                {approved.map((r) => (
-                  <button key={r.id} type="button" onClick={() => openDetail(r.id, r.name, "view", r.registration_approved_at)}
-                          className={`w-full text-left p-3 hover:bg-muted/40 flex items-center gap-3
-                                      ${selectedId === r.id ? "bg-muted/50" : ""}`}>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate text-foreground">{r.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {r.vendor_type ? VENDOR_TYPE_LABELS[r.vendor_type] : "—"}
-                        {r.gstin ? ` · ${r.gstin}` : ""}
-                        {r.registration_approved_at &&
-                          ` · approved ${new Date(r.registration_approved_at).toLocaleDateString()}`}
-                      </div>
-                    </div>
-                    <Badge className="bg-emerald-500/15 text-emerald-700 border border-emerald-500/30">verified</Badge>
-                  </button>
-                ))}
-              </div>
-            </CardContent></Card>
+          {approved && approved.length > 0 && filteredApproved.length === 0 && (
+            <Card><CardContent className="py-8 text-center text-muted-foreground">No vendor matches “{search}”.</CardContent></Card>
+          )}
+          {filteredApproved.length > 0 && (
+            <Card><CardContent className="p-0"><div className="divide-y divide-border">
+              {filteredApproved.map((r) => renderRow(
+                r.id, r.name,
+                `${r.vendor_type ? VENDOR_TYPE_LABELS[r.vendor_type] : "—"}${r.gstin ? ` · ${r.gstin}` : ""}${r.registration_approved_at ? ` · approved ${fmtDate(r.registration_approved_at)}` : ""}`,
+                <Badge className="bg-emerald-500/15 text-emerald-700 border border-emerald-500/30">verified</Badge>, "view",
+              ))}
+            </div></CardContent></Card>
           )}
         </TabsContent>
       </Tabs>
 
-      {/* ── Detail panel (shared) ── */}
+      {/* ── Full supplier card ── */}
       {selectedId && (
         <Card>
           <CardContent className="pt-6 space-y-5">
             <div className="flex items-center gap-3 flex-wrap">
               <ShieldCheck className="h-4 w-4 text-primary" />
               <h2 className="text-sm font-semibold text-foreground">{selectedName}</h2>
-              {supplier?.vendor_type && (
-                <Badge variant="outline">{VENDOR_TYPE_LABELS[supplier.vendor_type]}</Badge>
-              )}
-              {mode === "view" && approvedAt && (
+              {supplier?.vendor_type && <Badge variant="outline">{VENDOR_TYPE_LABELS[supplier.vendor_type]}</Badge>}
+              {mode === "view" && profile?.registration_approved_at && (
                 <Badge className="bg-emerald-500/15 text-emerald-700 border border-emerald-500/30">
-                  Approved {new Date(approvedAt).toLocaleDateString()}
+                  Approved {fmtDate(profile.registration_approved_at)}
                 </Badge>
               )}
-              {mode === "verify" && snapshot && snapshot.missing_documents.length > 0 && (
+              {snapshot && snapshot.missing_documents.length > 0 && (
                 <Badge variant="destructive">{snapshot.missing_documents.length} document(s) missing</Badge>
               )}
             </div>
@@ -271,7 +276,7 @@ export default function VendorVerification() {
 
             {!loadingDetail && (
               <>
-                {/* Submitted details */}
+                {/* Identity */}
                 <section className="space-y-2">
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Submitted details</h3>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 rounded-lg border border-border p-3">
@@ -298,6 +303,24 @@ export default function VendorVerification() {
                   </div>
                 </section>
 
+                {/* Profile & activity */}
+                <section className="space-y-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Profile &amp; activity</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 rounded-lg border border-border p-3">
+                    <Field label="Vendor type" value={supplier?.vendor_type ? VENDOR_TYPE_LABELS[supplier.vendor_type] : "—"} />
+                    <Field label="Registration" value={supplier?.registration_status} />
+                    <Field label="Submitted on" value={fmtDate(profile?.registration_submitted_at)} />
+                    <Field label="Approved on" value={fmtDate(profile?.registration_approved_at)} />
+                    <Field label="Added on" value={fmtDate(profile?.created_at)} />
+                    <Field label="Categories" value={profile?.categories?.length ? profile.categories.join(", ") : "—"} />
+                    <Field label="Purchase orders" value={profile ? String(profile.po_count) : "—"} />
+                    <Field label="Work orders" value={profile ? String(profile.wo_count) : "—"} />
+                    <Field label="Terms accepted" value={supplier?.terms_accepted_by_name
+                      ? `${supplier.terms_accepted_by_name}${supplier.terms_accepted_at ? ` · ${fmtDate(supplier.terms_accepted_at)}` : ""}` : "—"} />
+                    <Field label="Profile complete" value={profile ? (profile.profile_complete ? "Yes" : "No") : "—"} />
+                  </div>
+                </section>
+
                 {/* Contacts */}
                 {contacts.length > 0 && (
                   <section className="space-y-2">
@@ -315,43 +338,17 @@ export default function VendorVerification() {
                   </section>
                 )}
 
-                {/* Documents */}
-                <section className="space-y-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Documents ({regularDocs.length})
-                  </h3>
-                  <div className="rounded-lg border border-border divide-y divide-border">
-                    {regularDocs.length === 0 && (
-                      <div className="p-3 text-sm text-muted-foreground">No documents uploaded.</div>
-                    )}
-                    {regularDocs.map((d) => (
-                      <div key={d.id} className="p-3 flex items-center gap-3">
-                        <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm text-foreground truncate">
-                            {DOCUMENT_LABELS[d.document_type] ?? d.label ?? d.document_type}
-                          </div>
-                          <div className="text-[11px] text-muted-foreground">
-                            {d.document_number ? `${d.document_number} · ` : ""}
-                            {d.uploaded_at ? `uploaded ${new Date(d.uploaded_at).toLocaleDateString()}` : ""}
-                            {d.waiver_accepted_at ? " · waiver accepted" : ""}
-                          </div>
-                        </div>
-                        {d.file_url ? (
-                          <Button size="sm" variant="outline" onClick={() => viewFile(d.file_url)}>
-                            <Eye className="h-3.5 w-3.5 mr-1" />View
-                          </Button>
-                        ) : d.waiver_reason ? (
-                          <Badge variant="secondary" className="text-[10px]">waiver: {d.waiver_reason}</Badge>
-                        ) : (
-                          <Badge variant="destructive" className="text-[10px]">not provided</Badge>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </section>
+                {/* Documents — editable checklist so missing docs can be completed here */}
+                {supplier?.vendor_type && snapshot && (
+                  <RegistrationDocuments
+                    supplierId={selectedId}
+                    vendorType={supplier.vendor_type as VendorType}
+                    missing={snapshot.missing_documents}
+                    onChanged={() => { void reloadMeta(selectedId); }}
+                  />
+                )}
 
-                {/* GST screenshots */}
+                {/* GST screenshots (read-only) */}
                 {gstDocs.length > 0 && (
                   <section className="space-y-2">
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -375,7 +372,7 @@ export default function VendorVerification() {
                   </section>
                 )}
 
-                {/* GST verdict (agent) */}
+                {/* GST verdict */}
                 {gstEval && (
                   <div className={`rounded-lg p-3 space-y-2 text-sm ${GST_VERDICT[gstEval.verdict]?.cls ?? ""}`}>
                     <div className="flex items-center gap-2 font-semibold">
@@ -383,11 +380,6 @@ export default function VendorVerification() {
                       {gstEval.gstin_match === false && <Badge variant="destructive">GSTIN mismatch</Badge>}
                     </div>
                     <p>{gstEval.summary}</p>
-                    {mode === "verify" && (
-                      <p className="text-[11px] opacity-80">
-                        Agent suggestion — the "GST filings are timely" check below reflects this; override if needed.
-                      </p>
-                    )}
                   </div>
                 )}
 
@@ -397,9 +389,7 @@ export default function VendorVerification() {
                   <div className="border border-border rounded-lg divide-y divide-border">
                     {checks.map((c) => (
                       <div key={c.check_key} className="flex items-center gap-3 p-3">
-                        <div className="flex-1 min-w-0 text-sm text-foreground">
-                          {CHECK_LABELS[c.check_key] ?? c.check_key}
-                        </div>
+                        <div className="flex-1 min-w-0 text-sm text-foreground">{CHECK_LABELS[c.check_key] ?? c.check_key}</div>
                         {mode === "verify" ? (
                           <Button size="sm" variant={c.status === "pass" ? "default" : "outline"}
                                   onClick={() => toggle(c.check_key, c.status === "pass" ? "pending" : "pass")}>
