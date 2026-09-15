@@ -250,7 +250,7 @@ export default function ApprovePoPage() {
     try {
       const [{ data: poFull }, { data: lineRows }] = await Promise.all([
         supabase.from("cps_purchase_orders")
-          .select("po_number,created_at,ship_to_address,project_code,payment_terms,delivery_date,po_upto,valid_upto,insp_at,total_value,gst_amount,grand_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,advance_payments,advance_paid_total,version,revision_reason,supplier_id")
+          .select("po_number,created_at,ship_to_address,project_code,payment_terms,delivery_date,po_upto,valid_upto,insp_at,total_value,gst_amount,grand_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,advance_payments,advance_paid_total,version,revision_reason,supplier_id,terms_conditions")
           .eq("id", poId).single(),
         supabase.from("cps_po_line_items")
           .select("description,brand,quantity,unit,rate,gst_percent,gst_amount,total_value,hsn_code,sort_order,is_charge")
@@ -301,6 +301,7 @@ export default function ApprovePoPage() {
         advancePaidTotal: Number((poFull as any).advance_paid_total ?? 0),
         version: (poFull as any).version,
         revisionReason: (poFull as any).revision_reason,
+        terms: (poFull as any).terms_conditions ?? null,
         logoBase64,
         installments: plan.map((p, i) => ({
           milestone_name: p.milestone_name,

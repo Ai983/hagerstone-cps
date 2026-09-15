@@ -97,6 +97,10 @@ export interface PoPdfData {
   /* amendment fields — version > 1 triggers "AMENDMENT NO. X" banner */
   version?: number | null;
   revisionReason?: string | null;
+
+  /* Per-PO Terms & Conditions — overrides the default list when provided
+     (edited / extended in the PO creation dialog). */
+  terms?: string[] | null;
 }
 
 /* ─────────────────────────────────────────────────────── helpers ── */
@@ -224,7 +228,7 @@ function resolveHagerstoneGstin(_vendorGstin?: string | null, _vendorState?: str
   return { gstin: PRIMARY_HAGERSTONE_GSTIN, isIntraState: false };
 }
 
-const TERMS: string[] = [
+export const DEFAULT_PO_TERMS: string[] = [
   "Please strictly mention PO number, packing detail & complete description of the item in your invoice, otherwise material will not be accepted.",
   "Material supplied without test certificate will not be accepted (whenever applicable).",
   "The packing of material should be standard as per company norms.",
@@ -605,8 +609,9 @@ export function buildPoPdf(data: PoPdfData): Blob {
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(6.5);
-  for (let i = 0; i < TERMS.length; i++) {
-    const lines = doc.splitTextToSize((i + 1) + ". " + TERMS[i], tcW - 2);
+  const poTerms = (data.terms && data.terms.length > 0) ? data.terms : DEFAULT_PO_TERMS;
+  for (let i = 0; i < poTerms.length; i++) {
+    const lines = doc.splitTextToSize((i + 1) + ". " + poTerms[i], tcW - 2);
     doc.text(lines, ML, y);
     y += lines.length * 3.5 + 1;
   }

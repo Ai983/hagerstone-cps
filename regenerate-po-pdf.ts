@@ -34,7 +34,7 @@ const logoBase64 = readFileSync("./src/assets/optimisedlogo.png").toString("base
 for (const poNumber of poNumbers) {
   const { data: po, error: poErr } = await supabase
     .from("cps_purchase_orders")
-    .select("id,po_number,pr_id,supplier_id,created_at,created_by,ship_to_address,payment_terms,delivery_date,po_upto,valid_upto,insp_at,project_code,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,version,revision_reason")
+    .select("id,po_number,pr_id,supplier_id,created_at,created_by,ship_to_address,payment_terms,delivery_date,po_upto,valid_upto,insp_at,project_code,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,version,revision_reason,terms_conditions")
     .eq("po_number", poNumber)
     .maybeSingle();
   if (poErr || !po) { console.log(`  FAIL ${poNumber}: not found ${poErr?.message ?? ""}`); continue; }
@@ -92,6 +92,7 @@ for (const poNumber of poNumbers) {
     advancePaidTotal: Number((po as any).advance_paid_total ?? 0),
     version: (po as any).version,
     revisionReason: (po as any).revision_reason,
+    terms: (po as any).terms_conditions ?? null,
     installments: schedules.map((s) => ({
       milestone_name: s.milestone_name ?? "",
       basis: s.basis ?? null,

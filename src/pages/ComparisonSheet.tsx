@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { inChunks } from "@/lib/inChunks";
-import { buildPoPdf, uploadPoPdf } from "@/lib/generatePoPdf";
+import { buildPoPdf, uploadPoPdf, DEFAULT_PO_TERMS } from "@/lib/generatePoPdf";
 import logoUrl from "@/assets/optimisedlogo.png";
 
 import { AlertTriangle, Sparkles, Download, FileText, CheckCircle2 } from "lucide-react";
@@ -526,6 +526,9 @@ export default function ComparisonSheetPage() {
   // Delivery schedule for this PO — mandatory. Prefilled from the PR's required-by
   // date but editable; prints as "Delivery Sch" and drives the PO validity dates.
   const [deliveryDate, setDeliveryDate] = useState("");
+  // Per-PO Terms & Conditions — pre-filled with the standard list, editable in
+  // the dialog (one per line). These print on THIS PO and are stored on it.
+  const [poTerms, setPoTerms] = useState("");
 
   // PO preview dialog — shows the PDF that will be sent to the founder for
   // approval. User must click "View PO" before "Send to Founder" enables, so
@@ -580,6 +583,7 @@ export default function ComparisonSheetPage() {
       .eq("id", rfq.pr_id)
       .maybeSingle();
     setDeliveryDate(String((prReq as any)?.required_by ?? "").slice(0, 10));
+    setPoTerms(DEFAULT_PO_TERMS.join("\n"));
     setBankDialogOpen(true);
   };
 
@@ -806,6 +810,7 @@ export default function ComparisonSheetPage() {
         deliveryDate: deliveryDate || ((prData as any)?.required_by ?? null),
         poUpto: poUptoDate || null,
         validUpto: validUptoDate || null,
+        terms: poTerms.split("\n").map((t) => t.trim()).filter(Boolean),
         // buildPoPdfFromDb uses pr.project_code as both code and name fallback.
         projectCode: (prData as any)?.project_code ?? null,
         projectName: (prData as any)?.project_code ?? null,
@@ -3574,6 +3579,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           delivery_date: deliveryDate || (prData?.required_by ?? null),
           po_upto: poUptoDate || null,
           valid_upto: validUptoDate || null,
+          terms_conditions: poTerms.split("\n").map((t) => t.trim()).filter(Boolean),
           warranty_months: quote.warranty_months ?? null,
           created_by: user.id,
           total_value: poSubTotal,
@@ -3836,6 +3842,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               deliveryDate: _deliveryDate,
               poUpto: poUptoDate || null,
               validUpto: validUptoDate || null,
+              terms: poTerms.split("\n").map((t) => t.trim()).filter(Boolean),
               projectCode: (prData as any)?.project_code ?? null,
               projectName: (prData as any)?.project_code ?? null,
               subTotal,
@@ -5203,6 +5210,18 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 ⚠ "Valid Upto" is earlier than "Po upto" — check these dates.
               </div>
             )}
+            {/* Editable Terms & Conditions — pre-filled with the standard list;
+                the team can edit lines or add more. These print on THIS PO's PDF. */}
+            <div className="space-y-1 sm:col-span-2 border-t pt-3 mt-1">
+              <Label className="text-xs">
+                Terms &amp; Conditions
+                <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+                  (one per line — edit or add; prints on the PO)
+                </span>
+              </Label>
+              <Textarea rows={7} value={poTerms} onChange={(e) => setPoTerms(e.target.value)}
+                        className="text-xs" placeholder="One term per line" />
+            </div>
           </div>
           {(!bankHolderName.trim() || !bankName.trim() || !bankIfsc.trim() || !bankAccountNumber.trim()) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
