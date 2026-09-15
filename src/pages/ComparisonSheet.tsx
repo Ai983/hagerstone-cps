@@ -8,7 +8,7 @@ import { inChunks } from "@/lib/inChunks";
 import { buildPoPdf, uploadPoPdf, DEFAULT_PO_TERMS } from "@/lib/generatePoPdf";
 import logoUrl from "@/assets/optimisedlogo.png";
 
-import { AlertTriangle, Sparkles, Download, FileText, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, Sparkles, Download, FileText, CheckCircle2, Plus, X } from "lucide-react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
@@ -527,8 +527,8 @@ export default function ComparisonSheetPage() {
   // date but editable; prints as "Delivery Sch" and drives the PO validity dates.
   const [deliveryDate, setDeliveryDate] = useState("");
   // Per-PO Terms & Conditions — pre-filled with the standard list, editable in
-  // the dialog (one per line). These print on THIS PO and are stored on it.
-  const [poTerms, setPoTerms] = useState("");
+  // the dialog — each point editable; add or remove points. Stored on the PO.
+  const [poTerms, setPoTerms] = useState<string[]>([]);
 
   // PO preview dialog — shows the PDF that will be sent to the founder for
   // approval. User must click "View PO" before "Send to Founder" enables, so
@@ -583,7 +583,7 @@ export default function ComparisonSheetPage() {
       .eq("id", rfq.pr_id)
       .maybeSingle();
     setDeliveryDate(String((prReq as any)?.required_by ?? "").slice(0, 10));
-    setPoTerms(DEFAULT_PO_TERMS.join("\n"));
+    setPoTerms([...DEFAULT_PO_TERMS]);
     setBankDialogOpen(true);
   };
 
@@ -810,7 +810,7 @@ export default function ComparisonSheetPage() {
         deliveryDate: deliveryDate || ((prData as any)?.required_by ?? null),
         poUpto: poUptoDate || null,
         validUpto: validUptoDate || null,
-        terms: poTerms.split("\n").map((t) => t.trim()).filter(Boolean),
+        terms: poTerms.map((t) => t.trim()).filter(Boolean),
         // buildPoPdfFromDb uses pr.project_code as both code and name fallback.
         projectCode: (prData as any)?.project_code ?? null,
         projectName: (prData as any)?.project_code ?? null,
@@ -3579,7 +3579,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           delivery_date: deliveryDate || (prData?.required_by ?? null),
           po_upto: poUptoDate || null,
           valid_upto: validUptoDate || null,
-          terms_conditions: poTerms.split("\n").map((t) => t.trim()).filter(Boolean),
+          terms_conditions: poTerms.map((t) => t.trim()).filter(Boolean),
           warranty_months: quote.warranty_months ?? null,
           created_by: user.id,
           total_value: poSubTotal,
@@ -3842,7 +3842,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               deliveryDate: _deliveryDate,
               poUpto: poUptoDate || null,
               validUpto: validUptoDate || null,
-              terms: poTerms.split("\n").map((t) => t.trim()).filter(Boolean),
+              terms: poTerms.map((t) => t.trim()).filter(Boolean),
               projectCode: (prData as any)?.project_code ?? null,
               projectName: (prData as any)?.project_code ?? null,
               subTotal,
@@ -5210,17 +5210,43 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 ⚠ "Valid Upto" is earlier than "Po upto" — check these dates.
               </div>
             )}
-            {/* Editable Terms & Conditions — pre-filled with the standard list;
-                the team can edit lines or add more. These print on THIS PO's PDF. */}
-            <div className="space-y-1 sm:col-span-2 border-t pt-3 mt-1">
-              <Label className="text-xs">
+            {/* Editable point-wise Terms & Conditions — pre-filled with the standard
+                list; edit any point, remove one, or add more. Prints on the PO. */}
+            <div className="space-y-2 sm:col-span-2 border-t pt-3 mt-1">
+              <div className="text-xs font-medium text-foreground">
                 Terms &amp; Conditions
                 <span className="ml-2 text-[10px] font-normal text-muted-foreground">
-                  (one per line — edit or add; prints on the PO)
+                  edit any point, remove, or add — prints on the PO
                 </span>
-              </Label>
-              <Textarea rows={7} value={poTerms} onChange={(e) => setPoTerms(e.target.value)}
-                        className="text-xs" placeholder="One term per line" />
+              </div>
+              <div className="space-y-1.5">
+                {poTerms.map((term, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="text-xs text-muted-foreground w-4 shrink-0 pt-2 text-right">{i + 1}.</span>
+                    <Textarea
+                      value={term}
+                      onChange={(e) => setPoTerms((prev) => prev.map((t, idx) => (idx === i ? e.target.value : t)))}
+                      rows={2}
+                      className="text-xs min-h-0 flex-1"
+                      placeholder={`Term ${i + 1}`}
+                    />
+                    <Button type="button" variant="ghost" size="icon"
+                            className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                            onClick={() => setPoTerms((prev) => prev.filter((_, idx) => idx !== i))}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+                {poTerms.length === 0 && (
+                  <div className="text-[11px] text-muted-foreground">
+                    No terms — add at least one, or leave empty to use the standard list.
+                  </div>
+                )}
+              </div>
+              <Button type="button" variant="outline" size="sm" className="h-8"
+                      onClick={() => setPoTerms((prev) => [...prev, ""])}>
+                <Plus className="h-3.5 w-3.5 mr-1" />Add point
+              </Button>
             </div>
           </div>
           {(!bankHolderName.trim() || !bankName.trim() || !bankIfsc.trim() || !bankAccountNumber.trim()) && (
