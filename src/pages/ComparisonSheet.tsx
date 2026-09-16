@@ -528,7 +528,7 @@ export default function ComparisonSheetPage() {
   const [deliveryDate, setDeliveryDate] = useState("");
   // Per-PO Terms & Conditions — pre-filled with the standard list, editable in
   // the dialog — each point editable; add or remove points. Stored on the PO.
-  const [poTerms, setPoTerms] = useState<string[]>([]);
+  const [poTerms, setPoTerms] = useState<string[]>([...DEFAULT_PO_TERMS]);
 
   // PO preview dialog — shows the PDF that will be sent to the founder for
   // approval. User must click "View PO" before "Send to Founder" enables, so
@@ -583,7 +583,6 @@ export default function ComparisonSheetPage() {
       .eq("id", rfq.pr_id)
       .maybeSingle();
     setDeliveryDate(String((prReq as any)?.required_by ?? "").slice(0, 10));
-    setPoTerms([...DEFAULT_PO_TERMS]);
     setBankDialogOpen(true);
   };
 
@@ -864,7 +863,7 @@ export default function ComparisonSheetPage() {
     // produces no tranches → no advance release → it silently never reaches Finance and
     // gets stranded at "Founder Approved". Block the send before anything else.
     if (paymentPlan.length === 0) {
-      toast.error("Payment plan zaroori hai — founder ko bhejne se pehle kam se kam ek installment add karein.");
+      toast.error("A payment plan is required — add at least one installment before sending to the founder.");
       return;
     }
     setSendingToFounder(true);
@@ -3338,7 +3337,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
     // Defense-in-depth for the terms-less-PO root cause (sendToFounder also guards this):
     // never create+dispatch a PO without a payment plan, or it strands at "Founder Approved".
     if (paymentPlan.length === 0) {
-      toast.error("Payment plan zaroori hai — PO banane se pehle kam se kam ek installment add karein.");
+      toast.error("A payment plan is required — add at least one installment before creating the PO.");
       return;
     }
     setCreatingPO(true);
@@ -5046,7 +5045,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 />
               ) : (
                 <p className="text-xs text-muted-foreground italic">
-                  Pehle <span className="font-semibold">View PO</span> dekho — phir founder ke approval ke liye Payment Plan (Installments) set karo.
+                  First click <span className="font-semibold">View PO</span>, then set the Payment Plan (Installments) for the founder's approval.
                 </p>
               )}
             </div>

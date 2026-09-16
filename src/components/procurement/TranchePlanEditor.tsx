@@ -36,34 +36,34 @@ export interface Tranche {
 }
 
 const TRIGGERS: { value: TriggerType; label: string; isCredit: boolean }[] = [
-  { value: 'advance_on_po',            label: 'Advance (PO ke saath)',       isCredit: false },
-  { value: 'before_dispatch',          label: 'Dispatch se pehle',           isCredit: false },
-  { value: 'on_dispatch_lr',           label: 'Dispatch pe (LR/Bilty)',      isCredit: false },
-  { value: 'on_delivery_grn',          label: 'Delivery pe (maal aane par)', isCredit: false },
-  { value: 'credit_days_from_invoice', label: 'Udhaar (invoice se din)',     isCredit: true  },
-  { value: 'credit_days_from_grn',     label: 'Udhaar (delivery se din)',    isCredit: true  },
+  { value: 'advance_on_po',            label: 'Advance (with PO)',            isCredit: false },
+  { value: 'before_dispatch',          label: 'Before dispatch',              isCredit: false },
+  { value: 'on_dispatch_lr',           label: 'On dispatch (LR/Bilty)',       isCredit: false },
+  { value: 'on_delivery_grn',          label: 'On delivery (goods received)', isCredit: false },
+  { value: 'credit_days_from_invoice', label: 'Credit (days from invoice)',   isCredit: true  },
+  { value: 'credit_days_from_grn',     label: 'Credit (days from delivery)',  isCredit: true  },
 ];
 
 const isCreditTrigger = (t: TriggerType) => TRIGGERS.find((x) => x.value === t)?.isCredit ?? false;
 
 // ── Presets ──────────────────────────────────────────────────────────────
 const PRESETS: { label: string; build: () => Tranche[] }[] = [
-  { label: 'Poora Advance (100%)', build: () => [
+  { label: 'Full Advance (100%)', build: () => [
     { milestone_name: 'Advance', basis: 'percent', value: 100, trigger_type: 'advance_on_po' },
   ] },
-  { label: 'Delivery pe Poora (100%)', build: () => [
-    { milestone_name: 'Delivery pe', basis: 'percent', value: 100, trigger_type: 'on_delivery_grn' },
+  { label: 'Full on Delivery (100%)', build: () => [
+    { milestone_name: 'On delivery', basis: 'percent', value: 100, trigger_type: 'on_delivery_grn' },
   ] },
-  { label: 'Udhaar 30 din (100%)', build: () => [
-    { milestone_name: 'Udhaar 30 din', basis: 'percent', value: 100, trigger_type: 'credit_days_from_invoice', trigger_offset_days: 30 },
+  { label: 'Credit 30 days (100%)', build: () => [
+    { milestone_name: 'Credit 30 days', basis: 'percent', value: 100, trigger_type: 'credit_days_from_invoice', trigger_offset_days: 30 },
   ] },
   { label: '50% Advance + 50% Delivery', build: () => [
     { milestone_name: 'Advance 50%', basis: 'percent', value: 50, trigger_type: 'advance_on_po' },
-    { milestone_name: 'Baaki delivery pe', basis: 'balance', trigger_type: 'on_delivery_grn' },
+    { milestone_name: 'Balance on delivery', basis: 'balance', trigger_type: 'on_delivery_grn' },
   ] },
   { label: '75% Advance + 25% Delivery', build: () => [
     { milestone_name: 'Advance 75%', basis: 'percent', value: 75, trigger_type: 'advance_on_po' },
-    { milestone_name: 'Baaki delivery pe', basis: 'balance', trigger_type: 'on_delivery_grn' },
+    { milestone_name: 'Balance on delivery', basis: 'balance', trigger_type: 'on_delivery_grn' },
   ] },
 ];
 
@@ -104,7 +104,7 @@ export function TranchePlanEditor({ totalAmount, value, onChange }: Props) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <Label className="text-sm font-medium">Payment Plan (Installments / Kist)</Label>
+        <Label className="text-sm font-medium">Payment Plan (Installments)</Label>
         <span className="text-xs text-muted-foreground">PO total: {fmt(totalAmount)}</span>
       </div>
 
@@ -121,7 +121,7 @@ export function TranchePlanEditor({ totalAmount, value, onChange }: Props) {
       {/* Rows */}
       {value.length === 0 ? (
         <p className="text-xs text-muted-foreground italic py-2">
-          Abhi koi installment nahi — upar se ek preset chuno ya neeche row add karo. (Optional — khali bhi chhod sakte ho.)
+          No installments yet — pick a preset above or add a row below. (Optional — you can leave it empty.)
         </p>
       ) : (
         <div className="space-y-2">
@@ -129,7 +129,7 @@ export function TranchePlanEditor({ totalAmount, value, onChange }: Props) {
             <div key={i} className="grid grid-cols-12 gap-2 items-center rounded-lg border border-border p-2">
               <Input
                 className="col-span-3 h-8 text-xs"
-                placeholder="Installment ka naam"
+                placeholder="Installment name"
                 value={t.milestone_name}
                 onChange={(e) => update(i, { milestone_name: e.target.value })}
               />
@@ -138,7 +138,7 @@ export function TranchePlanEditor({ totalAmount, value, onChange }: Props) {
                 <SelectContent>
                   <SelectItem value="percent">%</SelectItem>
                   <SelectItem value="fixed">Fixed ₹</SelectItem>
-                  <SelectItem value="balance">Balance (bacha)</SelectItem>
+                  <SelectItem value="balance">Balance (remaining)</SelectItem>
                 </SelectContent>
               </Select>
               <Input
@@ -178,7 +178,7 @@ export function TranchePlanEditor({ totalAmount, value, onChange }: Props) {
 
       <div className="flex items-center justify-between">
         <Button type="button" variant="ghost" size="sm" className="text-xs h-7" onClick={addRow}>
-          <Plus className="h-3 w-3 mr-1" /> Installment Add Karo
+          <Plus className="h-3 w-3 mr-1" /> Add Installment
         </Button>
         {value.length > 0 && (
           <span className={`text-xs font-medium ${overAllocated || underAllocated ? 'text-amber-600' : 'text-green-700'}`}>
@@ -190,7 +190,7 @@ export function TranchePlanEditor({ totalAmount, value, onChange }: Props) {
       {(overAllocated || underAllocated) && (
         <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           <AlertTriangle className="h-3.5 w-3.5" />
-          {overAllocated ? 'Installments PO total se zyada ho gaye.' : 'Poora PO cover nahi hua — ek balance installment add karo.'}
+          {overAllocated ? 'Installments exceed the PO total.' : 'PO not fully covered — add a balance installment.'}
         </div>
       )}
     </div>

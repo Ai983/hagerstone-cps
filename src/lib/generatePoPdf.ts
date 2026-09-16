@@ -125,18 +125,18 @@ const INR = (n: number | null | undefined): string => {
   return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
 
-/* Installment "when" → Hinglish label for the PO payment-schedule table */
+/* Installment "when" → English label for the PO payment-schedule table */
 const WHEN_LABEL: Record<string, string> = {
-  advance_on_po: "Advance (PO ke saath)",
-  before_dispatch: "Dispatch se pehle",
-  on_dispatch_lr: "Dispatch pe (LR/Bilty)",
-  on_delivery_grn: "Delivery pe (maal aane par)",
-  credit_days_from_invoice: "Udhaar (invoice se)",
-  credit_days_from_grn: "Udhaar (delivery se)",
+  advance_on_po: "Advance (with PO)",
+  before_dispatch: "Before dispatch",
+  on_dispatch_lr: "On dispatch (LR/Bilty)",
+  on_delivery_grn: "On delivery (goods received)",
+  credit_days_from_invoice: "Credit (from invoice)",
+  credit_days_from_grn: "Credit (from delivery)",
 };
 const whenLabel = (t?: string | null, days?: number | null): string => {
   const base = WHEN_LABEL[t ?? ""] ?? (t ?? "—");
-  return days ? `${base} ${days} din` : base;
+  return days ? `${base} ${days} days` : base;
 };
 
 /* Indian number to words */
@@ -774,7 +774,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
       head: [[
         { content: "No.", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
         { content: "Installment", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
-        { content: "Payment Kab (When)", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
+        { content: "Payment When", styles: { fontStyle: "bold", fillColor: [245, 245, 245] } },
         { content: "%", styles: { fontStyle: "bold", fillColor: [245, 245, 245], halign: "right" } },
         { content: "Amount", styles: { fontStyle: "bold", fillColor: [245, 245, 245], halign: "right" } },
       ]],

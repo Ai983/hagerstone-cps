@@ -5,18 +5,18 @@ import logoUrl from "@/assets/optimisedlogo.png";
 import { buildPoPdf } from "@/lib/generatePoPdf";
 import { TranchePlanEditor, computeAmounts, type Tranche, type TriggerType } from "@/components/procurement/TranchePlanEditor";
 
-/* installment "when" → short Hinglish label for the read-only plan view */
+/* installment "when" → short English label for the read-only plan view */
 const WHEN_SHORT: Record<string, string> = {
-  advance_on_po: "Advance (PO ke saath)",
-  before_dispatch: "Dispatch se pehle",
-  on_dispatch_lr: "Dispatch pe (LR)",
-  on_delivery_grn: "Delivery pe",
-  credit_days_from_invoice: "Udhaar (invoice se)",
-  credit_days_from_grn: "Udhaar (delivery se)",
+  advance_on_po: "Advance (with PO)",
+  before_dispatch: "Before dispatch",
+  on_dispatch_lr: "On dispatch (LR)",
+  on_delivery_grn: "On delivery",
+  credit_days_from_invoice: "Credit (from invoice)",
+  credit_days_from_grn: "Credit (from delivery)",
 };
 const whenShort = (t?: string | null, days?: number | null) => {
   const base = WHEN_SHORT[t ?? ""] ?? (t ?? "—");
-  return days ? `${base} ${days} din` : base;
+  return days ? `${base} ${days} days` : base;
 };
 
 /* Seed the editor from a PO's stored payment_terms_json — tolerant of both the
@@ -337,7 +337,7 @@ export default function ApprovePoPage() {
     if (!choice || !tokenRow) return;
     if (choice === "rejected" && !reason.trim()) return;
     if (planChanged && !reason.trim()) {
-      alert("Aapne payment terms badle hain — team ke liye ek chhota note likhna zaroori hai.");
+      alert("You changed the payment terms — a short note for the team is required.");
       return;
     }
     setSubmitting(true);
@@ -497,7 +497,7 @@ export default function ApprovePoPage() {
             <>
               <TranchePlanEditor totalAmount={Number(po?.grand_total ?? 0)} value={plan} onChange={setPlan} />
               <p className="text-xs text-amber-700">
-                Terms badalne par neeche <span className="font-semibold">note likhna zaroori</span> hai — team ko dikhega.
+                If you change the terms, a <span className="font-semibold">note is required</span> below — the team will see it.
               </p>
             </>
           ) : plan.length > 0 ? (
@@ -557,7 +557,7 @@ export default function ApprovePoPage() {
           <div>
             <label className="text-xs text-muted-foreground block mb-1.5">
               Reason / Note {(choice === "rejected" || planChanged) && <span className="text-destructive">*</span>}
-              {planChanged && <span className="text-amber-700"> (terms badle — note zaroori)</span>}
+              {planChanged && <span className="text-amber-700"> (terms changed — note required)</span>}
             </label>
             <textarea
               value={reason}
