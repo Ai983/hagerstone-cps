@@ -44,18 +44,6 @@ import NewVendorRegistrationDialog from "@/components/vendors/NewVendorRegistrat
 // material shows up with minor spelling/wording drift ("Tiger lorex safety
 // shoes" vs "safety shoes", "PVC pipe 110mm" vs "110 mm pvc pipe"). Exact text
 // equality was rejecting genuine repeats, so we match tolerantly instead.
-/* Mirrors the fallback in generatePoPdf.ts: when "Po upto" / "Valid Upto" are left
-   blank, the PDF derives them from the delivery date (+5 / +13 calendar days).
-   Used only to preview that default under the inputs. */
-const DERIVED_PO_UPTO_DAYS = 5;
-const DERIVED_VALID_UPTO_DAYS = 13;
-const derivedFromDelivery = (deliveryDate: string | null | undefined, days: number): string | null => {
-  if (!deliveryDate) return null;
-  const dt = new Date(deliveryDate);
-  if (Number.isNaN(dt.getTime())) return null;
-  dt.setDate(dt.getDate() + days);
-  return dt.toLocaleDateString("en-IN");
-};
 
 const normalizeItemText = (s: string): string =>
   (s ?? "")
@@ -519,9 +507,8 @@ export default function ComparisonSheetPage() {
   const [bankName, setBankName] = useState("");
   const [bankIfsc, setBankIfsc] = useState("");
   const [bankAccountNumber, setBankAccountNumber] = useState("");
-  // PO validity window, collected in the same dialog. Both optional — left blank
-  // they save as NULL and the PDF derives them from the delivery date (+5 / +13).
-  const [poUptoDate, setPoUptoDate] = useState("");
+  // Valid Upto — optional per-PO validity date. Printed on the PO only when
+  // filled; blank omits the row (no derived default).
   const [validUptoDate, setValidUptoDate] = useState("");
   // Delivery schedule for this PO — mandatory. Prefilled from the PR's required-by
   // date but editable; prints as "Delivery Sch" and drives the PO validity dates.
@@ -575,7 +562,6 @@ export default function ComparisonSheetPage() {
     setBankIfsc(src?.bank_ifsc ?? "");
     setBankAccountNumber(src?.bank_account_number ?? "");
     // Validity dates are per-PO — never carried over from a previous one.
-    setPoUptoDate("");
     setValidUptoDate("");
     const { data: prReq } = await supabase
       .from("cps_purchase_requisitions")
@@ -583,6 +569,9 @@ export default function ComparisonSheetPage() {
       .eq("id", rfq.pr_id)
       .maybeSingle();
     setDeliveryDate(String((prReq as any)?.required_by ?? "").slice(0, 10));
+    // Feed the in-dialog payment-plan editor with the recommended quote's total
+    // so its per-installment amounts show immediately, before the preview builds.
+    setPoTotalForPlan(perSupplierTotals.totals[supplierId]?.totalLanded ?? 0);
     setBankDialogOpen(true);
   };
 
@@ -807,7 +796,6 @@ export default function ComparisonSheetPage() {
         inspAt: (prData as any)?.project_site ?? null,
         paymentTerms: quote.payment_terms ?? null,
         deliveryDate: deliveryDate || ((prData as any)?.required_by ?? null),
-        poUpto: poUptoDate || null,
         validUpto: validUptoDate || null,
         terms: poTerms.map((t) => t.trim()).filter(Boolean),
         // buildPoPdfFromDb uses pr.project_code as both code and name fallback.
@@ -3576,7 +3564,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           bill_to_address: "HAGERSTONE INTERNATIONAL (P) LTD\nGST: 09AAECH3768B1ZM\nD-107, 91 Springboard Hub, Red FM Road\nSector-2, Noida, UP\nPh: +91 8448992353\nprocurement@hagerstone.com",
           payment_terms: quote.payment_terms ?? null,
           delivery_date: deliveryDate || (prData?.required_by ?? null),
-          po_upto: poUptoDate || null,
+          po_upto: null,
           valid_upto: validUptoDate || null,
           terms_conditions: poTerms.map((t) => t.trim()).filter(Boolean),
           warranty_months: quote.warranty_months ?? null,
@@ -3839,7 +3827,6 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               inspAt: (prData as any)?.project_site ?? shipToAddress?.split("\n")[0] ?? undefined,
               paymentTerms: _paymentTerms,
               deliveryDate: _deliveryDate,
-              poUpto: poUptoDate || null,
               validUpto: validUptoDate || null,
               terms: poTerms.map((t) => t.trim()).filter(Boolean),
               projectCode: (prData as any)?.project_code ?? null,
@@ -5037,15 +5024,16 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
 
             {/* SPEC-PAY-01 Gate 1: capture the payment plan the founder will approve */}
             <div className="rounded-lg border border-border p-3">
-              {hasViewedPo ? (
-                <TranchePlanEditor
-                  totalAmount={poTotalForPlan}
-                  value={paymentPlan}
-                  onChange={setPaymentPlan}
-                />
+              <div className="text-xs font-medium mb-1">Payment Plan (Installments)</div>
+              {paymentPlan.length > 0 ? (
+                <ul className="text-xs text-muted-foreground space-y-0.5">
+                  {paymentPlan.map((p, i) => (
+                    <li key={i}>{i + 1}. {p.milestone_name || "—"} — {p.basis === "percent" ? `${p.value ?? 0}%` : p.basis === "balance" ? "balance" : `₹${p.value ?? 0}`}</li>
+                  ))}
+                </ul>
               ) : (
                 <p className="text-xs text-muted-foreground italic">
-                  First click <span className="font-semibold">View PO</span>, then set the Payment Plan (Installments) for the founder's approval.
+                  Set the payment plan inside the PO form — click <span className="font-semibold">View PO</span>.
                 </p>
               )}
             </div>
@@ -5177,38 +5165,15 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 <div className="text-[10px] text-muted-foreground">Prefilled from the PR's required-by date; edit if needed.</div>
               )}
             </div>
-            {/* PO validity window — optional; blank derives from the delivery date */}
-            <div className="sm:col-span-2 border-t pt-3 mt-1">
-              <div className="text-xs font-medium text-foreground">
-                PO Validity
+            {/* PO validity — optional; prints on the PO only when filled */}
+            <div className="sm:col-span-2 border-t pt-3 mt-1 space-y-1">
+              <Label className="text-xs">Valid Upto
                 <span className="ml-2 text-[10px] font-normal text-muted-foreground">
-                  (optional — leave blank to derive from the delivery date)
+                  (optional — leave blank to omit from the PO)
                 </span>
-              </div>
+              </Label>
+              <Input type="date" value={validUptoDate} onChange={(e) => setValidUptoDate(e.target.value)} className="h-9 sm:max-w-xs" />
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Po upto</Label>
-              <Input type="date" value={poUptoDate} onChange={(e) => setPoUptoDate(e.target.value)} className="h-9" />
-              {!poUptoDate && (
-                <div className="text-[10px] text-muted-foreground">
-                  Blank → delivery date + {DERIVED_PO_UPTO_DAYS} days
-                </div>
-              )}
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Valid Upto</Label>
-              <Input type="date" value={validUptoDate} onChange={(e) => setValidUptoDate(e.target.value)} className="h-9" />
-              {!validUptoDate && (
-                <div className="text-[10px] text-muted-foreground">
-                  Blank → delivery date + {DERIVED_VALID_UPTO_DAYS} days
-                </div>
-              )}
-            </div>
-            {poUptoDate && validUptoDate && validUptoDate < poUptoDate && (
-              <div className="sm:col-span-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                ⚠ "Valid Upto" is earlier than "Po upto" — check these dates.
-              </div>
-            )}
             {/* Editable point-wise Terms & Conditions — pre-filled with the standard
                 list; edit any point, remove one, or add more. Prints on the PO. */}
             <div className="space-y-2 sm:col-span-2 border-t pt-3 mt-1">
@@ -5247,17 +5212,31 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 <Plus className="h-3.5 w-3.5 mr-1" />Add point
               </Button>
             </div>
+            {/* Payment Plan (Installments) — captured in the form so the PO the
+                founder previews is complete. Required before generating the preview. */}
+            <div className="space-y-2 sm:col-span-2 border-t pt-3 mt-1">
+              <TranchePlanEditor
+                totalAmount={poTotalForPlan}
+                value={paymentPlan}
+                onChange={setPaymentPlan}
+              />
+            </div>
           </div>
           {(!bankHolderName.trim() || !bankName.trim() || !bankIfsc.trim() || !bankAccountNumber.trim()) && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               ⚠ Bank details are incomplete. The PO will still be created, but the founder will receive a PDF without bank details. You can add them later via the PO Edit page.
             </div>
           )}
+          {paymentPlan.length === 0 && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              ⚠ Add at least one installment to the Payment Plan above — it prints on the PO the founder previews.
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setBankDialogOpen(false)} disabled={poPreviewLoading}>
               Cancel
             </Button>
-            <Button onClick={confirmBankAndPreviewPo} disabled={poPreviewLoading || !deliveryDate} className="bg-blue-600 hover:bg-blue-700 text-white">
+            <Button onClick={confirmBankAndPreviewPo} disabled={poPreviewLoading || !deliveryDate || paymentPlan.length === 0} className="bg-blue-600 hover:bg-blue-700 text-white">
               {poPreviewLoading ? "Generating preview…" : "Continue to PO Preview"}
             </Button>
           </DialogFooter>

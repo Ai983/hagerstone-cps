@@ -44,8 +44,8 @@ export interface PoPdfData {
   /* order */
   paymentTerms?: string | null;
   deliveryDate?: string | null;
-  /* Optional per-PO overrides. When absent both are derived from deliveryDate
-     (+5 / +13 days) exactly as before. */
+  /* Optional per-PO validity. "Po upto" is no longer printed; "Valid Upto"
+     prints only when provided (blank omits the row entirely). */
   poUpto?: string | null;
   validUpto?: string | null;
   projectCode?: string | null;
@@ -109,14 +109,6 @@ const fmtDate = (d: string | null | undefined): string => {
   if (!d) return "—";
   const dt = new Date(d);
   if (isNaN(dt.getTime())) return d;
-  return dt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-};
-
-const addDays = (d: string | null | undefined, n: number): string => {
-  if (!d) return "—";
-  const dt = new Date(d);
-  if (isNaN(dt.getTime())) return "—";
-  dt.setDate(dt.getDate() + n);
   return dt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 };
 
@@ -275,8 +267,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
   const today = new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
   const poDate = data.poDate ? fmtDate(data.poDate) : today;
   const delivSch   = fmtDate(data.deliveryDate);
-  const poUpto     = data.poUpto ? fmtDate(data.poUpto) : addDays(data.deliveryDate, 5);
-  const validUpto  = data.validUpto ? fmtDate(data.validUpto) : addDays(data.deliveryDate, 13);
+  const validUpto  = data.validUpto ? fmtDate(data.validUpto) : null;
 
   /* Use the GSTIN stored on the PO record; fall back to UP GSTIN */
   const resolvedHagerstoneGstin = data.hagerstoneGstin ?? PRIMARY_HAGERSTONE_GSTIN;
@@ -419,8 +410,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
     ["PO No", data.poNumber + (data.version && data.version > 1 ? ` (v${data.version})` : "")],
     ...(data.prNumber ? [["PR Ref", data.prNumber] as [string, string]] : []),
     ["Po Issue Date", poDate],
-    ["Po upto", poUpto],
-    ["Valid Upto", validUpto],
+    ...(validUpto ? [["Valid Upto", validUpto] as [string, string]] : []),
     ["Mode of Payment", "NEFT/RTGS"],
     ["Payment Terms", paymentSummary],
     ["Eff.Dt", poDate],
