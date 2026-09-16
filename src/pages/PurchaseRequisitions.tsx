@@ -825,15 +825,15 @@ export default function PurchaseRequisitions() {
   // Restricted by email so it stays stable across environments.
   const PR_ASSIGNEE_EMAILS = [
     "vishalj665@gmail.com",          // Vishal Jain — Procurement Manager
-    "procurement@hagerstone.com",   // Avisha
     "ajitreddy916@gmail.com",        // Ajit
-    "dba88795@gmail.com",            // Deepak Bansal (shown as "Deepak B")
+    "kumar.pradeep989191@gmail.com", // Pradeep Kumar
     "sakshamkaloya109@gmail.com",    // Saksham
+    // Removed from PR routing on request: "procurement@hagerstone.com" (Avisha)
+    // and "dba88795@gmail.com" (Deepak B). User rows & history retained.
     // "mep@hagerstone.com" (Deepak) hidden — on emergency leave; user row & history retained.
   ];
   // Display-label overrides for the PR assignee pills (stored name may differ).
   const PR_ASSIGNEE_LABELS: Record<string, string> = {
-    "dba88795@gmail.com": "Deepak B",
     "vishalj665@gmail.com": "Vishal Jain",
   };
   const [wizAssignees, setWizAssignees] = useState<Array<{ id: string; name: string; email: string; role: string; department: string | null }>>([]);
@@ -1022,7 +1022,7 @@ export default function PurchaseRequisitions() {
       .in("email", PR_ASSIGNEE_EMAILS)
       .eq("active", true);
     if (!error && data) {
-      // Preserve the order from PR_ASSIGNEE_EMAILS (Avisha, Ajit, Deepak, Saksham)
+      // Preserve the order from PR_ASSIGNEE_EMAILS (Vishal, Ajit, Pradeep, Saksham)
       const order = new Map(PR_ASSIGNEE_EMAILS.map((e, i) => [e, i]));
       const sorted = (data as any[]).sort((a, b) => (order.get(a.email) ?? 99) - (order.get(b.email) ?? 99));
       setWizAssignees(sorted as any);
