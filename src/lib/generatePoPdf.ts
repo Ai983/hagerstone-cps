@@ -601,6 +601,31 @@ export function buildPoPdf(data: PoPdfData): Blob {
   const totW = CW * 0.38;
   const totX = ML + tcW + 2;
   const rowH = 5;
+
+  /* Pre-measure BOTH columns so this two-column block never splits across a
+     page. A mid-box page break used to orphan the Grand Total onto an otherwise
+     blank page and desync the cursor from the current page — wasting whole
+     pages and pushing the bank details onto a fresh sheet. */
+  const poTerms = (data.terms && data.terms.length > 0) ? data.terms : DEFAULT_PO_TERMS;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(6.5);
+  const tcLines = poTerms.map((t, i) => doc.splitTextToSize((i + 1) + ". " + t, tcW - 2) as string[]);
+  const tcHeight = 6 + tcLines.reduce((s, l) => s + l.length * 3.5 + 1, 0);
+  const advPreview = (data.advancePayments ?? []).filter((a) => Number(a?.amount) > 0);
+  const advTotalPreview = data.advancePaidTotal != null
+    ? Number(data.advancePaidTotal) || 0
+    : advPreview.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const totalsRowCount =
+    1                                                    // Total
+    + (chargeItems.length > 0 ? chargeItems.length + 1 : 1) // charges + Taxable, or Freight
+    + (isIntraState ? 2 : 1)                             // CGST+SGST, or IGST
+    + 1                                                  // Grand Total
+    + (advTotalPreview > 0 ? 2 : 0);                     // Advance + Balance
+  const totalsHeight = 7 + totalsRowCount * rowH;        // 7 = "Remarks :" gap
+  if (y + Math.max(tcHeight, totalsHeight) > H - 14) {
+    doc.addPage();
+    y = ML;
+  }
   const startY5 = y;
 
   /* T&C box */
@@ -612,24 +637,15 @@ export function buildPoPdf(data: PoPdfData): Blob {
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(6.5);
-  const poTerms = (data.terms && data.terms.length > 0) ? data.terms : DEFAULT_PO_TERMS;
-  for (let i = 0; i < poTerms.length; i++) {
-    const lines = doc.splitTextToSize((i + 1) + ". " + poTerms[i], tcW - 2);
-    doc.text(lines, ML, y);
-    y += lines.length * 3.5 + 1;
+  for (let i = 0; i < tcLines.length; i++) {
+    doc.text(tcLines[i], ML, y);
+    y += tcLines[i].length * 3.5 + 1;
   }
 
   /* Totals box (right side) */
   let ty = startY5;
 
   const drawTotalRow = (label: string, val: string, bold = false) => {
-    // Page-break guard: if drawing this row would clip below the page edge, jump
-    // to a new page and continue. Prevents the Grand Total from being cut off
-    // when line items push the totals box near the bottom margin.
-    if (ty + rowH > H - 14) {
-      doc.addPage();
-      ty = ML + 4;
-    }
     if (bold) {
       doc.setFont("helvetica", "bold");
       doc.setFillColor(230, 230, 230);
@@ -698,6 +714,10 @@ export function buildPoPdf(data: PoPdfData): Blob {
   }
 
   y = Math.max(y, ty) + 3;
+
+  /* Keep the amount-in-words + payment + bank block off the very bottom edge so
+     it doesn't clip into the footer or spill onto a near-empty page. */
+  if (y + 18 > H - 14) { doc.addPage(); y = ML; }
 
   /* ── 6. Amount in words ── */
   doc.setLineWidth(0.3);
