@@ -31,7 +31,20 @@ console.log("logged in as admin@hagerstone.com");
 
 const logoBase64 = readFileSync("./src/assets/optimisedlogo.png").toString("base64");
 
-for (const poNumber of poNumbers) {
+let targets = poNumbers;
+if (poNumbers.length === 1 && poNumbers[0] === "--all") {
+  const { data: allPos, error: listErr } = await supabase
+    .from("cps_purchase_orders")
+    .select("po_number")
+    .not("po_pdf_url", "is", null)
+    .order("po_number", { ascending: true });
+  if (listErr) { console.error("list failed:", listErr.message); process.exit(1); }
+  targets = (allPos ?? []).map((r: any) => r.po_number as string);
+  console.log(`--all: ${targets.length} issued POs to rebuild`);
+}
+
+for (const poNumber of targets) {
+  try {
   const { data: po, error: poErr } = await supabase
     .from("cps_purchase_orders")
     .select("id,po_number,pr_id,supplier_id,created_at,created_by,ship_to_address,payment_terms,delivery_date,po_upto,valid_upto,insp_at,project_code,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,version,revision_reason,terms_conditions")
@@ -118,5 +131,6 @@ for (const poNumber of poNumbers) {
   const url = await uploadPoPdf(supabase as any, poId, (po as any).po_number, blob);
   if (url) console.log(`  ok   ${poNumber}`);
   else console.log(`  FAIL ${poNumber} (upload returned null)`);
+  } catch (e) { console.log(`  FAIL ${poNumber}: ${String(e)}`); }
 }
 process.exit(0);
