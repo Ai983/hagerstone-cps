@@ -395,17 +395,6 @@ export function buildPoPdf(data: PoPdfData): Blob {
     doc.text(addrLines, rightX, ry);
     ry += addrLines.length * 3.8 + 2;
   }
-  if (data.projectName) {
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(7);
-    doc.setTextColor(60, 60, 60);
-    doc.text("Project:", rightX, ry);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(20, 20, 20);
-    const projLines = doc.splitTextToSize(data.projectName, rightW - 18);
-    doc.text(projLines, rightX + 18, ry);
-    ry += projLines.length * 3.8 + 2;
-  }
 
   /* PO meta — prefer an installment-derived summary so this line matches the
      Payment Schedule table (avoids showing stale free-text after a founder edit). */
