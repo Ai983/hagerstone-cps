@@ -2546,6 +2546,9 @@ export default function ComparisonSheetPage() {
       const cell = cellsByPrLineIdAndSupplierId[prLineId]?.[supplierId];
       const cellRate = Number(cell?.rate ?? 0);
       if (cellRate > 0) return { rate: cellRate, source: "quoted" };
+      // A matched quote line at ₹0 is a free-of-charge (F.O.C) item, not a gap —
+      // never let the AI matrix overwrite it with an inferred price.
+      if (cell && cell.rate != null && cellRate === 0) return { rate: 0, source: "quoted" };
       const ai = aiMatrix[prLineId]?.[supplierId];
       const aiRate = Number(ai?.rate ?? 0);
       if (aiRate > 0) return { rate: aiRate, source: "inferred" };
@@ -4331,6 +4334,8 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           const cell = cellsByPrLineIdAndSupplierId[prLineId]?.[supplierId];
           const cellRate = Number(cell?.rate ?? 0);
           if (cellRate > 0) return { rate: cellRate, source: "quoted", note: null };
+          // Matched line at ₹0 = F.O.C, not missing — don't fall through to the AI guess.
+          if (cell && cell.rate != null && cellRate === 0) return { rate: 0, source: "quoted", note: "F.O.C" };
           const ai = aiMatrix[prLineId]?.[supplierId];
           const aiRate = Number(ai?.rate ?? 0);
           if (aiRate > 0) return { rate: aiRate, source: "inferred", note: ai?.note ?? null };
@@ -4535,7 +4540,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                                         <span title={info.note ?? "AI-inferred from header total"} className="text-[10px] text-amber-700 font-bold cursor-help">≈</span>
                                       )}
                                       <span className={isCheapest ? "text-emerald-700 font-semibold" : ""}>
-                                        ₹{info.rate.toLocaleString("en-IN")}
+                                        {info.rate === 0 ? "F.O.C (₹0)" : `₹${info.rate.toLocaleString("en-IN")}`}
                                       </span>
                                     </div>
                                     {cellBrand && (
