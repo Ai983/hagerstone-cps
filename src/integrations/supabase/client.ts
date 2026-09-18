@@ -9,11 +9,18 @@ export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "eyJh
 // URL); without this, supabase-js waits indefinitely. 30s is well above normal
 // query + upload time but still bounds a genuine hang.
 const REQUEST_TIMEOUT_MS = 30_000;
+// Edge functions are exempt from the 30s bound: claude-proxy runs a reasoning
+// model over multi-page / handwritten quote photos and routinely needs 40-120s.
+// Aborting it at 30s surfaced as the misleading "Failed to send a request to the
+// Edge Function". Supabase's own edge wall-clock limit (150s) sits below this.
+const FUNCTION_TIMEOUT_MS = 180_000;
 const fetchWithTimeout: typeof fetch = (input, init) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  const timeoutMs = url.includes("/functions/v1/") ? FUNCTION_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(new DOMException("Request timed out", "TimeoutError")),
-    REQUEST_TIMEOUT_MS,
+    timeoutMs,
   );
   const upstream = init?.signal;
   if (upstream) {
