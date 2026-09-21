@@ -803,6 +803,7 @@ export async function ensureWoPdfFromDb(
     effectiveDate: w.effective_date ?? null,
     modeOfPayment: w.mode_of_payment ?? null,
     paymentTerms: w.payment_terms ?? null,
+    hagerstoneGstin: w.hagerstone_gstin ?? null,
     subtotal: Number(w.subtotal ?? 0),
     gstAmount: Number(w.gst_amount ?? 0),
     grandTotal: Number(w.grand_total ?? 0),
