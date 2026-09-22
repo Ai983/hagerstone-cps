@@ -2530,6 +2530,9 @@ export default function ComparisonSheetPage() {
       }
       return {
         sup, subtotal, gst, freight, extraSum, landedTotal,
+        // Materials only — extras get their own row (see the on-screen sheet).
+        materialsSubtotal: Math.max(0, subtotal - extraSum),
+        charges,
         paymentTerms: quote?.payment_terms ?? null,
         deliveryTerms: quote?.delivery_terms ?? null,
         warrantyMonths: quote?.warranty_months ?? null,
@@ -2667,7 +2670,18 @@ export default function ComparisonSheetPage() {
       ]);
     });
 
-    rows.push(["Subtotal (excl GST)", "", ...supplierTotals.map((t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—"), "", "", "", "", ""]);
+    rows.push(["Subtotal (excl GST)", "", ...supplierTotals.map((t) => t.materialsSubtotal > 0 ? fmtINR(t.materialsSubtotal) : "—"), "", "", "", "", ""]);
+    if (supplierTotals.some((t) => t.extraSum > 0)) {
+      rows.push([
+        "Extra Charges", "",
+        ...supplierTotals.map((t) => {
+          if (t.extraSum <= 0) return "—";
+          const detail = t.charges.map((c) => `${c.name} ${fmtINR(c.amount)}`).join("; ");
+          return detail ? `${fmtINR(t.extraSum)} (${detail})` : fmtINR(t.extraSum);
+        }),
+        "", "", "", "", "",
+      ]);
+    }
     rows.push(["GST", "", ...supplierTotals.map((t) => t.gst > 0 ? fmtINR(t.gst) : "—"), "", "", "", "", ""]);
     rows.push(["Freight", "", ...supplierTotals.map((t) => t.freight > 0 ? fmtINR(t.freight) : "—"), "", "", "", "", ""]);
     rows.push([
@@ -2882,7 +2896,15 @@ export default function ComparisonSheetPage() {
       rowMeta.push(meta);
     };
 
-    pushTotalsRow("Subtotal (excl GST)", "subtotal", (t) => t.subtotal > 0 ? fmtINR(t.subtotal) : "—");
+    pushTotalsRow("Subtotal (excl GST)", "subtotal", (t) => t.materialsSubtotal > 0 ? fmtINR(t.materialsSubtotal) : "—");
+    if (supplierTotals.some((t) => t.extraSum > 0)) {
+      // Same styling band as Freight — it's the same kind of add-on line.
+      pushTotalsRow("Extra Charges", "freight", (t) => {
+        if (t.extraSum <= 0) return "—";
+        const detail = t.charges.map((c) => `${c.name} ${fmtINR(c.amount)}`).join("\n");
+        return detail ? `${fmtINR(t.extraSum)}\n${detail}` : fmtINR(t.extraSum);
+      });
+    }
     pushTotalsRow("GST", "gst", (t) => t.gst > 0 ? fmtINR(t.gst) : "—");
     pushTotalsRow("Freight", "freight", (t) => t.freight > 0 ? fmtINR(t.freight) : "—");
     pushTotalsRow("LANDED TOTAL", "landed", (t) => t.landedTotal > 0 ? fmtINR(t.landedTotal) : "—");
@@ -4314,6 +4336,11 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           return {
             sup,
             subtotal, gst, freight, extraSum, landedTotal,
+            // Materials only — `subtotal` bundles extras so the GST residual stays
+            // right, but the sheet shows extras on their own row instead of hiding
+            // them inside Subtotal.
+            materialsSubtotal: Math.max(0, subtotal - extraSum),
+            charges,
             paymentTerms: quote?.payment_terms ?? null,
             deliveryTerms: quote?.delivery_terms ?? null,
             warrantyMonths: quote?.warranty_months ?? null,
@@ -4663,12 +4690,35 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                     <TableRow className="border-t-2">
                       <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">Subtotal (excl GST)</TableCell>
                       {supplierTotals.map((t) => (
-                        <TableCell key={t.sup.id} className="text-right text-sm font-mono">{t.subtotal > 0 ? `₹${t.subtotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>
+                        <TableCell key={t.sup.id} className="text-right text-sm font-mono">{t.materialsSubtotal > 0 ? `₹${t.materialsSubtotal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}` : "—"}</TableCell>
                       ))}
                       <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
                       <TableCell />
                       <TableCell />
                     </TableRow>
+                    {supplierTotals.some((t) => t.extraSum > 0) && (
+                      <TableRow>
+                        <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">
+                          Extra Charges
+                          <div className="text-[10px] font-normal text-muted-foreground/70">freight, installation, labour…</div>
+                        </TableCell>
+                        {supplierTotals.map((t) => (
+                          <TableCell key={t.sup.id} className="text-right text-sm font-mono align-top">
+                            {t.extraSum > 0 ? (
+                              <>
+                                ₹{t.extraSum.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                <div className="text-[10px] font-sans font-normal text-muted-foreground leading-tight whitespace-pre-wrap break-words">
+                                  {t.charges.map((c) => `${c.name} ₹${c.amount.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`).join("\n")}
+                                </div>
+                              </>
+                            ) : "—"}
+                          </TableCell>
+                        ))}
+                        <TableCell className="bg-purple-50/50 border-x-2 border-purple-200" />
+                        <TableCell />
+                        <TableCell />
+                      </TableRow>
+                    )}
                     <TableRow>
                       <TableCell colSpan={2} className="text-xs font-medium text-muted-foreground sticky left-0 bg-background z-10">GST</TableCell>
                       {supplierTotals.map((t) => (
