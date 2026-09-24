@@ -31,7 +31,7 @@ import {
   type ApprovedVendorRow, type GstEvaluation, type PendingVerificationRow,
   type RegistrationCheck, type RegistrationSnapshot, type SupplierContact,
   type SupplierDocument, type SupplierProfile, type SupplierRow, type VendorType,
-  CHECK_LABELS, CONTACT_ROLE_LABELS, GST_SS_LABELS, GST_SS_TYPES,
+  CHECK_LABELS, CONTACT_ROLE_LABELS, DOCUMENT_LABELS, GST_SS_LABELS, GST_SS_TYPES,
   VENDOR_DOC_BUCKET, VENDOR_TYPE_LABELS,
   approveRegistration, fetchApprovedVendors, fetchChecks, fetchContacts, fetchDocuments,
   fetchLatestGstEvaluation, fetchPendingVerification, fetchRegistrationStatus,
@@ -141,16 +141,40 @@ export default function VendorVerification() {
     } catch (e: unknown) { toast.error(e instanceof Error ? e.message : "Could not save the check"); }
   };
 
+  /** Re-read checks, status and GST verdict from the DB. The GST agent can flip
+   *  a check to "fail" after this screen loaded, so never trust what's shown. */
+  const refreshChecks = async (id: string) => {
+    const [c, s, g] = await Promise.all([
+      fetchChecks(id), fetchRegistrationStatus(id), fetchLatestGstEvaluation(id),
+    ]);
+    setChecks(c);
+    setSnapshot(s.ok ? s.snapshot : null);
+    setGstEval(g);
+    return { checks: c, snapshot: s.ok ? s.snapshot : null };
+  };
+
   const approve = async () => {
     if (!selectedId) return;
     setBusy(true);
     try {
+      const { snapshot: live } = await refreshChecks(selectedId);
+      if (live && !live.ready_to_approve) {
+        const label = (k: string) => CHECK_LABELS[k] ?? k;
+        const parts = [
+          live.failed_checks.length ? `Failed: ${live.failed_checks.map(label).join(", ")}` : "",
+          live.pending_checks.length ? `Not signed: ${live.pending_checks.map(label).join(", ")}` : "",
+          live.missing_documents.length ? `Missing documents: ${live.missing_documents.map((d) => DOCUMENT_LABELS[d] ?? d).join(", ")}` : "",
+        ].filter(Boolean);
+        toast.error(`Cannot approve yet — the checks have changed. ${parts.join(" · ")}`);
+        return;
+      }
       await approveRegistration(selectedId);
       toast.success(`${selectedName} approved`);
       clearSelection();
       await Promise.all([loadQueue(), loadApproved()]);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Could not approve");
+      void refreshChecks(selectedId).catch(() => { /* non-fatal refresh */ });
     } finally { setBusy(false); }
   };
 
@@ -182,7 +206,8 @@ export default function VendorVerification() {
     || (r.city ?? "").toLowerCase().includes(q));
 
   const gstDocs = documents.filter((d) => GST_SS_SET.includes(d.document_type));
-  const unsigned = checks.filter((c) => c.status !== "pass").length;
+  const unsigned = checks.filter((c) => c.status === "pending").length;
+  const failed = checks.filter((c) => c.status === "fail").length;
 
   const renderRow = (id: string, name: string, subtitle: string, badge: React.ReactNode, m: "verify" | "view") => (
     <button key={id} type="button" onClick={() => openDetail(id, name, m)}
@@ -389,17 +414,27 @@ export default function VendorVerification() {
                   <div className="border border-border rounded-lg divide-y divide-border">
                     {checks.map((c) => (
                       <div key={c.check_key} className="flex items-center gap-3 p-3">
-                        <div className="flex-1 min-w-0 text-sm text-foreground">{CHECK_LABELS[c.check_key] ?? c.check_key}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-foreground">{CHECK_LABELS[c.check_key] ?? c.check_key}</div>
+                          {c.status === "fail" && c.notes && (
+                            <div className="text-xs text-destructive mt-0.5">{c.notes}</div>
+                          )}
+                        </div>
                         {mode === "verify" ? (
-                          <Button size="sm" variant={c.status === "pass" ? "default" : "outline"}
+                          <Button size="sm"
+                                  variant={c.status === "pass" ? "default" : c.status === "fail" ? "destructive" : "outline"}
                                   onClick={() => toggle(c.check_key, c.status === "pass" ? "pending" : "pass")}>
-                            {c.status === "pass" ? <><Check className="h-3.5 w-3.5 mr-1" />Passed</> : "Mark passed"}
+                            {c.status === "pass" ? <><Check className="h-3.5 w-3.5 mr-1" />Passed</>
+                              : c.status === "fail" ? <><X className="h-3.5 w-3.5 mr-1" />Failed — mark passed</>
+                              : "Mark passed"}
                           </Button>
                         ) : (
                           <Badge className={c.status === "pass"
                             ? "bg-emerald-500/15 text-emerald-700 border border-emerald-500/30"
-                            : "bg-muted text-muted-foreground border border-border"}>
-                            {c.status === "pass" ? "Passed" : c.status}
+                            : c.status === "fail"
+                              ? "bg-destructive/15 text-destructive border border-destructive/30"
+                              : "bg-muted text-muted-foreground border border-border"}>
+                            {c.status === "pass" ? "Passed" : c.status === "fail" ? "Failed" : c.status}
                           </Badge>
                         )}
                       </div>
@@ -417,7 +452,8 @@ export default function VendorVerification() {
                       <X className="h-4 w-4 mr-1" />Reject
                     </Button>
                     <span className="text-xs text-muted-foreground">
-                      {unsigned === 0 ? "All checks signed" : `${unsigned} check(s) unsigned`}
+                      {failed > 0 && <span className="text-destructive">{failed} check(s) failed · </span>}
+                      {unsigned === 0 ? (failed === 0 ? "All checks signed" : "") : `${unsigned} check(s) unsigned`}
                     </span>
                   </div>
                 )}
