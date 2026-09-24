@@ -361,12 +361,12 @@ export const selfApproveRegistration = (id: string) =>
 export const rejectRegistration = (id: string, reason: string) =>
   callRpc("cps_reject_vendor_registration", { p_supplier_id: id, p_reason: reason });
 
-/** Undo a draft. The server decides: a vendor the portal created and nothing
- *  references is deleted; anything else (a legacy vendor, or one already used
- *  on a quote/PO/RFQ) is only reverted to 'unregistered'. */
-export const discardRegistration = (id: string, reason: string) =>
-  callRpc<{ action: "deleted" | "reverted"; name: string }>(
-    "cps_discard_vendor_registration", { p_supplier_id: id, p_reason: reason });
+/** Delete a draft / unregistered / rejected vendor. The server refuses — with
+ *  the list of what still uses it — if the vendor is on any quote, PO, RFQ,
+ *  comparison, payment or rate record; there is no half-way outcome. */
+export const deleteVendor = (id: string, reason: string) =>
+  callRpc<{ deleted: true; name: string }>(
+    "cps_delete_vendor", { p_supplier_id: id, p_reason: reason });
 
 export const issueToken = (id: string) =>
   callRpc<{ token: string; expires_at: string }>(

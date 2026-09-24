@@ -19,7 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Search, Plus, Loader2, Trash2, AlertTriangle } from "lucide-react";
 import { useDebounce } from "@/hooks/useDebounce";
-import DiscardDraftDialog from "@/components/vendors/DiscardDraftDialog";
+import DeleteVendorDialog from "@/components/vendors/DeleteVendorDialog";
 import {
   type VendorType, VENDOR_TYPE_LABELS, fetchRegistrableSuppliers, fetchSimilarSuppliers,
   startRegistration,
@@ -40,7 +40,7 @@ export default function RegistrationStartPanel({
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [discarding, setDiscarding] = useState<Row | null>(null);
+  const [deleting, setDeleting] = useState<Row | null>(null);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -168,29 +168,27 @@ export default function RegistrationStartPanel({
                       {r.registration_status === "draft" ? "draft — continue" : r.registration_status}
                     </Badge>
                   </button>
-                  {r.registration_status === "draft" && (
-                    <Button variant="ghost" size="icon" className="mr-2 text-muted-foreground hover:text-destructive"
-                            title="Discard draft" disabled={busy} onClick={() => setDiscarding(r)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  )}
+                  <Button variant="ghost" size="icon" className="mr-2 text-muted-foreground hover:text-destructive"
+                          title="Delete vendor" disabled={busy} onClick={() => setDeleting(r)}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               ))}
             </div>
             <p className="text-xs text-muted-foreground">
               Picking a vendor fills the form with everything CPS already holds for them.
-              Rows marked <b>draft</b> are unfinished registrations — pick one to continue where you left off,
-              or use the bin icon to discard a duplicate or mistaken draft.
+              Rows marked <b>draft</b> are unfinished registrations — pick one to continue where you left off.
+              Use the bin icon to delete a duplicate or mistaken entry.
             </p>
           </div>
         )}
       </CardContent>
-      {discarding && (
-        <DiscardDraftDialog
-          supplierId={discarding.id}
-          supplierName={discarding.name}
-          onClose={() => setDiscarding(null)}
-          onDiscarded={() => { setDiscarding(null); setReload((n) => n + 1); }} />
+      {deleting && (
+        <DeleteVendorDialog
+          supplierId={deleting.id}
+          supplierName={deleting.name}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => { setDeleting(null); setReload((n) => n + 1); }} />
       )}
     </Card>
   );

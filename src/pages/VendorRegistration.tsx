@@ -13,7 +13,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, ArrowLeft, Save, ShieldCheck, Trash2 } from "lucide-react";
 import RegistrationStartPanel from "@/components/vendors/RegistrationStartPanel";
-import DiscardDraftDialog from "@/components/vendors/DiscardDraftDialog";
+import DeleteVendorDialog from "@/components/vendors/DeleteVendorDialog";
 import RegistrationIdentityForm from "@/components/vendors/RegistrationIdentityForm";
 import RegistrationContactsForm from "@/components/vendors/RegistrationContactsForm";
 import RegistrationBankForm from "@/components/vendors/RegistrationBankForm";
@@ -41,7 +41,7 @@ export default function VendorRegistration() {
   const [supplier, setSupplier] = useState<SupplierRow | null>(null);
   const [snapshot, setSnapshot] = useState<RegistrationSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
-  const [discardOpen, setDiscardOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const refresh = useCallback(async (id: string) => {
     setLoading(true);
@@ -101,10 +101,10 @@ export default function VendorRegistration() {
             {(supplier.registration_status === "draft" || supplier.registration_status === "rejected") && (
               <RegistrationLinkButton supplierId={supplier.id} />
             )}
-            {supplier.registration_status === "draft" && (
+            {(supplier.registration_status === "draft" || supplier.registration_status === "rejected") && (
               <Button variant="outline" size="sm" className="text-destructive"
-                      onClick={() => setDiscardOpen(true)}>
-                <Trash2 className="h-4 w-4 mr-1" />Discard draft
+                      onClick={() => setDeleteOpen(true)}>
+                <Trash2 className="h-4 w-4 mr-1" />Delete vendor
               </Button>
             )}
             {supplier.registration_status === "draft" && (
@@ -120,13 +120,13 @@ export default function VendorRegistration() {
         )}
       </div>
 
-      {discardOpen && supplier && (
-        <DiscardDraftDialog
+      {deleteOpen && supplier && (
+        <DeleteVendorDialog
           supplierId={supplier.id}
           supplierName={supplier.name ?? ""}
-          onClose={() => setDiscardOpen(false)}
-          onDiscarded={() => {
-            setDiscardOpen(false);
+          onClose={() => setDeleteOpen(false)}
+          onDeleted={() => {
+            setDeleteOpen(false);
             setSupplierId(null); setSupplier(null); setSnapshot(null);
           }} />
       )}
