@@ -361,6 +361,13 @@ export const selfApproveRegistration = (id: string) =>
 export const rejectRegistration = (id: string, reason: string) =>
   callRpc("cps_reject_vendor_registration", { p_supplier_id: id, p_reason: reason });
 
+/** Undo a draft. The server decides: a vendor the portal created and nothing
+ *  references is deleted; anything else (a legacy vendor, or one already used
+ *  on a quote/PO/RFQ) is only reverted to 'unregistered'. */
+export const discardRegistration = (id: string, reason: string) =>
+  callRpc<{ action: "deleted" | "reverted"; name: string }>(
+    "cps_discard_vendor_registration", { p_supplier_id: id, p_reason: reason });
+
 export const issueToken = (id: string) =>
   callRpc<{ token: string; expires_at: string }>(
     "cps_issue_vendor_registration_token", { p_supplier_id: id });
@@ -462,8 +469,29 @@ export async function fetchRegistrableSuppliers(search: string) {
     .neq("registration_status", "pending_verification")
     .order("name")
     .limit(25);
-  if (search.trim()) q = q.ilike("name", `%${search.trim()}%`);
+  const term = orSafe(search);
+  if (term) q = q.or(`name.ilike.%${term}%,gstin.ilike.%${term}%`);
   const { data, error } = await q;
+  if (error) throw error;
+  return (data ?? []) as Array<{ id: string; name: string; gstin: string | null;
+                                 city: string | null; registration_status: RegistrationStatus }>;
+}
+
+/** PostgREST .or() splits on commas and parens — strip them from user input. */
+const orSafe = (s: string) => s.replace(/[,()*%]/g, " ").trim();
+
+/** Every status, approved included — used to warn before a new vendor is
+ *  created under a name CPS already holds. Matches on the first significant
+ *  word so "VISION INFRA & INTERIOR" finds "VISION INFRA & INTERIORS". */
+export async function fetchSimilarSuppliers(name: string) {
+  const word = orSafe(name).split(/\s+/).find((w) => w.length >= 3);
+  if (!word) return [];
+  const { data, error } = await supabase
+    .from("cps_suppliers")
+    .select("id,name,gstin,city,registration_status")
+    .ilike("name", `%${word}%`)
+    .order("name")
+    .limit(8);
   if (error) throw error;
   return (data ?? []) as Array<{ id: string; name: string; gstin: string | null;
                                  city: string | null; registration_status: RegistrationStatus }>;

@@ -11,8 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircle, ArrowLeft, Save, ShieldCheck } from "lucide-react";
+import { AlertCircle, ArrowLeft, Save, ShieldCheck, Trash2 } from "lucide-react";
 import RegistrationStartPanel from "@/components/vendors/RegistrationStartPanel";
+import DiscardDraftDialog from "@/components/vendors/DiscardDraftDialog";
 import RegistrationIdentityForm from "@/components/vendors/RegistrationIdentityForm";
 import RegistrationContactsForm from "@/components/vendors/RegistrationContactsForm";
 import RegistrationBankForm from "@/components/vendors/RegistrationBankForm";
@@ -40,6 +41,7 @@ export default function VendorRegistration() {
   const [supplier, setSupplier] = useState<SupplierRow | null>(null);
   const [snapshot, setSnapshot] = useState<RegistrationSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
 
   const refresh = useCallback(async (id: string) => {
     setLoading(true);
@@ -100,6 +102,12 @@ export default function VendorRegistration() {
               <RegistrationLinkButton supplierId={supplier.id} />
             )}
             {supplier.registration_status === "draft" && (
+              <Button variant="outline" size="sm" className="text-destructive"
+                      onClick={() => setDiscardOpen(true)}>
+                <Trash2 className="h-4 w-4 mr-1" />Discard draft
+              </Button>
+            )}
+            {supplier.registration_status === "draft" && (
               <Button size="sm" onClick={saveAndExit}>
                 <Save className="h-4 w-4 mr-1" />Save &amp; exit
               </Button>
@@ -111,6 +119,17 @@ export default function VendorRegistration() {
           </div>
         )}
       </div>
+
+      {discardOpen && supplier && (
+        <DiscardDraftDialog
+          supplierId={supplier.id}
+          supplierName={supplier.name ?? ""}
+          onClose={() => setDiscardOpen(false)}
+          onDiscarded={() => {
+            setDiscardOpen(false);
+            setSupplierId(null); setSupplier(null); setSnapshot(null);
+          }} />
+      )}
 
       {!supplierId && <RegistrationStartPanel onStarted={setSupplierId} />}
 
