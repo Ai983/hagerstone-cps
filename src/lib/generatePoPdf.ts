@@ -222,6 +222,9 @@ function resolveHagerstoneGstin(_vendorGstin?: string | null, _vendorState?: str
   return { gstin: PRIMARY_HAGERSTONE_GSTIN, isIntraState: false };
 }
 
+/* Prefix a PO term with this to render it highlighted in the PDF. */
+export const HIGHLIGHT_TERM_PREFIX = "[HIGHLIGHT]";
+
 export const DEFAULT_PO_TERMS: string[] = [
   "Please strictly mention PO number, packing detail & complete description of the item in your invoice, otherwise material will not be accepted.",
   "Material supplied without test certificate will not be accepted (whenever applicable).",
@@ -599,9 +602,15 @@ export function buildPoPdf(data: PoPdfData): Blob {
      blank page and desync the cursor from the current page — wasting whole
      pages and pushing the bank details onto a fresh sheet. */
   const poTerms = (data.terms && data.terms.length > 0) ? data.terms : DEFAULT_PO_TERMS;
-  doc.setFont("helvetica", "normal");
+  /* A term prefixed with HIGHLIGHT_TERM_PREFIX renders bold on a yellow band,
+     for PO-specific clauses the supplier must not miss. */
+  const tcHighlight = poTerms.map((t) => t.startsWith(HIGHLIGHT_TERM_PREFIX));
+  const tcText = poTerms.map((t) => t.startsWith(HIGHLIGHT_TERM_PREFIX) ? t.slice(HIGHLIGHT_TERM_PREFIX.length).trim() : t);
   doc.setFontSize(6.5);
-  const tcLines = poTerms.map((t, i) => doc.splitTextToSize((i + 1) + ". " + t, tcW - 2) as string[]);
+  const tcLines = tcText.map((t, i) => {
+    doc.setFont("helvetica", tcHighlight[i] ? "bold" : "normal");
+    return doc.splitTextToSize((i + 1) + ". " + t, tcW - 2) as string[];
+  });
   const tcHeight = 6 + tcLines.reduce((s, l) => s + l.length * 3.5 + 1, 0);
   const advPreview = (data.advancePayments ?? []).filter((a) => Number(a?.amount) > 0);
   const advTotalPreview = data.advancePaidTotal != null
@@ -630,9 +639,19 @@ export function buildPoPdf(data: PoPdfData): Blob {
   doc.setFont("helvetica", "normal");
   doc.setFontSize(6.5);
   for (let i = 0; i < tcLines.length; i++) {
+    const blockH = tcLines[i].length * 3.5;
+    if (tcHighlight[i]) {
+      doc.setFillColor(255, 235, 120);
+      doc.rect(ML - 0.5, y - 2.6, tcW - 1, blockH + 0.6, "F");
+      doc.setFont("helvetica", "bold");
+    } else {
+      doc.setFont("helvetica", "normal");
+    }
+    doc.setTextColor(20, 20, 20);
     doc.text(tcLines[i], ML, y);
-    y += tcLines[i].length * 3.5 + 1;
+    y += blockH + 1;
   }
+  doc.setFont("helvetica", "normal");
 
   /* Totals box (right side) */
   let ty = startY5;
