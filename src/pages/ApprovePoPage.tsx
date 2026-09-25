@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import logoUrl from "@/assets/optimisedlogo.png";
 import { buildPoPdf } from "@/lib/generatePoPdf";
-import { TranchePlanEditor, computeAmounts, type Tranche, type TriggerType } from "@/components/procurement/TranchePlanEditor";
+import { TranchePlanEditor, computeAmounts, customWhen, type Tranche, type TriggerType } from "@/components/procurement/TranchePlanEditor";
 
 /* installment "when" → short English label for the read-only plan view */
 const WHEN_SHORT: Record<string, string> = {
@@ -14,7 +14,8 @@ const WHEN_SHORT: Record<string, string> = {
   credit_days_from_invoice: "Credit (from invoice)",
   credit_days_from_grn: "Credit (from delivery)",
 };
-const whenShort = (t?: string | null, days?: number | null) => {
+const whenShort = (t?: string | null, days?: number | null, note?: string | null) => {
+  if (t === "custom") return customWhen(note);
   const base = WHEN_SHORT[t ?? ""] ?? (t ?? "—");
   return days ? `${base} ${days} days` : base;
 };
@@ -32,6 +33,7 @@ function normalizeInstallments(ptj: any): Tranche[] {
         value: it.value ?? it.percentage ?? null,
         trigger_type: (it.trigger_type ?? "on_delivery_grn") as TriggerType,
         trigger_offset_days: it.trigger_offset_days ?? null,
+        trigger_note: it.trigger_note ?? null,
       };
     }
     const t = String(it.trigger ?? "").toLowerCase();
@@ -310,6 +312,7 @@ export default function ApprovePoPage() {
           amount: amounts[i] ?? 0,
           trigger_type: p.trigger_type,
           trigger_offset_days: p.trigger_offset_days ?? null,
+          trigger_note: p.trigger_note ?? null,
         })),
         lineItems: (lineRows ?? []).map((li: any) => ({
           description: li.description ?? "",
@@ -507,7 +510,7 @@ export default function ApprovePoPage() {
                   <span className="font-medium">
                     {p.milestone_name}{p.basis === "percent" && p.value != null ? ` (${p.value}%)` : ""}
                   </span>
-                  <span className="text-xs text-muted-foreground">{whenShort(p.trigger_type, p.trigger_offset_days)}</span>
+                  <span className="text-xs text-muted-foreground">{whenShort(p.trigger_type, p.trigger_offset_days, p.trigger_note)}</span>
                 </div>
               ))}
             </div>

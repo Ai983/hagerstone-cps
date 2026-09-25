@@ -29,7 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { TranchePlanEditor, computeAmounts, type Tranche } from "@/components/procurement/TranchePlanEditor";
+import { TranchePlanEditor, computeAmounts, customWhen, type Tranche } from "@/components/procurement/TranchePlanEditor";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { resolveToSignedUrl } from "@/lib/storageUrl";
@@ -811,6 +811,7 @@ export default function ComparisonSheetPage() {
           amount: planAmounts[i] ?? 0,
           trigger_type: p.trigger_type,
           trigger_offset_days: p.trigger_offset_days ?? null,
+          trigger_note: p.trigger_note ?? null,
         })),
         logoBase64,
         hagerstoneGstin: "09AAECH3768B1ZM",
@@ -3866,6 +3867,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 amount: planAmounts2[i] ?? 0,
                 trigger_type: p.trigger_type,
                 trigger_offset_days: p.trigger_offset_days ?? null,
+                trigger_note: p.trigger_note ?? null,
               })),
               logoBase64,
               hagerstoneGstin: "09AAECH3768B1ZM",
@@ -3927,7 +3929,8 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
                 name: p.milestone_name,
                 percent: p.basis === "percent" ? (Number(p.value) || 0) : null,
                 amount: computeAmounts(paymentPlan, grandTotal)[i] ?? 0,
-                when: p.trigger_type,
+                // custom → send the typed text so the founder's WhatsApp reads it verbatim
+                when: p.trigger_type === "custom" ? customWhen(p.trigger_note) : p.trigger_type,
                 offset_days: p.trigger_offset_days ?? null,
               })),
               payment_plan_summary: paymentPlan.length

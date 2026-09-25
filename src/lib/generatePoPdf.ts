@@ -75,6 +75,7 @@ export interface PoPdfData {
     amount: number;
     trigger_type?: string | null;
     trigger_offset_days?: number | null;
+    trigger_note?: string | null;
   }> | null;
 
   lineItems: PoPdfLineItem[];
@@ -126,7 +127,8 @@ const WHEN_LABEL: Record<string, string> = {
   credit_days_from_invoice: "Credit (from invoice)",
   credit_days_from_grn: "Credit (from delivery)",
 };
-const whenLabel = (t?: string | null, days?: number | null): string => {
+const whenLabel = (t?: string | null, days?: number | null, note?: string | null): string => {
+  if (t === "custom") return (note && note.trim()) || "Custom";
   const base = WHEN_LABEL[t ?? ""] ?? (t ?? "—");
   return days ? `${base} ${days} days` : base;
 };
@@ -791,7 +793,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
       body: installments.map((it, i) => [
         { content: String(i + 1) },
         { content: String(it.milestone_name ?? "—") },
-        { content: whenLabel(it.trigger_type, it.trigger_offset_days) },
+        { content: whenLabel(it.trigger_type, it.trigger_offset_days, it.trigger_note) },
         { content: it.percentage != null ? `${it.percentage}%` : "—", styles: { halign: "right" } },
         { content: fmtPlain(Number(it.amount) || 0), styles: { halign: "right" } },
       ]),

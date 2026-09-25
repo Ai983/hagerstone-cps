@@ -19,7 +19,8 @@ const WHEN_SHORT: Record<string, string> = {
   credit_days_from_invoice: "Udhaar (invoice se)",
   credit_days_from_grn: "Udhaar (delivery se)",
 };
-const whenShort = (t?: string | null, d?: number | null) => {
+const whenShort = (t?: string | null, d?: number | null, note?: string | null) => {
+  if (t === "custom") return (note && note.trim()) || "Custom";
   const base = WHEN_SHORT[t ?? ""] ?? (t ?? "—");
   return d ? `${base} ${d} din` : base;
 };
@@ -129,7 +130,7 @@ export default function ApproveReleasePage() {
         <div className="rounded-xl border border-border bg-card p-5 space-y-1">
           <p className="text-xs text-muted-foreground uppercase tracking-wide">Payment Release</p>
           <p className="text-2xl font-bold text-[hsl(20,50%,35%)]">{fmt(d?.release_amount)}</p>
-          <p className="text-sm text-muted-foreground">{d?.installment_name} — {whenShort(d?.trigger_type, d?.trigger_offset_days)}</p>
+          <p className="text-sm text-muted-foreground">{d?.installment_name} — {whenShort(d?.trigger_type, d?.trigger_offset_days, d?.trigger_note)}</p>
           {d?.founder_name && <p className="text-xs text-muted-foreground">Approval requested from <strong>{d.founder_name === "Bhaskar" ? "Bhaskar Sir" : d.founder_name}</strong></p>}
         </div>
 

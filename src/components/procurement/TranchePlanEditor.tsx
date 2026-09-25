@@ -25,7 +25,8 @@ export type TriggerType =
   | 'on_dispatch_lr'
   | 'on_delivery_grn'
   | 'credit_days_from_invoice'
-  | 'credit_days_from_grn';
+  | 'credit_days_from_grn'
+  | 'custom';
 
 export interface Tranche {
   milestone_name: string;
@@ -33,6 +34,7 @@ export interface Tranche {
   value?: number | null;           // percent (if basis=percent) or amount (if basis=fixed); ignored for balance
   trigger_type: TriggerType;
   trigger_offset_days?: number | null;
+  trigger_note?: string | null;    // free-text "when" — only for trigger_type='custom'; stored in cps_po_payment_schedules.notes
 }
 
 const TRIGGERS: { value: TriggerType; label: string; isCredit: boolean }[] = [
@@ -42,9 +44,14 @@ const TRIGGERS: { value: TriggerType; label: string; isCredit: boolean }[] = [
   { value: 'on_delivery_grn',          label: 'On delivery (goods received)', isCredit: false },
   { value: 'credit_days_from_invoice', label: 'Credit (days from invoice)',   isCredit: true  },
   { value: 'credit_days_from_grn',     label: 'Credit (days from delivery)',  isCredit: true  },
+  // Custom never becomes due on its own (no cron/GRN hook) — procurement releases it manually.
+  { value: 'custom',                   label: 'Custom (write your own)',      isCredit: false },
 ];
 
 const isCreditTrigger = (t: TriggerType) => TRIGGERS.find((x) => x.value === t)?.isCredit ?? false;
+
+/** Human label for a custom tranche's "when" — the typed text, else a placeholder. */
+export const customWhen = (note?: string | null) => (note && note.trim()) || 'Custom';
 
 // ── Presets ──────────────────────────────────────────────────────────────
 const PRESETS: { label: string; build: () => Tranche[] }[] = [
@@ -171,6 +178,14 @@ export function TranchePlanEditor({ totalAmount, value, onChange }: Props) {
                 className="col-span-1 flex justify-center text-muted-foreground hover:text-destructive">
                 <Trash2 className="h-4 w-4" />
               </button>
+              {t.trigger_type === 'custom' && (
+                <Input
+                  className={`col-span-12 h-8 text-xs ${t.trigger_note?.trim() ? '' : 'border-amber-400'}`}
+                  placeholder="Write when this is paid — e.g. After installation & commissioning"
+                  value={t.trigger_note ?? ''}
+                  onChange={(e) => update(i, { trigger_note: e.target.value })}
+                />
+              )}
             </div>
           ))}
         </div>

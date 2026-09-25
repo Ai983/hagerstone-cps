@@ -165,6 +165,7 @@ type PaymentScheduleRow = {
   paid_at: string | null;
   payment_reference: string | null;
   payment_mode: string | null;
+  notes: string | null;
 };
 
 const formatDate = (d: string | null | undefined) => {
@@ -368,7 +369,7 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
     (po as any).created_by
       ? supabase.from("cps_users").select("name,email").eq("id", (po as any).created_by).maybeSingle()
       : Promise.resolve({ data: null } as any),
-    supabase.from("cps_po_payment_schedules").select("milestone_name,milestone_order,amount,percentage,basis,trigger_type,trigger_offset_days,due_trigger").eq("po_id", poId).order("milestone_order"),
+    supabase.from("cps_po_payment_schedules").select("milestone_name,milestone_order,amount,percentage,basis,trigger_type,trigger_offset_days,due_trigger,notes").eq("po_id", poId).order("milestone_order"),
   ]);
 
   const supplier: any = (supplierRes as any).data ?? {};
@@ -433,6 +434,7 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
       amount: Number(s.amount ?? 0),
       trigger_type: s.trigger_type ?? s.due_trigger ?? null,
       trigger_offset_days: s.trigger_offset_days ?? null,
+      trigger_note: s.notes ?? null,
     })),
     lineItems: lines.map((li) => ({
       description: li.description ?? "",
@@ -1475,7 +1477,7 @@ export default function PurchaseOrders() {
           .in("key", ["tnc_payment", "tnc_warranty", "tnc_delivery", "tnc_general", "tnc_dispute", "tnc_penalty"]),
         supabase
           .from("cps_po_payment_schedules")
-          .select("id,milestone_name,milestone_order,amount,percentage,due_trigger,due_date,status,paid_at,payment_reference,payment_mode")
+          .select("id,milestone_name,milestone_order,amount,percentage,due_trigger,due_date,status,paid_at,payment_reference,payment_mode,notes")
           .eq("po_id", poId)
           .order("milestone_order", { ascending: true }),
         supabase
@@ -1854,7 +1856,7 @@ export default function PurchaseOrders() {
             event: "payment_release_request",
             po_id: viewPo.id, po_number: viewPo.po_number, supplier_name: supplierName,
             installment_name: row.milestone_name, release_amount: row.amount,
-            trigger_type: row.due_trigger, grand_total: (poFull as any)?.grand_total ?? null,
+            trigger_type: row.due_trigger === "custom" ? (row.notes?.trim() || "Custom") : row.due_trigger, grand_total: (poFull as any)?.grand_total ?? null,
             po_pdf_url: (poFull as any)?.po_pdf_url ?? "", auth_number: auth.auth_number,
             bank_account_holder_name: (poFull as any)?.bank_account_holder_name ?? null,
             bank_name: (poFull as any)?.bank_name ?? null, bank_ifsc: (poFull as any)?.bank_ifsc ?? null,
@@ -3790,7 +3792,8 @@ export default function PurchaseOrders() {
                                 {row.percentage != null ? `${Number(row.percentage).toFixed(1)}%` : "—"}
                               </TableCell>
                               <TableCell className="text-xs text-muted-foreground">
-                                {row.due_trigger === "on_order" ? "On Order" :
+                                {row.due_trigger === "custom" ? (row.notes?.trim() || "Custom") :
+                                 row.due_trigger === "on_order" ? "On Order" :
                                  row.due_trigger === "on_delivery" ? "On Delivery" :
                                  row.due_trigger === "after_15_days" ? "15d After Delivery" :
                                  row.due_trigger === "after_30_days" ? "30d After Delivery" :
