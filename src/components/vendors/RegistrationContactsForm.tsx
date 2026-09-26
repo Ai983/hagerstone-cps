@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Copy } from "lucide-react";
 import {
-  type ContactRole, type SupplierContact, CONTACT_ROLE_LABELS,
+  type ContactRole, type DuplicateProbe, type SupplierContact, CONTACT_ROLE_LABELS,
   fetchContacts, saveContact,
 } from "@/lib/vendorRegistration";
 
@@ -24,8 +24,12 @@ const FIELDS: Array<[keyof SupplierContact, string]> = [
 ];
 
 export default function RegistrationContactsForm({
-  supplierId, onChanged, disabled,
-}: { supplierId: string; onChanged: () => void; disabled?: boolean }) {
+  supplierId, onChanged, disabled, onProbe,
+}: {
+  supplierId: string; onChanged: () => void; disabled?: boolean;
+  /** Called with a phone / WhatsApp number before it is saved, for the duplicate check. */
+  onProbe?: (p: DuplicateProbe) => void;
+}) {
   const [contacts, setContacts] = useState<SupplierContact[] | null>(null);
   const [version, setVersion] = useState(0);   // bumping this remounts the inputs
 
@@ -36,6 +40,7 @@ export default function RegistrationContactsForm({
   const get = (role: ContactRole) => contacts?.find((c) => c.contact_role === role);
 
   const save = async (role: ContactRole, field: keyof SupplierContact, raw: string) => {
+    if ((field === "phone" || field === "whatsapp") && raw.trim()) onProbe?.({ phones: [raw.trim()] });
     try {
       await saveContact(supplierId, role, { [field]: raw.trim() || null } as never);
       onChanged();

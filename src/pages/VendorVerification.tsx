@@ -27,6 +27,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Check, Eye, FileText, Loader2, Search, ShieldCheck, X } from "lucide-react";
 import RegistrationDocuments from "@/components/vendors/RegistrationDocuments";
+import DuplicateVendorsPanel from "@/components/vendors/DuplicateVendorsPanel";
 import {
   type ApprovedVendorRow, type GstEvaluation, type PendingVerificationRow,
   type RegistrationCheck, type RegistrationSnapshot, type SupplierContact,
@@ -301,6 +302,20 @@ export default function VendorVerification() {
 
             {!loadingDetail && (
               <>
+                {/* Duplicates — seen before approving; merge for approved pairs lives here,
+                    since approved vendors never open on the registration page. */}
+                {supplier && (
+                  <DuplicateVendorsPanel
+                    key={`dup-${supplier.id}`}
+                    supplier={supplier}
+                    refreshKey={supplier}
+                    onOpen={(id, name) => { void openDetail(id, name, "view"); }}
+                    onMerged={(keptId, keptName) => {
+                      void Promise.all([loadQueue(), loadApproved()]);
+                      void openDetail(keptId, keptName, "view");
+                    }} />
+                )}
+
                 {/* Identity */}
                 <section className="space-y-2">
                   <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Submitted details</h3>

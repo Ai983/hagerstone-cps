@@ -9,6 +9,16 @@
 
 import { supabase } from "@/integrations/supabase/client";
 
+/**
+ * Supabase returns a plain PostgrestError object, not an Error, so every
+ * `e instanceof Error ? e.message : "Could not save"` in the vendor screens
+ * used to swallow the database's own explanation (e.g. "GSTIN … already
+ * belongs to X. Open that vendor instead"). Wrapping it here fixes them all.
+ */
+function dbError(error: { message: string }): Error {
+  return new Error(error.message);
+}
+
 export type VendorType = "company" | "proprietor" | "individual";
 
 export type RegistrationStatus =
@@ -97,7 +107,7 @@ export async function fetchDocRules(vendorType: VendorType): Promise<VendorDocRu
     .eq("vendor_type", vendorType)
     .eq("active", true)
     .order("sort_order");
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as VendorDocRule[];
 }
 
@@ -111,7 +121,7 @@ export async function fetchRegistrationStatus(supplierId: string): Promise<Regis
   const { data, error } = await supabase.rpc("cps_vendor_registration_status", {
     p_supplier_id: supplierId,
   });
-  if (error) throw error;
+  if (error) throw dbError(error);
   const result = data as unknown as (RegistrationSnapshot & { error?: string });
   if (result?.error) return { ok: false, error: result.error };
   return { ok: true, snapshot: result as RegistrationSnapshot };
@@ -128,7 +138,7 @@ export async function startRegistration(
     p_vendor_type: vendorType,
     p_supplier_id: supplierId ?? null,
   });
-  if (error) throw error;
+  if (error) throw dbError(error);
   return data as unknown as string;
 }
 
@@ -225,7 +235,7 @@ const SUPPLIER_COLS =
 export async function fetchSupplier(id: string): Promise<SupplierRow | null> {
   const { data, error } = await supabase
     .from("cps_suppliers").select(SUPPLIER_COLS).eq("id", id).maybeSingle();
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? null) as unknown as SupplierRow | null;
 }
 
@@ -236,7 +246,7 @@ export async function saveSupplierFields(
   const { registration_status, vendor_type, ...safe } = patch as Record<string, unknown>;
   if (Object.keys(safe).length === 0) return;
   const { error } = await supabase.from("cps_suppliers").update(safe).eq("id", id);
-  if (error) throw error;
+  if (error) throw dbError(error);
 }
 
 export async function fetchContacts(id: string): Promise<SupplierContact[]> {
@@ -244,7 +254,7 @@ export async function fetchContacts(id: string): Promise<SupplierContact[]> {
     .from("cps_supplier_contacts")
     .select("contact_role,name,designation,phone,whatsapp,email")
     .eq("supplier_id", id);
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as SupplierContact[];
 }
 
@@ -255,7 +265,7 @@ export async function saveContact(
     .from("cps_supplier_contacts")
     .upsert({ supplier_id: id, contact_role: role, ...patch, updated_at: new Date().toISOString() },
             { onConflict: "supplier_id,contact_role" });
-  if (error) throw error;
+  if (error) throw dbError(error);
 }
 
 export async function fetchDocuments(id: string): Promise<SupplierDocument[]> {
@@ -264,7 +274,7 @@ export async function fetchDocuments(id: string): Promise<SupplierDocument[]> {
     .select("id,document_type,label,file_url,document_number,geo_lat,geo_lng,geo_source,geo_note,waiver_reason,waiver_accepted_at,uploaded_at")
     .eq("supplier_id", id)
     .order("uploaded_at");
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as unknown as SupplierDocument[];
 }
 
@@ -288,12 +298,12 @@ export async function uploadDocument(opts: {
     file_url: path,
     uploaded_by: opts.userId,
   });
-  if (error) throw error;
+  if (error) throw dbError(error);
 }
 
 export async function deleteDocument(docId: string): Promise<void> {
   const { error } = await supabase.from("cps_supplier_documents").delete().eq("id", docId);
-  if (error) throw error;
+  if (error) throw dbError(error);
 }
 
 /** A waiver is a request; the verifier accepts it by signing the checklist. */
@@ -303,7 +313,7 @@ export async function requestWaiver(
   const { error } = await supabase.from("cps_supplier_documents").insert({
     supplier_id: supplierId, document_type: documentType, waiver_reason: reason.trim(),
   });
-  if (error) throw error;
+  if (error) throw dbError(error);
 }
 
 export async function setDocumentGeo(
@@ -314,7 +324,7 @@ export async function setDocumentGeo(
     .update({ geo_lat: lat, geo_lng: lng, geo_source: source, geo_note: note,
               captured_at: new Date().toISOString() })
     .eq("id", docId);
-  if (error) throw error;
+  if (error) throw dbError(error);
 }
 
 export async function fetchChecks(id: string): Promise<RegistrationCheck[]> {
@@ -322,7 +332,7 @@ export async function fetchChecks(id: string): Promise<RegistrationCheck[]> {
     .from("cps_supplier_registration_checks")
     .select("check_key,status,notes,checked_at")
     .eq("supplier_id", id);
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as RegistrationCheck[];
 }
 
@@ -334,7 +344,7 @@ export async function saveCheck(
     .from("cps_supplier_registration_checks")
     .update({ status, notes, checked_by: userId, checked_at: new Date().toISOString() })
     .eq("supplier_id", supplierId).eq("check_key", checkKey);
-  if (error) throw error;
+  if (error) throw dbError(error);
 }
 
 /* ---- transitions: RPC only ---- */
@@ -368,6 +378,62 @@ export const deleteVendor = (id: string, reason: string) =>
   callRpc<{ deleted: true; name: string }>(
     "cps_delete_vendor", { p_supplier_id: id, p_reason: reason });
 
+/** Who may merge two supplier rows — mirrors the check in cps_merge_suppliers. */
+export const MERGE_ROLES = ["procurement_head", "it_head", "vendor_registrar"] as const;
+
+export type DuplicateReason = "gstin" | "pan" | "name" | "bank_account" | "phone";
+
+export const DUPLICATE_REASON_LABELS: Record<DuplicateReason, string> = {
+  gstin: "same GSTIN", pan: "same PAN", name: "same name",
+  bank_account: "same bank account", phone: "same phone",
+};
+
+export type DuplicateSupplier = {
+  id: string;
+  name: string;
+  gstin: string | null;
+  pan: string | null;
+  city: string | null;
+  registration_status: RegistrationStatus;
+  reasons: DuplicateReason[];
+  /** "0" = same GSTIN / PAN / bank account; "1" = name or phone only. */
+  rank: "0" | "1";
+  po_count: number;
+  wo_count: number;
+  quote_count: number;
+};
+
+/** A value typed into the form but not saved yet, checked for duplicates first. */
+export type DuplicateProbe = {
+  name?: string | null; gstin?: string | null; pan?: string | null;
+  phones?: string[]; bankAccount?: string | null;
+};
+
+/** Other suppliers that look like this one. The server unions the values
+ *  passed here with what the supplier row already holds, so a field can be
+ *  checked before it is saved. */
+export async function findDuplicateSuppliers(
+  supplierId: string, probe: DuplicateProbe = {},
+): Promise<DuplicateSupplier[]> {
+  const { data, error } = await supabase.rpc("cps_find_duplicate_suppliers", {
+    p_supplier_id: supplierId,
+    p_name: probe.name ?? null,
+    p_gstin: probe.gstin ?? null,
+    p_pan: probe.pan ?? null,
+    p_phones: probe.phones?.length ? probe.phones : null,
+    p_bank_account: probe.bankAccount ?? null,
+  });
+  if (error) throw dbError(error);
+  return (data ?? []) as unknown as DuplicateSupplier[];
+}
+
+/** Moves every PO, WO, quote, RFQ, document… from `removeId` onto `keepId`,
+ *  fills the kept row's blank fields, deletes `removeId` and audits it as
+ *  SUPPLIER_MERGE. All-or-nothing on the server. */
+export const mergeSuppliers = (keepId: string, removeId: string, reason: string) =>
+  callRpc<{ kept_id: string; kept_name: string; removed_name: string; moved: Record<string, number> }>(
+    "cps_merge_suppliers", { p_keep_id: keepId, p_remove_id: removeId, p_reason: reason });
+
 export const issueToken = (id: string) =>
   callRpc<{ token: string; expires_at: string }>(
     "cps_issue_vendor_registration_token", { p_supplier_id: id });
@@ -384,7 +450,7 @@ export async function acceptTermsInternally(
     terms_accepted_mode: "recorded_by_procurement",
     terms_accepted_at: new Date().toISOString(),
   }).eq("id", id);
-  if (error) throw error;
+  if (error) throw dbError(error);
 }
 
 /** The verifier's queue. */
@@ -402,7 +468,7 @@ export async function fetchPendingVerification(): Promise<PendingVerificationRow
     .select("id,name,vendor_type,registration_submitted_at,registration_filled_by")
     .eq("registration_status", "pending_verification")
     .order("registration_submitted_at");
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as never;
 }
 
@@ -422,7 +488,7 @@ export async function fetchApprovedVendors(): Promise<ApprovedVendorRow[]> {
     .select("id,name,vendor_type,gstin,city,registration_approved_at")
     .eq("registration_status", "approved")
     .order("registration_approved_at", { ascending: false, nullsFirst: false });
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as ApprovedVendorRow[];
 }
 
@@ -472,7 +538,7 @@ export async function fetchRegistrableSuppliers(search: string) {
   const term = orSafe(search);
   if (term) q = q.or(`name.ilike.%${term}%,gstin.ilike.%${term}%`);
   const { data, error } = await q;
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as Array<{ id: string; name: string; gstin: string | null;
                                  city: string | null; registration_status: RegistrationStatus }>;
 }
@@ -492,7 +558,7 @@ export async function fetchSimilarSuppliers(name: string) {
     .ilike("name", `%${word}%`)
     .order("name")
     .limit(8);
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as Array<{ id: string; name: string; gstin: string | null;
                                  city: string | null; registration_status: RegistrationStatus }>;
 }
@@ -502,7 +568,7 @@ export async function fetchTerms(): Promise<{ text: string; version: string }> {
   const { data, error } = await supabase
     .from("cps_config").select("key,value")
     .in("key", ["vendor_registration_terms_text", "vendor_registration_terms_version"]);
-  if (error) throw error;
+  if (error) throw dbError(error);
   const map = Object.fromEntries((data ?? []).map((r) => [r.key, r.value]));
   return { text: map.vendor_registration_terms_text ?? "",
            version: map.vendor_registration_terms_version ?? "v1" };
@@ -524,7 +590,7 @@ export async function fetchUnregisteredTradingVendors(): Promise<UnregisteredTra
   const { data, error } = await supabase
     .from("cps_v_unregistered_trading_vendors")
     .select("id,name,gstin,city,registration_status,po_count,last_po_at");
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as UnregisteredTradingVendor[];
 }
 
@@ -560,7 +626,7 @@ export async function fetchGstScreenshots(id: string): Promise<SupplierDocument[
     .eq("supplier_id", id)
     .in("document_type", GST_SS_TYPES as unknown as string[])
     .order("uploaded_at");
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data ?? []) as unknown as SupplierDocument[];
 }
 
@@ -572,7 +638,7 @@ export async function fetchLatestGstEvaluation(supplierId: string): Promise<GstE
     .order("evaluated_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) throw error;
+  if (error) throw dbError(error);
   return (data as unknown as GstEvaluation) ?? null;
 }
 

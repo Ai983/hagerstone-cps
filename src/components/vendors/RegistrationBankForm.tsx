@@ -9,21 +9,24 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type SupplierRow, saveSupplierFields } from "@/lib/vendorRegistration";
+import { type DuplicateProbe, type SupplierRow, saveSupplierFields } from "@/lib/vendorRegistration";
 
 const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
 export default function RegistrationBankForm({
-  supplier, bankComplete, onChanged, disabled,
+  supplier, bankComplete, onChanged, disabled, onProbe,
 }: {
   supplier: SupplierRow; bankComplete: boolean;
   onChanged: () => void; disabled?: boolean;
+  /** Called with the account number before it is saved, for the duplicate check. */
+  onProbe?: (p: DuplicateProbe) => void;
 }) {
   const save = async (field: keyof SupplierRow, raw: string) => {
     const value = raw.trim() || null;
     if (field === "bank_ifsc" && value && !IFSC_RE.test(value.toUpperCase())) {
       toast.error("IFSC must look like HDFC0000642"); return;
     }
+    if (field === "bank_account_number" && value) onProbe?.({ bankAccount: value });
     try {
       await saveSupplierFields(supplier.id, { [field]: value } as never);
       onChanged();

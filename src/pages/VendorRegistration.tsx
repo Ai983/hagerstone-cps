@@ -23,8 +23,9 @@ import RegistrationGstFilings from "@/components/vendors/RegistrationGstFilings"
 import RegistrationTerms from "@/components/vendors/RegistrationTerms";
 import OfflineFormButton from "@/components/vendors/OfflineFormButton";
 import RegistrationLinkButton from "@/components/vendors/RegistrationLinkButton";
+import DuplicateVendorsPanel from "@/components/vendors/DuplicateVendorsPanel";
 import {
-  type RegistrationSnapshot, type SupplierRow,
+  type DuplicateProbe, type RegistrationSnapshot, type SupplierRow,
   fetchRegistrationStatus, fetchSupplier,
 } from "@/lib/vendorRegistration";
 
@@ -42,6 +43,12 @@ export default function VendorRegistration() {
   const [snapshot, setSnapshot] = useState<RegistrationSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // Last value typed into a key field, checked for duplicates before it saves.
+  // Tagged with its supplier so a probe never leaks onto the next vendor opened.
+  const [probe, setProbe] = useState<{ supplierId: string; p: DuplicateProbe } | null>(null);
+  // Bumped after a merge: the kept row's fields may have been filled from the
+  // removed one, and the blur-save forms only read their defaults on mount.
+  const [formVersion, setFormVersion] = useState(0);
 
   const refresh = useCallback(async (id: string) => {
     setLoading(true);
@@ -60,6 +67,24 @@ export default function VendorRegistration() {
   const onChanged = useCallback(() => {
     if (supplierId) void refresh(supplierId);
   }, [supplierId, refresh]);
+
+  const onProbe = useCallback((p: DuplicateProbe) => {
+    if (!supplierId) return;
+    setProbe((prev) => ({ supplierId, p: prev?.supplierId === supplierId ? { ...prev.p, ...p } : p }));
+  }, [supplierId]);
+
+  const openVendor = useCallback((id: string) => {
+    setProbe(null);
+    setSupplier(null); setSnapshot(null);
+    setSupplierId(id);
+  }, []);
+
+  const onMerged = useCallback((keptId: string) => {
+    setProbe(null);
+    setFormVersion((v) => v + 1);
+    if (keptId === supplierId) void refresh(keptId);
+    else openVendor(keptId);
+  }, [supplierId, refresh, openVendor]);
 
   // Everything already blur-saves as it is typed and documents upload on pick,
   // so a draft is always persisted. This button just flushes the field that
@@ -158,17 +183,29 @@ export default function VendorRegistration() {
         </div>
       )}
 
+      {supplier && (
+        <DuplicateVendorsPanel
+          key={`dup-${supplier.id}`}
+          supplier={supplier}
+          refreshKey={supplier}
+          probe={probe?.supplierId === supplier.id ? probe.p : undefined}
+          onOpen={(id) => openVendor(id)}
+          onMerged={(keptId) => onMerged(keptId)} />
+      )}
+
       {supplier && snapshot && (
         <>
           <RegistrationIdentityForm
-            key={`id-${supplier.id}`} supplier={supplier} onChanged={onChanged}
+            key={`id-${supplier.id}-${formVersion}`} supplier={supplier} onChanged={onChanged}
+            onProbe={onProbe}
             disabled={supplier.registration_status !== "draft"} />
           <RegistrationContactsForm
-            supplierId={supplier.id} onChanged={onChanged}
+            key={`contacts-${supplier.id}-${formVersion}`}
+            supplierId={supplier.id} onChanged={onChanged} onProbe={onProbe}
             disabled={supplier.registration_status !== "draft"} />
           <RegistrationBankForm
-            key={`bank-${supplier.id}`} supplier={supplier}
-            bankComplete={snapshot.bank_complete} onChanged={onChanged}
+            key={`bank-${supplier.id}-${formVersion}`} supplier={supplier}
+            bankComplete={snapshot.bank_complete} onChanged={onChanged} onProbe={onProbe}
             disabled={supplier.registration_status !== "draft"} />
           {supplier.vendor_type && (
             <RegistrationDocuments

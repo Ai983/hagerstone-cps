@@ -9,14 +9,18 @@ import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type SupplierRow, saveSupplierFields } from "@/lib/vendorRegistration";
+import { type DuplicateProbe, type SupplierRow, saveSupplierFields } from "@/lib/vendorRegistration";
 
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}$/;
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
 
 export default function RegistrationIdentityForm({
-  supplier, onChanged, disabled,
-}: { supplier: SupplierRow; onChanged: () => void; disabled?: boolean }) {
+  supplier, onChanged, disabled, onProbe,
+}: {
+  supplier: SupplierRow; onChanged: () => void; disabled?: boolean;
+  /** Called with a GSTIN / PAN / name before it is saved, for the duplicate check. */
+  onProbe?: (p: DuplicateProbe) => void;
+}) {
   const save = async (field: keyof SupplierRow, raw: string) => {
     const value = raw.trim() || null;
     if (field === "gstin" && value && !GSTIN_RE.test(value.toUpperCase())) {
@@ -25,6 +29,7 @@ export default function RegistrationIdentityForm({
     if (field === "pan" && value && !PAN_RE.test(value.toUpperCase())) {
       toast.error("PAN must be 10 characters, e.g. AABCD1234E"); return;
     }
+    if (value && (field === "gstin" || field === "pan" || field === "name")) onProbe?.({ [field]: value });
     try {
       await saveSupplierFields(supplier.id, { [field]: value } as never);
       onChanged();
