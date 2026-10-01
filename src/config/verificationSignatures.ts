@@ -17,11 +17,20 @@
 
 export type SignatureEntry = { name: string; signatureUrl: string };
 
-/** The Design Team Head — the second required approver. */
+/**
+ * Design Team Head sign-off switch. OFF since 2026-10-01: the previous Design
+ * Team Head left and the post is vacant, so every PR is procurement-only and
+ * procurement's acknowledgement alone verifies it. When a new Design Team Head
+ * joins: fill in DESIGN_TEAM_HEAD below, drop their signature image into
+ * public/signatures/, and flip this back to true.
+ */
+export const DESIGN_SIGNOFF_ENABLED = false;
+
+/** The Design Team Head — the second required approver (vacant). */
 export const DESIGN_TEAM_HEAD: { name: string; email: string; signatureUrl: string } = {
-  name: "Sapna Mam",                      // Design Team Head
-  email: "",                              // optional — her login email, if she has one
-  signatureUrl: "/signatures/sapna.png",  // generated from the provided signature sheet
+  name: "Design Team Head",               // vacant — set the new head's name here
+  email: "",
+  signatureUrl: "",                       // vacant — e.g. "/signatures/<name>.png"
 };
 
 /** Procurement team members, keyed by login email (lowercase). */
@@ -71,6 +80,7 @@ export const DESIGN_EXCLUDED_SITE_KEYWORDS = [
 
 /** True when this PR's project needs the Design Team Head sign-off (in addition to procurement). */
 export function isDesignRequiredSite(projectSite?: string | null, projectCode?: string | null): boolean {
+  if (!DESIGN_SIGNOFF_ENABLED) return false;
   const hay = `${projectSite ?? ""} ${projectCode ?? ""}`.toLowerCase();
   if (DESIGN_EXCLUDED_SITE_KEYWORDS.some((k) => hay.includes(k.toLowerCase()))) return false;
   return DESIGN_REQUIRED_SITE_KEYWORDS.some((k) => hay.includes(k.toLowerCase()));

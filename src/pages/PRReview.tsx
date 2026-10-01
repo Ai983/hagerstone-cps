@@ -21,7 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { ChevronUp, ChevronDown, ChevronsUpDown, Plus, Trash2, Save, Loader2, Search, CheckCircle2, SendHorizonal, ShieldCheck, ShieldAlert, FileText } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { DESIGN_TEAM_HEAD, getProcurementSignature, isDesignRequiredSite, type SignatureEntry } from "@/config/verificationSignatures";
+import { DESIGN_SIGNOFF_ENABLED, DESIGN_TEAM_HEAD, getProcurementSignature, isDesignRequiredSite, type SignatureEntry } from "@/config/verificationSignatures";
 
 // ── Role-specific declarations + terms shown on the PR Verification Document ──
 
@@ -702,7 +702,11 @@ export default function PRReview() {
       const newStatus = fullyVerified ? "verified" : "procurement_ack";
 
       if (fullyVerified) {
-        record.design_skipped_reason = designRequired ? null : "Project does not require Design Team Head sign-off";
+        record.design_skipped_reason = designRequired
+          ? null
+          : DESIGN_SIGNOFF_ENABLED
+            ? "Project does not require Design Team Head sign-off"
+            : "Design Team Head sign-off paused — post vacant";
         record.confirmed_by = user.id;
         record.confirmed_by_name = user.name;
         record.confirmed_at = nowIso;
@@ -728,7 +732,7 @@ export default function PRReview() {
         action_type: section === "procurement" ? "PR_PROCUREMENT_ACK" : "PR_DESIGN_ACK",
         entity_type: "purchase_requisition", entity_id: editPr.id, entity_number: editPr.pr_number,
         description: section === "procurement"
-          ? `PR ${editPr.pr_number}: ${record.assignee.name} (Procurement) acknowledged${designRequired ? " and sent to the Design Team Head for review." : " — project does not require Design sign-off, so the PR is verified."}`
+          ? `PR ${editPr.pr_number}: ${record.assignee.name} (Procurement) acknowledged${designRequired ? " and sent to the Design Team Head for review." : ` — ${DESIGN_SIGNOFF_ENABLED ? "project does not require Design sign-off" : "Design sign-off paused (post vacant)"}, so the PR is verified.`}`
           : `PR ${editPr.pr_number}: ${DESIGN_TEAM_HEAD.name} (Design Team Head) reviewed and acknowledged. PR is verified — procurement can create the RFQ.`,
         severity: "info", logged_at: nowIso,
       });
@@ -1627,7 +1631,7 @@ export default function PRReview() {
                             {verificationDone && verifyRecord && (
                               <p className="text-[11px] text-green-700 text-center">
                                 ✓ Verified — {verifyRecord?.assignee?.name} (PR Assignee)
-                                {verifyRecord?.design_head?.name ? ` & ${verifyRecord.design_head.name} (Design Team Head approved)` : " — this project does not require Design Team Head sign-off"}
+                                {verifyRecord?.design_head?.name ? ` & ${verifyRecord.design_head.name} (Design Team Head approved)` : ` — ${verifyRecord?.design_skipped_reason ?? "this project does not require Design Team Head sign-off"}`}
                                 {verifyRecord?.confirmed_at ? ` · ${fmtWhen(verifyRecord.confirmed_at)}` : ""}.
                               </p>
                             )}
@@ -1671,7 +1675,9 @@ export default function PRReview() {
                             ? "Design Team Head sent this back — make the changes and acknowledge again to re-send."
                             : procurementAgreed && designRequired
                               ? "Waiting for the Design Team Head to acknowledge — RFQ unlocks once she approves."
-                              : "Acknowledge the verification above (procurement → design) to unlock this."}
+                              : designRequired
+                                ? "Acknowledge the verification above (procurement → design) to unlock this."
+                                : "Acknowledge the verification above to unlock this."}
                         </p>
                       )}
                       <Button
