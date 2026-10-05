@@ -5,7 +5,7 @@
  * breaks the moment one contact changes independently — which is exactly when
  * you need the right number.
  */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,20 +37,48 @@ export default function RegistrationContactsForm({
     fetchContacts(supplierId).then(setContacts).catch((e) => toast.error(e.message));
   }, [supplierId, version]);
 
+  // Field saves still in flight. Clicking "Same as owner" blurs the owner field
+  // first, so its save is usually not done yet when the click handler runs.
+  const pendingSaves = useRef(new Set<Promise<void>>());
+
   const get = (role: ContactRole) => contacts?.find((c) => c.contact_role === role);
 
-  const save = async (role: ContactRole, field: keyof SupplierContact, raw: string) => {
+  const save = (role: ContactRole, field: keyof SupplierContact, raw: string) => {
     if ((field === "phone" || field === "whatsapp") && raw.trim()) onProbe?.({ phones: [raw.trim()] });
-    try {
-      await saveContact(supplierId, role, { [field]: raw.trim() || null } as never);
-      onChanged();
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : "Could not save contact");
-    }
+    const value = raw.trim() || null;
+    const p = (async () => {
+      try {
+        await saveContact(supplierId, role, { [field]: value } as never);
+        // Keep the loaded copy current — it was only ever read once on mount,
+        // so "Same as owner" saw no owner until the page was reloaded.
+        setContacts((prev) => {
+          const list = prev ?? [];
+          const existing = list.find((c) => c.contact_role === role);
+          return existing
+            ? list.map((c) => (c.contact_role === role ? { ...c, [field]: value } : c))
+            : [...list, { contact_role: role, [field]: value } as SupplierContact];
+        });
+        onChanged();
+      } catch (e: unknown) {
+        toast.error(e instanceof Error ? e.message : "Could not save contact");
+      }
+    })();
+    pendingSaves.current.add(p);
+    void p.finally(() => pendingSaves.current.delete(p));
+    return p;
   };
 
   const copyFromOwner = async (to: ContactRole) => {
-    const owner = get("owner");
+    // Let any just-blurred owner field finish saving, then read the owner fresh
+    // from the database rather than from state captured on mount.
+    await Promise.all([...pendingSaves.current]);
+    let owner: SupplierContact | undefined;
+    try {
+      owner = (await fetchContacts(supplierId)).find((c) => c.contact_role === "owner");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Could not read the owner contact");
+      return;
+    }
     if (!owner?.name) { toast.error("Fill the owner contact first"); return; }
     try {
       await saveContact(supplierId, to, {

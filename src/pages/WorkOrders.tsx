@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { inChunks } from "@/lib/inChunks";
 import { useAuth } from "@/contexts/AuthContext";
 import { fileToBase64, fileToClaudeBlock } from "@/lib/imageForClaude";
+import { fetchContacts } from "@/lib/vendorRegistration";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -159,6 +160,9 @@ export default function WorkOrders() {
   const [w_supplierContact, setSupplierContact] = useState("");
   const [w_supplierEmail, setSupplierEmail] = useState("");
   const [w_supplierAddress, setSupplierAddress] = useState("");
+  // Latest picked supplier, so a slow contacts fetch for an earlier pick can't
+  // overwrite the fields of the vendor the user switched to.
+  const pickedSupplierRef = useRef<string>("");
   const [w_rateListFile, setRateListFile] = useState<File | null>(null);
   const [parsingRateList, setParsingRateList] = useState(false);
   const [w_existingRateListUrl, setExistingRateListUrl] = useState<string | null>(null);
@@ -485,8 +489,9 @@ export default function WorkOrders() {
     }
   };
 
-  const onSelectExistingSupplier = (id: string) => {
+  const onSelectExistingSupplier = async (id: string) => {
     setSupplierId(id);
+    pickedSupplierRef.current = id;
     const s = suppliers.find((x) => x.id === id);
     if (s) {
       setSupplierName(s.name);
@@ -495,7 +500,29 @@ export default function WorkOrders() {
       setSupplierContact(s.phone ?? "");
       setSupplierEmail(s.email ?? "");
       setSupplierAddress(s.address_text ?? "");
+      setSupplierKindAttn("");
     }
+
+    // Vendor registration keeps phone / email / person in cps_supplier_contacts,
+    // not on cps_suppliers — so a registered vendor's phone was always blank here.
+    // Prefer owner, then accounts, then sales; skip placeholder values like "NA".
+    try {
+      const contacts = await fetchContacts(id);
+      if (pickedSupplierRef.current !== id) return;
+      const real = (v: string | null | undefined) =>
+        v && !/^(na|n\/a|nil|none|-)$/i.test(v.trim()) ? v.trim() : "";
+      const ordered = ["owner", "accounts", "sales"]
+        .map((role) => contacts.find((c) => c.contact_role === role))
+        .filter((c): c is NonNullable<typeof c> => !!c);
+      const pick = (f: (c: (typeof ordered)[number]) => string) =>
+        ordered.map(f).find((v) => v) ?? "";
+      const phone = pick((c) => real(c.phone) || real(c.whatsapp));
+      const email = pick((c) => (real(c.email).includes("@") ? real(c.email) : ""));
+      const person = pick((c) => real(c.name));
+      if (!s?.phone && phone) setSupplierContact(phone);
+      if (!s?.email && email) setSupplierEmail(email);
+      if (person) setSupplierKindAttn(person);
+    } catch { /* contacts are a best-effort pre-fill */ }
   };
 
   // Convert an uploaded Excel file (.xlsx / .xls) into a plain-text CSV-like dump
@@ -1711,8 +1738,8 @@ function SendToFinanceModal({
   const [submitting, setSubmitting] = useState(false);
   const [prefilling, setPrefilling] = useState(true);
 
-  // Pre-fill from the supplier's most recent PO bank details (if any), then
-  // fall back to anything already saved on this WO.
+  // Pre-fill order: details already saved on this WO → the bank account the
+  // vendor registered (cps_suppliers) → the supplier's most recent PO.
   useEffect(() => {
     let active = true;
     (async () => {
@@ -1723,6 +1750,14 @@ function SendToFinanceModal({
           .eq("id", wo.id)
           .maybeSingle();
         let src: any = woRow && (woRow as any).bank_account_number ? woRow : null;
+        if (!src && wo.supplier_id) {
+          const { data: vendor } = await supabase
+            .from("cps_suppliers")
+            .select("bank_account_holder_name, bank_name, bank_ifsc, bank_account_number")
+            .eq("id", wo.supplier_id)
+            .maybeSingle();
+          src = (vendor as { bank_account_number?: string | null } | null)?.bank_account_number ? vendor : null;
+        }
         if (!src && wo.supplier_id) {
           const { data: prevPo } = await supabase
             .from("cps_purchase_orders")
