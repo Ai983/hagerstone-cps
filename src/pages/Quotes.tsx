@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useAuth } from "@/contexts/AuthContext";
@@ -33,6 +33,14 @@ import { Switch } from "@/components/ui/switch";
 
 import { Building2, CalendarDays, ChevronsUpDown, ChevronRight, ChevronDown, Flag, LogIn, Plus, Search, ExternalLink, Loader2, AlertTriangle, CheckCircle2, Paperclip, UserPlus, Trash2, User } from "lucide-react";
 import { LegacyQuoteUploadModal } from "@/components/quotes/LegacyQuoteUploadModal";
+
+// GST % for a line: an explicit 0 is real (rate already includes GST, or a
+// non-GST item) and must survive. Only a blank/unparseable field defaults to 18.
+// `parseFloat(x) || 18` turned 0 into 18 and inflated GST-inclusive quotes.
+const gstPct = (v: unknown): number => {
+  const n = parseFloat(String(v ?? ""));
+  return Number.isFinite(n) ? n : 18;
+};
 
 type QuoteParseStatus = "pending" | "parsed" | "needs_review" | "reviewed" | "approved" | "failed";
 type QuoteComplianceStatus = "compliant" | "non_compliant" | "pending";
@@ -86,6 +94,7 @@ type QuoteLineItem = {
   confidence_score: number | null;
   human_corrected: boolean | null;
   correction_log: any[] | null;
+  is_charge?: boolean | null;
 };
 
 type Rfq = { id: string; rfq_number: string; title: string | null; pr_id: string | null; status: string | null; created_by: string | null; created_by_name: string | null };
@@ -346,6 +355,11 @@ export default function Quotes() {
   const [editedWarranty, setEditedWarranty] = useState("");
   const [editedValidity, setEditedValidity] = useState("");
   const [savingReview, setSavingReview] = useState(false);
+  // Synchronous re-entry lock for the review save/approve handlers. The button's
+  // `disabled={savingReview}` only took effect after applyQuoteChangeGate's
+  // network round-trips, so a double-click ran two saves in parallel — both
+  // deleted, both inserted, and the quote's line items doubled (QT-2026-1303).
+  const reviewSaveLock = useRef(false);
 
   const fetchRfqs = async () => {
     const { data, error } = await supabase.from("cps_rfqs").select("id,rfq_number,title,pr_id,status,created_by").order("created_at", { ascending: false });
@@ -652,7 +666,10 @@ export default function Quotes() {
     // Pre-fill edited items from existing data — covers parsed, reviewed, approved
     // and needs_review (legacy uploads land here when data was already saved at upload).
     if ((qRow.parse_status === "approved" || qRow.parse_status === "parsed" || qRow.parse_status === "reviewed" || qRow.parse_status === "needs_review") && liRows.length > 0) {
-      setEditedItems(liRows.map(li => ({
+      // Charge lines (is_charge) are restored into Extra Charges below from
+      // ai_parsed_data.extra_charges and re-materialized on save — loading them
+      // here as items too would count every charge twice.
+      setEditedItems(liRows.filter(li => !li.is_charge).map(li => ({
         description: li.original_description ?? "",
         brand: li.brand ?? "",
         quantity: li.quantity ?? 0,
@@ -1184,7 +1201,17 @@ Rules:
   };
 
   const confirmAndSaveReview = async () => {
+    if (reviewSaveLock.current) return;
+    reviewSaveLock.current = true;
+    try { await runConfirmAndSaveReview(); } finally { reviewSaveLock.current = false; }
+  };
+
+  const runConfirmAndSaveReview = async () => {
     if (!user || !reviewQuote || !aiResult) return;
+    if (reviewQuote.parse_status === "approved") {
+      toast.error("This quote is approved & locked — delete it and re-add to change it.");
+      return;
+    }
 
     if (!(await applyQuoteChangeGate(reviewQuote.rfq_id))) return;
 
@@ -1222,7 +1249,7 @@ Rules:
       const itemsLanded = items.reduce((s: number, li: any) => {
         const r = parseFloat(li.rate) || 0;
         const q = parseFloat(li.quantity) || 0;
-        const g = parseFloat(li.gst_percent) || 18;
+        const g = gstPct(li.gst_percent);
         const f = parseFloat(li.freight) || 0;
         const p = parseFloat(li.packing) || 0;
         return s + q * (r * (1 + g / 100) + f + p);
@@ -1318,10 +1345,10 @@ Rules:
           quantity: parseFloat(item.quantity) || 0,
           unit: item.unit || null,
           rate: parseFloat(item.rate) || 0,
-          gst_percent: parseFloat(item.gst_percent) || 18,
+          gst_percent: gstPct(item.gst_percent),
           freight: parseFloat(item.freight) || 0,
           packing: parseFloat(item.packing) || 0,
-          total_landed_rate: parseFloat(item.rate) * (1 + (parseFloat(item.gst_percent) || 18) / 100) + (parseFloat(item.freight) || 0) + (parseFloat(item.packing) || 0),
+          total_landed_rate: parseFloat(item.rate) * (1 + gstPct(item.gst_percent) / 100) + (parseFloat(item.freight) || 0) + (parseFloat(item.packing) || 0),
           lead_time_days: parseInt(item.lead_time_days) || null,
           hsn_code: item.hsn_code || null,
           confidence_score: aiResult.confidence,
@@ -1396,6 +1423,12 @@ Rules:
 
   // Approve a manually-entered quote (no AI parse needed — data already exists in line items or header)
   const approveManualQuote = async () => {
+    if (reviewSaveLock.current) return;
+    reviewSaveLock.current = true;
+    try { await runApproveManualQuote(); } finally { reviewSaveLock.current = false; }
+  };
+
+  const runApproveManualQuote = async () => {
     if (!user || !reviewQuote) return;
 
     if (!(await applyQuoteChangeGate(reviewQuote.rfq_id))) return;
@@ -1425,7 +1458,7 @@ Rules:
         ? reviewItems.reduce((s, li) => {
             const r = Number(li.rate) || 0;
             const q = Number(li.quantity) || 0;
-            const g = Number(li.gst_percent) || 18;
+            const g = gstPct(li.gst_percent);
             const f = Number(li.freight) || 0;
             const p = Number(li.packing) || 0;
             return s + q * (r * (1 + g / 100) + f + p);
@@ -1457,7 +1490,7 @@ Rules:
       // Update line items with computed landed rate
       for (const li of reviewItems) {
         const r = Number(li.rate) || 0;
-        const g = Number(li.gst_percent) || 18;
+        const g = gstPct(li.gst_percent);
         const f = Number(li.freight) || 0;
         const p = Number(li.packing) || 0;
         await supabase.from("cps_quote_line_items")
@@ -1640,19 +1673,19 @@ Rules:
       const linePayload = logRfqItems.map((it, idx) => {
         const entry = logItemEntries[it.line_item_id] ?? { rate: "0", gst_percent: "18", brand: "" };
         const rate = parseFloat(entry.rate) || 0;
-        const gstPct = parseFloat(entry.gst_percent) || 18;
+        const linePct = gstPct(entry.gst_percent);
         const amount = rate * (it.quantity ?? 1);
-        const gstAmt = amount * (gstPct / 100);
+        const gstAmt = amount * (linePct / 100);
         return {
           quote_id: quoteId,
           original_description: it.item_description,
           quantity: it.quantity ?? 1,
           unit: it.unit ?? "",
           rate,
-          gst_percent: gstPct,
+          gst_percent: linePct,
           freight: 0,
           packing: 0,
-          total_landed_rate: rate + rate * (gstPct / 100),
+          total_landed_rate: rate + rate * (linePct / 100),
           brand: entry.brand.trim() || null,
           is_compliant: true,
           confidence_score: 100,
@@ -2571,7 +2604,7 @@ Rules:
                               <div className="space-y-0.5">
                                 <Label className="text-[10px] text-muted-foreground">Landed Rate (auto)</Label>
                                 <div className="h-7 px-2 flex items-center text-xs font-semibold text-primary bg-muted/50 rounded-md">
-                                  ₹{((parseFloat(item.rate)||0) * (1+(parseFloat(item.gst_percent)||18)/100) + (parseFloat(item.freight)||0) + (parseFloat(item.packing)||0)).toFixed(2)}
+                                  ₹{((parseFloat(item.rate)||0) * (1+gstPct(item.gst_percent)/100) + (parseFloat(item.freight)||0) + (parseFloat(item.packing)||0)).toFixed(2)}
                                 </div>
                               </div>
                               <div className="space-y-0.5">
@@ -2579,9 +2612,9 @@ Rules:
                                 <Input className="h-7 text-xs" type="number" value={item.lead_time_days ?? ""} onChange={(e) => setEditedItems(prev => prev.map((it, i) => i === idx ? { ...it, lead_time_days: e.target.value } : it))} />
                               </div>
                               <div className="col-span-2 bg-primary/5 rounded-md px-2 py-1.5 flex items-center justify-between">
-                                <span className="text-[10px] text-muted-foreground">{parseFloat(item.quantity)||1} {item.unit || "units"} × ₹{((parseFloat(item.rate)||0) * (1+(parseFloat(item.gst_percent)||18)/100) + (parseFloat(item.freight)||0) + (parseFloat(item.packing)||0)).toFixed(2)} landed</span>
+                                <span className="text-[10px] text-muted-foreground">{parseFloat(item.quantity)||1} {item.unit || "units"} × ₹{((parseFloat(item.rate)||0) * (1+gstPct(item.gst_percent)/100) + (parseFloat(item.freight)||0) + (parseFloat(item.packing)||0)).toFixed(2)} landed</span>
                                 <span className="text-xs font-bold text-primary">
-                                  Total: ₹{((parseFloat(item.quantity)||1) * ((parseFloat(item.rate)||0) * (1+(parseFloat(item.gst_percent)||18)/100) + (parseFloat(item.freight)||0) + (parseFloat(item.packing)||0))).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                                  Total: ₹{((parseFloat(item.quantity)||1) * ((parseFloat(item.rate)||0) * (1+gstPct(item.gst_percent)/100) + (parseFloat(item.freight)||0) + (parseFloat(item.packing)||0))).toLocaleString("en-IN", { maximumFractionDigits: 2 })}
                                 </span>
                               </div>
                             </div>
@@ -2689,7 +2722,7 @@ Rules:
                       {(() => {
                         const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
                         const subtotalMaterials = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0), 0);
-                        const gstMaterials = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0) * ((parseFloat(li.gst_percent) || 18) / 100), 0);
+                        const gstMaterials = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.rate) || 0) * (parseFloat(li.quantity) || 0) * (gstPct(li.gst_percent) / 100), 0);
                         const freightPacking = editedItems.reduce((s: number, li: any) => s + (parseFloat(li.quantity) || 0) * ((parseFloat(li.freight) || 0) + (parseFloat(li.packing) || 0)), 0);
                         const extraPreGst = extraCharges.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
                         const extraGst = extraCharges.reduce((s, c) => s + (parseFloat(c.amount) || 0) * (c.taxable ? 0.18 : 0), 0);
@@ -2884,13 +2917,21 @@ Rules:
                       )}
 
                       {/* Save Button */}
-                      <Button
-                        className="w-full h-11"
-                        disabled={savingReview}
-                        onClick={confirmAndSaveReview}
-                      >
-                        {savingReview ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving…</> : <><CheckCircle2 className="h-4 w-4 mr-2" />Confirm & Save Review</>}
-                      </Button>
+                      {/* Approved quotes are locked (see header badge). Re-saving one
+                          re-wrote every line and could silently change its total. */}
+                      {reviewQuote?.parse_status === "approved" ? (
+                        <Button className="w-full h-11" variant="outline" disabled>
+                          🔒 Approved &amp; locked — delete &amp; re-add to change
+                        </Button>
+                      ) : (
+                        <Button
+                          className="w-full h-11"
+                          disabled={savingReview}
+                          onClick={confirmAndSaveReview}
+                        >
+                          {savingReview ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving…</> : <><CheckCircle2 className="h-4 w-4 mr-2" />Confirm & Save Review</>}
+                        </Button>
+                      )}
                     </>
                   )}
 
