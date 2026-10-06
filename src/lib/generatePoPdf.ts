@@ -43,6 +43,9 @@ export interface PoPdfData {
 
   /* order */
   paymentTerms?: string | null;
+  /* Freight terms carried over from the winning quote (cps_quotes.freight_terms,
+     edited in Quotes review). Blank falls back to "ADDED TO BE IN BILL". */
+  freightTerms?: string | null;
   deliveryDate?: string | null;
   /* Optional per-PO validity. "Po upto" is no longer printed; "Valid Upto"
      prints only when provided (blank omits the row entirely). */
@@ -447,7 +450,7 @@ export function buildPoPdf(data: PoPdfData): Blob {
     [
       ["Price Basis", ""],
       ["Dispatch By", "Road"],
-      ["Freight", "ADDED TO BE IN BILL"],
+      ["Freight", data.freightTerms?.trim().toUpperCase() || "ADDED TO BE IN BILL"],
       ["Insp At", data.inspAt ?? (data.shipToAddress?.split("\n")[0] ?? "—")],
     ],
     [

@@ -622,7 +622,7 @@ export default function ComparisonSheetPage() {
           .eq("id", rfq.pr_id)
           .maybeSingle(),
         supabase.from("cps_quote_line_items").select("*").eq("quote_id", quote.id),
-        supabase.from("cps_quotes").select("ai_parsed_data").eq("id", quote.id).maybeSingle(),
+        supabase.from("cps_quotes").select("ai_parsed_data,freight_terms").eq("id", quote.id).maybeSingle(),
         supabase
           .from("cps_suppliers")
           .select("name,gstin,state,email,phone,address_text,city,pincode")
@@ -795,6 +795,7 @@ export default function ComparisonSheetPage() {
         shipToAddress: (prData as any)?.ship_to_address ?? (prData as any)?.project_site ?? "—",
         inspAt: (prData as any)?.project_site ?? null,
         paymentTerms: quote.payment_terms ?? null,
+        freightTerms: (quoteFull as any)?.freight_terms ?? null,
         deliveryDate: deliveryDate || ((prData as any)?.required_by ?? null),
         validUpto: validUptoDate || null,
         terms: poTerms.map((t) => t.trim()).filter(Boolean),
@@ -3403,7 +3404,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
       // Fetch quote line items + ai_parsed_data (for extra charges) BEFORE PO insert
       const [{ data: quoteLineItems, error: qliErr }, { data: quoteFull }] = await Promise.all([
         supabase.from("cps_quote_line_items").select("*").eq("quote_id", quote.id),
-        supabase.from("cps_quotes").select("ai_parsed_data").eq("id", quote.id).maybeSingle(),
+        supabase.from("cps_quotes").select("ai_parsed_data,freight_terms").eq("id", quote.id).maybeSingle(),
       ]);
       if (qliErr) throw qliErr;
 
@@ -3589,6 +3590,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
           ship_to_address: prData?.project_site ?? "—",
           bill_to_address: "HAGERSTONE INTERNATIONAL (P) LTD\nGST: 09AAECH3768B1ZM\nD-107, 91 Springboard Hub, Red FM Road\nSector-2, Noida, UP\nPh: +91 8448992353\nprocurement@hagerstone.com",
           payment_terms: quote.payment_terms ?? null,
+          freight_terms: (quoteFull as any)?.freight_terms ?? null,
           delivery_date: deliveryDate || (prData?.required_by ?? null),
           po_upto: null,
           valid_upto: validUptoDate || null,
@@ -3852,6 +3854,7 @@ ${includeMatrix ? `- Use supplier IDs and PR line item IDs from input EXACTLY as
               shipToAddress,
               inspAt: (prData as any)?.project_site ?? shipToAddress?.split("\n")[0] ?? undefined,
               paymentTerms: _paymentTerms,
+              freightTerms: (quoteFull as any)?.freight_terms ?? null,
               deliveryDate: _deliveryDate,
               validUpto: validUptoDate || null,
               terms: poTerms.map((t) => t.trim()).filter(Boolean),

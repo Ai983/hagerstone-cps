@@ -353,7 +353,7 @@ type CreateLine = {
 const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
   const { data: po, error: poErr } = await supabase
     .from("cps_purchase_orders")
-    .select("po_number,pr_id,supplier_id,created_at,created_by,ship_to_address,payment_terms,delivery_date,po_upto,valid_upto,insp_at,project_code,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,version,revision_reason,terms_conditions")
+    .select("po_number,pr_id,supplier_id,created_at,created_by,ship_to_address,payment_terms,freight_terms,delivery_date,po_upto,valid_upto,insp_at,project_code,total_value,gst_amount,grand_total,advance_payments,advance_paid_total,bank_account_holder_name,bank_name,bank_ifsc,bank_account_number,hagerstone_gstin,version,revision_reason,terms_conditions")
     .eq("id", poId)
     .single();
   if (poErr || !po) throw new Error("PO not found: " + (poErr?.message ?? ""));
@@ -407,6 +407,7 @@ const buildPoPdfFromDb = async (poId: string): Promise<Blob> => {
     shipToAddress: (po as any).ship_to_address ?? pr.project_site ?? null,
     inspAt: (po as any).insp_at ?? pr.project_site ?? null,
     paymentTerms: (po as any).payment_terms,
+    freightTerms: (po as any).freight_terms ?? null,
     deliveryDate: (po as any).delivery_date,
     poUpto: (po as any).po_upto ?? null,
     validUpto: (po as any).valid_upto ?? null,
@@ -1191,6 +1192,19 @@ export default function PurchaseOrders() {
         }));
       const createAdvanceTotal = cleanCreateAdvances.reduce((s, a) => s + a.amount, 0);
 
+      // Freight terms come from this supplier's approved quote on the RFQ, the
+      // same value procurement edits in Quotes review.
+      const { data: freightQuote } = await supabase
+        .from("cps_quotes")
+        .select("freight_terms")
+        .eq("rfq_id", selectedRfqId)
+        .eq("supplier_id", createSupplierId)
+        .eq("parse_status", "approved")
+        .is("superseded_at", null)
+        .order("received_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
       const { data: insertedPo, error: insPoErr } = await supabase
         .from("cps_purchase_orders")
         .insert([
@@ -1206,6 +1220,7 @@ export default function PurchaseOrders() {
             ship_to_address: createShipTo,
             bill_to_address: createBillTo,
             payment_terms: createPaymentTerms,
+            freight_terms: (freightQuote as any)?.freight_terms ?? null,
             delivery_date: createDeliveryDate,
             po_upto: createPoUpto || null,
             valid_upto: createValidUpto || null,
